@@ -184,6 +184,54 @@ the kernel by value — the kernel parameter is
 
 ## Step 2 — kernel side: the TMA instruction
 
+### Visualizing the load
+
+Before reading the instruction, it helps to picture exactly what
+a single TMA load does.  The descriptor gives the engine the
+*whole tensor's* shape (`globalDim`) and the *per-load tile's*
+shape (`boxDim`).  The kernel-side instruction then says
+"start at `(coord_x, coord_y)` and grab one box":
+
+```
+              ◄──────────── globalDim[0]  (innermost dim, "x" coord) ───────────►
+
+              ┌─────────────────────────────────────────────────────────────────┐  ▲
+              │                                                                 │  │
+              │     (coord_x, coord_y)                                          │  │
+              │            │                                                    │  │
+              │            ▼                                                    │  │
+              │            ┌──────────────────────┐                             │  │ globalDim[1]
+              │            │░░░░░░░░░░░░░░░░░░░░░░│                             │  │ (outer dim,
+              │            │░░░░░░ box ░░░░░░░░░░░│  boxDim[1] rows tall        │  │  "y" coord)
+              │            │░░░░░░░░░░░░░░░░░░░░░░│                             │  │
+              │            └──────────────────────┘                             │  │
+              │            ◄──── boxDim[0] cols ────►                           │  │
+              │                                                                 │  │
+              │                                                                 │  ▼
+              └─────────────────────────────────────────────────────────────────┘
+```
+
+For chapter 00's specific values — `globalDim = [COLS, ROWS] = [64, 8]`,
+`boxDim = [COLS, 1] = [64, 1]`, `(coord_x, coord_y) = (0, 0)` — the
+box covers the entire first row:
+
+```
+              ◄─────────────────── globalDim[0] = COLS = 64 ───────────────────►
+
+              ┌─────────────────────────────────────────────────────────────────┐  ▲
+              │░░░░░░░░░░░░░░░░░░░░░░ box (= row 0) ░░░░░░░░░░░░░░░░░░░░░░░░░░░░│  │
+              ├─────────────────────────────────────────────────────────────────┤  │
+              │                                                                 │  │
+              │                                                                 │  │ ROWS = 8
+              │                       7 rows not loaded                         │  │
+              │                                                                 │  │
+              │                                                                 │  │
+              │                                                                 │  ▼
+              └─────────────────────────────────────────────────────────────────┘
+```
+
+### The PTX instruction
+
 The instruction is `cp.async.bulk.tensor.2d`.  Operands:
 
 ```
