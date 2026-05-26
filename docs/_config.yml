@@ -27,11 +27,11 @@ html:
   use_issues_button: true
   use_edit_page_button: true
 
-# Repository link (placeholder — update when repo is hosted).
+# Repository link — drives the "View source" / "Edit on GitHub" buttons.
 repository:
-  url: "https://github.com/REPLACE_ME/mmcomposer"
+  url: "https://github.com/tongzhou8086/mmcomposer"
   path_to_book: "docs"
-  branch: "main"
+  branch: "master"
 
 # Sphinx config passthrough.
 sphinx:

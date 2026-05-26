@@ -1,0 +1,5 @@
+# Documentation build dependencies.
+# Used by Read the Docs (.readthedocs.yaml) to install the toolchain
+# needed to render the Jupyter Book.
+
+jupyter-book>=1.0,<2.0
