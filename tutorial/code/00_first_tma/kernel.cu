@@ -1,10 +1,11 @@
 // Runnable companion for Chapter 00 — A first TMA program.
 //
-// One CTA, 128 threads, a single 1D TMA bulk load of CHUNK_BYTES bytes
-// from global memory into shared memory.  Each thread then reads one
-// byte from SMEM and writes it to a unique GMEM slot (defeats DCE).
+// One CTA, 128 threads.  A single 2D TMA bulk load fetches one row
+// (64 BF16 elements = 128 bytes) of an 8x64 row-major BF16 tensor
+// into shared memory.  Each thread then reads one byte from SMEM
+// and writes it to a unique GMEM slot (defeats DCE).
 //
-// Functionally: g_out[:CHUNK_BYTES] = g_in[:CHUNK_BYTES].
+// Functionally: g_out[:128] = g_in[0, :] (the first row, as bytes).
 //
 // Style note: every PTX instruction is shown inline at its use site
 // (no helper-function wrappers).  This keeps the entire kernel body
@@ -12,7 +13,20 @@
 //
 // Compiled and launched by main.py via cuda-python (NVRTC + driver API).
 
-#include <cuda/std/cstdint>
+// NVRTC's default include path does not have libcu++ (`cuda/std/*`) or
+// the host `<cstdint>` header.  Provide the integer typedefs we need
+// locally so this file compiles standalone.
+typedef unsigned char       uint8_t;
+typedef unsigned int        uint32_t;
+typedef unsigned long long  uint64_t;
+
+// NVRTC also lacks the CUDA driver-API headers that declare CUtensorMap.
+// Declare it locally as a 128-byte opaque struct (the actual layout is
+// filled in host-side by cuTensorMapEncodeTiled; the kernel only ever
+// takes &tmap to pass to the TMA instruction).
+struct alignas(64) CUtensorMap {
+    uint64_t opaque[16];   // 128 bytes
+};
 
 constexpr unsigned CHUNK_BYTES = 128;
 
@@ -40,21 +54,23 @@ extern "C" __global__ void tma_demo(
     // ── 2) One thread issues the TMA bulk load and declares the
     //       expected byte count.
     //
-    // cp.async.bulk.tensor.1d takes a SMEM destination, a CUtensorMap
-    // pointer + a coordinate vector ({coord_x} for 1D), and the
+    // cp.async.bulk.tensor.2d takes a SMEM destination, a CUtensorMap
+    // pointer + a coordinate pair ({coord_x, coord_y} for 2D), and the
     // mbarrier whose tx-count it will decrement when bytes land.
     //
     // mbarrier.arrive.expect_tx adds CHUNK_BYTES to the mbarrier's
     // tx_count and decrements arrival_count by 1.
     if (threadIdx.x == 0) {
-        // Coordinate count matches the descriptor's rank (here, 1).
-        // Value is in *elements* (not bytes); 0 = start of the buffer.
-        // Since our element type is uint8, elements happen to equal bytes.
+        // Coordinate count matches the descriptor's rank (here, 2).
+        // Values are in *elements* (not bytes), innermost-first:
+        //   coord_x = column index (0 → start of row)
+        //   coord_y = row index    (0 → first row)
         const int coord_x = 0;
+        const int coord_y = 0;
         asm volatile(
-            "cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes "
-            "[%0], [%1, {%2}], [%3];"
-            :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(mbar_addr)
+            "cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes "
+            "[%0], [%1, {%2, %3}], [%4];"
+            :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(coord_y), "r"(mbar_addr)
             : "memory");
         asm volatile(
             "mbarrier.arrive.expect_tx.release.cta.shared::cluster.b64 _, [%0], %1;"

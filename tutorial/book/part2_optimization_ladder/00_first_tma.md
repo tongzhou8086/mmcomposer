@@ -14,7 +14,7 @@ scaffolding around it.
 The point is to internalize each piece in isolation:
 
 * Host side: how to build a `CUtensorMap` descriptor.
-* Kernel side: how to issue the `cp.async.bulk.tensor.1d` instruction.
+* Kernel side: how to issue the `cp.async.bulk.tensor.2d` instruction.
 * mbarrier: how to wait for the load to complete.
 
 Once these three are in muscle memory, the matmul chapters get to
@@ -26,56 +26,63 @@ scratch every time.
 
 A single-CTA kernel that:
 
-1. TMA-loads `CHUNK_BYTES` bytes from `g_in[0 … CHUNK_BYTES)` into
-   shared memory.
+1. TMA-loads **one row** (64 BF16 elements = 128 bytes) from a global
+   8×64 BF16 tensor into shared memory.
 2. Has each thread read one byte from SMEM and write it to
    `g_out[threadIdx.x]`.
 
 The "read back and write" part exists only to prevent the compiler
-from optimizing the entire load away.  Functionally it's `g_out =
-g_in` done through TMA + SMEM.
+from optimizing the entire load away.  Functionally it's
+`g_out = first_row(g_in)` done through TMA + SMEM.
 
 We'll use:
 
-* **`CHUNK_BYTES = 128`** (fits in 128 threads × 1 byte each).
-* **`uint8`** as the element type (no data-type conversions to worry
-  about yet).
-* **1D TMA** (the simplest variant — coords are a single 1D index).
+* **BF16** as the element type (same dtype matmul uses; 2 bytes per
+  element).
+* **8 × 64 row-major tensor** in global memory (1024 bytes total).
+* **2D TMA** with box = (64 cols × 1 row) — one row per load.
+* **`SWIZZLE_NONE`** so SMEM byte order matches global byte order
+  (matmul will use `SWIZZLE_128B`; we'll get there in chapter 01).
 * **One CTA**, **128 threads**.
+
+> **Aside on 1D TMA.**  In principle TMA also supports `rank=1`
+> descriptors and a `cp.async.bulk.tensor.1d` instruction, which
+> would be conceptually simpler.  In practice, the driver rejects
+> `rank=1` configurations we tried on B200 with
+> `CUDA_ERROR_INVALID_VALUE` (likely some undocumented
+> swizzle/dtype/dim interaction).  Going straight to 2D matches what
+> matmul actually uses and avoids the dead-end.
 
 ## Step 1 — host side: the `CUtensorMap`
 
 A `CUtensorMap` is a 128-byte opaque struct that describes a tensor's
 layout to the TMA engine.  It's built once on the host via
-`cuTensorMapEncodeTiled` and passed to the kernel as a
-`__grid_constant__` parameter.
+`cuTensorMapEncodeTiled` from the CUDA driver API.
 
-For 1D streaming the API is straightforward:
+For this tutorial we wrap that C call in a small helper —
+`encode_tensor_map(...)` in `cuda_utils.py` — which binds
+`cuTensorMapEncodeTiled` from `libcuda.so` via `ctypes`.  We use the
+helper instead of cuda-python's wrapper because the cuda-python
+bindings for this function have shifted across versions; going
+through `libcuda` directly is more stable and the call site reads
+cleaner.  See [`tutorial/code/cuda_utils.py`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/cuda_utils.py)
+for the binding.
 
-```cpp
-#include <cuda.h>
+The call site for our 8 × 64 BF16 tensor:
 
-constexpr size_t CHUNK_BYTES = 128;
+```python
+ROWS, COLS, ELEM_BYTES = 8, 64, 2  # BF16
 
-CUtensorMap tmap;
-uint64_t global_dim[1]      = { CHUNK_BYTES };   // total tensor length, in elements
-uint32_t box_dim[1]         = { CHUNK_BYTES };   // per-load box length
-uint32_t element_strides[1] = { 1 };
-
-cuTensorMapEncodeTiled(
-    &tmap,
-    CU_TENSOR_MAP_DATA_TYPE_UINT8,   // 1-byte elements
-    /*rank=*/             1,
-    /*globalAddress=*/    g_in_ptr,  // raw uint8* to the start of the buffer
-    /*globalDim=*/        global_dim,
-    /*globalStrides=*/    nullptr,   // only rank − 1 entries needed; 0 here
-    /*boxDim=*/           box_dim,
-    /*elementStrides=*/   element_strides,
-    /*interleave=*/       CU_TENSOR_MAP_INTERLEAVE_NONE,
-    /*swizzle=*/          CU_TENSOR_MAP_SWIZZLE_NONE,
-    /*l2Promotion=*/      CU_TENSOR_MAP_L2_PROMOTION_NONE,
-    /*oobFill=*/          CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE
-);
+tmap = encode_tensor_map(
+    dtype=TMA_BFLOAT16,
+    rank=2,
+    gptr=int(g_in_d),                  # device pointer to the buffer
+    global_dim=[COLS, ROWS],           # innermost first
+    global_strides=[COLS * ELEM_BYTES],  # bytes per row
+    box_dim=[COLS, 1],                 # per-load tile = one row
+    element_strides=[1, 1],
+    swizzle=TMA_SWIZZLE_NONE,
+)
 ```
 
 A few things to call out:
@@ -105,15 +112,15 @@ A few things to call out:
 
   | Tensor                  | `rank` | `globalDim`           | Note                              |
   |-------------------------|:------:|-----------------------|-----------------------------------|
-  | 1D, `N` elements        | 1      | `{N}`                 | our chapter                       |
+  | 2D BF16 (8 × 64)        | 2      | `{64, 8}`             | our chapter                       |
   | 2D matrix `A: (M, K)` row-major | 2 | `{K, M}`             | K is contiguous → innermost       |
   | 3D, e.g. `[K/64, M, 64]`| 3      | `{64, M, K/64}`       | matmul slab trick (chapter 06)    |
 
 * **`globalStrides`** is the per-dimension stride array, *but only for
   the outer dimensions* — there are `rank − 1` of them.  The
   innermost stride is always one element and is implicit.  Strides
-  are in **bytes**, not elements.  For 1D that's zero entries, so
-  we pass `nullptr`.
+  are in **bytes**, not elements.  For our 8 × 64 BF16 tensor the
+  row stride is `64 × 2 = 128` bytes.
 * **`boxDim`** is the per-load shape — how many elements a single
   TMA bulk fetches in each dimension.  Same dimensionality and
   ordering as `globalDim`.  Each `cp.async.bulk.tensor` instruction
@@ -122,21 +129,21 @@ A few things to call out:
   The key relationship: `boxDim ≤ globalDim` along every dimension.
 
   - If `boxDim == globalDim` in every dim, **one TMA load covers the
-    whole tensor** (our chapter 00 case: both are `{128}`).
+    whole tensor** (single-shot transfer).
   - If `boxDim < globalDim` in some dim, **the tensor takes multiple
     loads to fully cover**, one per box at a different coordinate.
-    This is the matmul case: a 2D A might have `globalDim = {K, M}`
-    but `boxDim = {BK, BM}`, so each `cp.async.bulk.tensor.2d` grabs
-    one (BM, BK) tile of A — the K-loop iterates by issuing one
-    load per K-tile.
+    Our chapter does one load that covers row 0 only; loading the
+    other 7 rows would mean 7 more loads at coord `(0, 1), (0, 2),
+    ... (0, 7)`.  In matmul kernels the K-loop iterates exactly
+    this way, one box per K-tile.
 * **`elementStrides`** lets you skip elements in any dimension.  Almost
   always `{1, 1, ...}`.
 * **`swizzle`** is the SMEM-side layout the TMA engine will apply on
-  arrival.  For 1D streaming we use `NONE`.  (Matmul will use `128B`
-  — see the brief sidebar in Step 4.)
-* **`oobFill`** controls what happens if a TMA coord goes past the
-  global shape.  `NONE` means the caller is responsible for staying
-  in bounds.
+  arrival.  We use `NONE` here so SMEM bytes match global bytes
+  one-to-one — easy to verify.  Matmul will use `128B`; see Step 4.
+* **`oobFill`** (defaulted by the helper) controls what happens if a
+  TMA coord goes past the global shape.  `NONE` (default) means the
+  caller is responsible for staying in bounds.
 
 ### Aside — coming from numpy / PyTorch?
 
@@ -163,38 +170,29 @@ tile = A[m0:m0+BM, k0:k0+BK]       # one box; tile.shape == (BM, BK)
 One TMA instruction is essentially a hardware-accelerated
 `A[m0:m0+BM, k0:k0+BK]`, copied directly into SMEM.
 
-
 That's it for the host side.  Once `tmap` is built, it's passed to
 the kernel by value — the kernel parameter is
 `const __grid_constant__ CUtensorMap`.
 
 ## Step 2 — kernel side: the TMA instruction
 
-The instruction is `cp.async.bulk.tensor.1d`.  Operands:
+The instruction is `cp.async.bulk.tensor.2d`.  Operands:
 
 ```
-cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes
-    [smem_dst], [tmap_ptr, {coord_x}], [mbar_addr];
+cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes
+    [smem_dst], [tmap_ptr, {coord_x, coord_y}], [mbar_addr];
 ```
 
 * `smem_dst` — a 32-bit SMEM address obtained via
   `__cvta_generic_to_shared(...)`.
 * `tmap_ptr` — a 64-bit generic pointer to the `CUtensorMap`.  Taking
   the address of the `__grid_constant__` parameter gives exactly this.
-* `coord_x` — for 1D, a single 32-bit element index into the global
-  tensor.  This is the *start* of the box we want to load; the TMA
-  engine fetches `boxDim[0]` consecutive elements from there.
-
-  **The number of coordinates matches the descriptor's `rank`.** Our
-  descriptor was built with `rank = 1`, so the instruction's
-  coordinate vector is `{coord_x}` — one entry.  A 2D descriptor
-  takes `{coord_x, coord_y}`; a 3D one, `{coord_x, coord_y, coord_z}`.
-  We'll see these in chapter 01.
-
-  **Coordinates are in *elements*, not bytes.**  Our element type is
-  `uint8` (1 byte per element), so the two happen to coincide here.
-  With BF16 (2 bytes per element) `coord_x = N` would mean "load the
-  box starting at byte 2N."
+* `coord_x`, `coord_y` — 32-bit element indices into the global
+  tensor, **innermost first**.  For our 2D descriptor:
+  - `coord_x` is the column index (in BF16 elements)
+  - `coord_y` is the row index
+  - `(0, 0)` is "start of row 0"; the engine fetches `boxDim[0] = 64`
+    elements from there, going `boxDim[1] = 1` row deep.
 * `mbar_addr` — an SMEM address of the mbarrier that will receive the
   completion signal.
 
@@ -209,9 +207,9 @@ so the kernel body reads top-to-bottom):
 
 ```cpp
 asm volatile(
-    "cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes "
-    "[%0], [%1, {%2}], [%3];"
-    :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(mbar_addr)
+    "cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes "
+    "[%0], [%1, {%2, %3}], [%4];"
+    :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(coord_y), "r"(mbar_addr)
     : "memory");
 ```
 
@@ -300,16 +298,18 @@ collisions.
 
 ## Step 4 — swizzling, briefly
 
-We set `swizzle = CU_TENSOR_MAP_SWIZZLE_NONE` above.  For pure 1D
-streaming of byte data, NONE is the right choice — there's nothing
-to swizzle, and we don't have a downstream consumer (like
-`tcgen05.mma`) that imposes a specific layout.
+We set `swizzle = TMA_SWIZZLE_NONE` above.  For a "just verify the
+bytes arrived" demo, NONE is the right choice — SMEM bytes are laid
+out in the same order as global bytes, so reading SMEM linearly
+matches reading global memory linearly.
 
 When we get to matmul, the consumer is `tcgen05.mma`, which **does**
 impose a specific swizzled SMEM layout (128B swizzling).  The
 beautiful thing is that TMA can do this layout for you: set
-`swizzle = CU_TENSOR_MAP_SWIZZLE_128B` in the descriptor, and TMA
-arranges the bytes in SMEM in the form the MMA expects.  We'll see
+`swizzle = TMA_SWIZZLE_128B` in the descriptor, and TMA arranges the
+bytes in SMEM in the form the MMA expects.  The trade-off is that
+*reading SMEM linearly no longer reproduces the source bytes in
+order* — they've been rearranged for the MMA's benefit.  We'll see
 exactly how that works in chapter 01.
 
 For this chapter, just know that swizzling is a *property of the
@@ -321,7 +321,7 @@ arrangement.
 Putting it all together — every PTX op is inline at its use site:
 
 ```cpp
-constexpr unsigned CHUNK_BYTES = 128;
+constexpr unsigned CHUNK_BYTES = 128;   // one row: 64 BF16 elems = 128 bytes
 
 extern "C" __global__ void tma_demo(
     const __grid_constant__ CUtensorMap tmap,
@@ -341,11 +341,12 @@ extern "C" __global__ void tma_demo(
 
     // 2) One thread issues the TMA load and declares the expected byte count.
     if (threadIdx.x == 0) {
-        const int coord_x = 0;
+        const int coord_x = 0;   // column 0 (innermost)
+        const int coord_y = 0;   // row 0
         asm volatile(
-            "cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes "
-            "[%0], [%1, {%2}], [%3];"
-            :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(mbar_addr)
+            "cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes "
+            "[%0], [%1, {%2, %3}], [%4];"
+            :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(coord_y), "r"(mbar_addr)
             : "memory");
         asm volatile(
             "mbarrier.arrive.expect_tx.release.cta.shared::cluster.b64 _, [%0], %1;"
@@ -363,8 +364,8 @@ extern "C" __global__ void tma_demo(
         "}"
         :: "r"(mbar_addr), "r"(phase) : "memory");
 
-    // 4) SMEM now contains CHUNK_BYTES of data.  Each thread reads one
-    //    byte and writes it to a unique GMEM slot (defeats DCE).
+    // 4) SMEM now contains the row's CHUNK_BYTES of data.  Each thread
+    //    reads one byte and writes it to a unique GMEM slot (defeats DCE).
     if (threadIdx.x < CHUNK_BYTES) {
         g_out[threadIdx.x] = smem[threadIdx.x];
     }
@@ -381,17 +382,23 @@ A few asides on the kernel:
   128-byte tensor map is passed by value.  The runtime copies the
   struct into the kernel's parameter area; `&tmap` gives a generic
   pointer the TMA instruction can use.
+* The kernel also declares `CUtensorMap` itself locally as an opaque
+  128-byte struct because NVRTC's default include path doesn't have
+  the CUDA driver-API headers that normally provide the type.
 
 ## Step 6 — host launch
 
-```cpp
-size_t shared_bytes = CHUNK_BYTES;
-tma_demo<<<1, 128, shared_bytes>>>(tmap, g_out_device);
+```python
+launch(tma_demo,
+       grid=(1, 1, 1),
+       block=(THREADS_PER_CTA, 1, 1),
+       shared=CHUNK_BYTES,
+       args=[arg_tmap, arg_gout])
 ```
 
 One CTA, 128 threads, `CHUNK_BYTES` of dynamic shared memory.  When
-the kernel returns, `g_out_device` is a byte-for-byte copy of the
-first `CHUNK_BYTES` of the input buffer.
+the kernel returns, `g_out` contains the first row of the input
+tensor, byte-for-byte.
 
 ## What to take away
 
@@ -400,15 +407,16 @@ level:
 
 * A `CUtensorMap` describes the global tensor's shape, the per-load
   box shape, and the SMEM-side swizzle.
-* `cp.async.bulk.tensor.1d` (and its 2D, 3D variants) issues a single
-  bulk-load using the descriptor + a coordinate vector.
+* `cp.async.bulk.tensor.2d` (and its 1D / 3D variants) issues a
+  single bulk-load using the descriptor + a coordinate vector.
 * An `mbarrier` is the completion-signal channel: init it, declare
   the expected bytes via `arrive.expect_tx`, wait via
   `try_wait.parity`.
 * TMA can handle SMEM-side swizzling for you — useful when the
   downstream consumer (like `tcgen05.mma`) wants a specific layout.
 
-Everything in this chapter generalizes directly to matmul: swap the
-1D descriptor for a 2D one, change `SWIZZLE_NONE` to `SWIZZLE_128B`,
-and feed the SMEM into a `tcgen05.mma` instruction instead of reading
-it back to GMEM.  That's the next chapter.
+Everything in this chapter generalizes directly to matmul: keep the
+2D descriptor, change `SWIZZLE_NONE` to `SWIZZLE_128B`, bump `boxDim`
+to a real tile size like `(64, 128)`, and feed the SMEM into a
+`tcgen05.mma` instruction instead of reading it back to GMEM.  That's
+the next chapter.

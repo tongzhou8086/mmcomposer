@@ -17,15 +17,27 @@ import sys
 import ctypes
 import numpy as np
 
+
 # Pull in shared cuda-python plumbing from the parent tutorial/code/ dir.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from cuda_utils import cu, init_cuda, compile_kernel, launch, htod, dtoh
+from cuda_utils import (
+    cu, init_cuda, compile_kernel, launch, htod, dtoh,
+    encode_tensor_map, TMA_BFLOAT16, TMA_SWIZZLE_NONE,
+)
 
 from cuda.bindings import driver
 
 
 # ── Constants matching kernel.cu ────────────────────────────────────────────
-CHUNK_BYTES = 128
+# We work in BF16 (2 bytes per element) and use 2D TMA — the same shape
+# matmul will use later.  Tensor is 8 rows × 64 cols (1024 bytes total);
+# one TMA load fetches one row (64 elems = 128 bytes), matching the
+# 128B swizzle.
+ROWS            = 8
+COLS            = 64      # inner dim, in BF16 elements (= 128 bytes per row)
+ELEM_BYTES      = 2       # BF16
+TOTAL_BYTES     = ROWS * COLS * ELEM_BYTES   # 1024
+CHUNK_BYTES     = COLS * ELEM_BYTES          # 128 bytes per TMA load
 THREADS_PER_CTA = 128
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -39,7 +51,9 @@ tma_demo = fns["tma_demo"]
 
 
 # ── 2. Allocate device buffers ──────────────────────────────────────────────
-g_in_host = np.arange(CHUNK_BYTES, dtype=np.uint8)        # 0, 1, ..., 127
+# Input is TOTAL_BYTES long; we'll TMA-load just the first CHUNK_BYTES
+# (= the first row of the 2D tensor).
+g_in_host = (np.arange(TOTAL_BYTES, dtype=np.uint32) % 256).astype(np.uint8)
 g_in_d  = htod(g_in_host)
 g_out_d = cu(driver.cuMemAlloc(CHUNK_BYTES))
 
@@ -49,30 +63,30 @@ g_out_d = cu(driver.cuMemAlloc(CHUNK_BYTES))
 # This is the chapter's actual subject matter.  Everything above is
 # generic CUDA bootstrap; everything below the launch is verification.
 #
-# globalDim: total tensor shape, innermost-first.  rank entries.
-# boxDim:    per-load shape, same ordering.  rank entries.
-# Here both are {128} — one TMA load covers the entire 128-byte buffer.
-global_dim      = (ctypes.c_uint64 * 1)(CHUNK_BYTES)
-box_dim         = (ctypes.c_uint32 * 1)(CHUNK_BYTES)
-element_strides = (ctypes.c_uint32 * 1)(1)
-# globalStrides: outer-dim strides in BYTES, rank - 1 entries.
-# For 1D that's 0 entries → pass NULL.
-
-tmap = driver.CUtensorMap()
-cu(driver.cuTensorMapEncodeTiled(
-    tmap,
-    driver.CUtensorMapDataType.CU_TENSOR_MAP_DATA_TYPE_UINT8,
-    1,                                                            # rank = number of dims (1D here)
-    int(g_in_d),                                                  # global address
-    global_dim,
-    None,                                                         # globalStrides (NULL for 1D)
-    box_dim,
-    element_strides,
-    driver.CUtensorMapInterleave.CU_TENSOR_MAP_INTERLEAVE_NONE,
-    driver.CUtensorMapSwizzle.CU_TENSOR_MAP_SWIZZLE_NONE,
-    driver.CUtensorMapL2promotion.CU_TENSOR_MAP_L2_PROMOTION_NONE,
-    driver.CUtensorMapFloatOOBfill.CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
-))
+# globalDim: total tensor shape, innermost-first.  `rank` entries.
+# boxDim:    per-load shape, same ordering.  `rank` entries.
+# Here both are [128] — one TMA load covers the entire 128-byte buffer.
+# globalStrides: outer-dim strides in BYTES.  rank - 1 entries.
+# For 1D that's 0 entries → omit / pass None.
+#
+# encode_tensor_map (defined in cuda_utils) wraps libcuda's
+# cuTensorMapEncodeTiled directly via ctypes — cleaner across
+# cuda-python versions, no typed-element wrapping required.
+# Returns a numpy uint8 array of 128 bytes (the opaque descriptor).
+# 2D BF16 descriptor: tensor is (ROWS, COLS) row-major, box is one row.
+# Innermost-first ordering: dim[0] is COLS, dim[1] is ROWS.
+# globalStrides has 1 entry (= rank - 1) — the BYTE stride between
+# successive rows.
+tmap = encode_tensor_map(
+    dtype=TMA_BFLOAT16,
+    rank=2,
+    gptr=int(g_in_d),
+    global_dim=[COLS, ROWS],                # innermost first
+    global_strides=[COLS * ELEM_BYTES],     # bytes per row
+    box_dim=[COLS, 1],                      # one row per load
+    element_strides=[1, 1],
+    swizzle=TMA_SWIZZLE_NONE,   # linear byte order — easiest to verify
+)
 
 
 # ── 4. Launch ───────────────────────────────────────────────────────────────
@@ -81,8 +95,7 @@ cu(driver.cuTensorMapEncodeTiled(
 # By-value structs are passed as a ctypes byte-array of the right size;
 # pointers as ctypes.c_void_p.
 
-tmap_bytes = bytes(tmap)
-arg_tmap = (ctypes.c_byte * len(tmap_bytes)).from_buffer_copy(tmap_bytes)
+arg_tmap = (ctypes.c_byte * 128).from_buffer_copy(tmap.tobytes())
 arg_gout = ctypes.c_void_p(int(g_out_d))
 
 launch(tma_demo,
@@ -95,7 +108,7 @@ launch(tma_demo,
 # ── 5. Copy back + verify ───────────────────────────────────────────────────
 g_out_host = dtoh(g_out_d, CHUNK_BYTES, np.uint8)
 
-if np.array_equal(g_out_host, g_in_host):
+if np.array_equal(g_out_host, g_in_host[:CHUNK_BYTES]):
     print(f"✓ TMA load verified: {CHUNK_BYTES} bytes copied correctly via TMA.")
     print(f"  g_in [first 8 bytes]: {g_in_host[:8]}")
     print(f"  g_out[first 8 bytes]: {g_out_host[:8]}")
@@ -110,4 +123,4 @@ else:
 cu(driver.cuMemFree(g_in_d))
 cu(driver.cuMemFree(g_out_d))
 cu(driver.cuModuleUnload(module))
-cu(driver.cuCtxDestroy(ctx))
+cu(driver.cuDevicePrimaryCtxRelease(device))

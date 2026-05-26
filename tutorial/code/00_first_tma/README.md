@@ -2,8 +2,9 @@
 
 Companion code for [Chapter 00 in the
 book](../../book/part2_optimization_ladder/00_first_tma).  Builds a
-1D `CUtensorMap`, launches a single-CTA kernel that issues one TMA
-load of 128 bytes from GMEM into SMEM, and verifies the round-trip.
+2D BF16 `CUtensorMap` for an 8×64 tensor, launches a single-CTA
+kernel that issues one TMA load of 128 bytes (= one row), and
+verifies the round-trip.
 
 ## Files
 
