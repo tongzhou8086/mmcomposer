@@ -126,18 +126,16 @@ is global memory."  The `.mbarrier::complete_tx::bytes` modifier says
 "when this bulk lands, decrement the named mbarrier's tx-count by the
 number of bytes transferred."
 
-Wrapped as a C helper:
+In CUDA C++ that's an `asm volatile` block (we keep every PTX
+instruction inline at its use site — no helper-function wrappers,
+so the kernel body reads top-to-bottom):
 
 ```cpp
-__device__ __forceinline__ void tma_1d_load(
-    uint32_t smem_dst, const void* tmap_ptr, int coord_x, uint32_t mbar_addr
-) {
-    asm volatile(
-        "cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes "
-        "[%0], [%1, {%2}], [%3];"
-        :: "r"(smem_dst), "l"(tmap_ptr), "r"(coord_x), "r"(mbar_addr)
-        : "memory");
-}
+asm volatile(
+    "cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes "
+    "[%0], [%1, {%2}], [%3];"
+    :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(mbar_addr)
+    : "memory");
 ```
 
 ## Step 3 — the mbarrier handshake
@@ -180,23 +178,32 @@ initializing, and the arrival gets dropped.
 
 ### Wait
 
+`try_wait.parity` is a single PTX instruction that returns a predicate
+`P` — true once the mbarrier's current parity differs from the
+operand.  Since we want to *block* until that happens, we wrap it in a
+small spin loop entirely inside one `asm` block:
+
 ```cpp
-__device__ __forceinline__ void mbarrier_wait(uint32_t mbar_addr, uint32_t phase) {
-    asm volatile(
-        "{\n\t .reg .pred P;\n\t"
-        "WAIT_%=: mbarrier.try_wait.parity.shared::cta.b64 P, [%0], %1;\n\t"
-        "@P bra DONE_%=;\n\t"
-        "bra WAIT_%=;\n\t"
-        "DONE_%=:\n\t"
-        "}"
-        :: "r"(mbar_addr), "r"(phase) : "memory");
-}
+const uint32_t phase = 0;
+asm volatile(
+    "{\n\t .reg .pred P;\n\t"
+    "WAIT_%=: mbarrier.try_wait.parity.shared::cta.b64 P, [%0], %1;\n\t"
+    "@P bra DONE_%=;\n\t"
+    "bra WAIT_%=;\n\t"
+    "DONE_%=:\n\t"
+    "}"
+    :: "r"(mbar_addr), "r"(phase) : "memory");
 ```
 
 `phase` is the software-mirror of the mbarrier's parity bit (see the
 [Part 1 mbarrier chapter](../part1_gpu_arch/mbarrier)).  For a
 *single* load it's always 0; we'd only flip it across multiple
 iterations.
+
+The `%=` suffix on the labels (`WAIT_%=`, `DONE_%=`) tells the
+compiler to make them unique per `asm` instantiation, so the same
+loop can appear in multiple places in the same kernel without label
+collisions.
 
 ## Step 4 — swizzling, briefly
 
@@ -218,19 +225,19 @@ arrangement.
 
 ## Step 5 — the complete kernel
 
-Putting it all together:
+Putting it all together — every PTX op is inline at its use site:
 
 ```cpp
-constexpr size_t CHUNK_BYTES = 128;
+constexpr unsigned CHUNK_BYTES = 128;
 
-__global__ void tma_demo(
+extern "C" __global__ void tma_demo(
     const __grid_constant__ CUtensorMap tmap,
     uint8_t* __restrict__ g_out
 ) {
     extern __shared__ __align__(128) uint8_t smem[];
     __shared__ uint64_t mbar;
-    const uint32_t mbar_addr = __cvta_generic_to_shared(&mbar);
-    const uint32_t smem_addr = __cvta_generic_to_shared(smem);
+    const uint32_t mbar_addr = (uint32_t)__cvta_generic_to_shared(&mbar);
+    const uint32_t smem_addr = (uint32_t)__cvta_generic_to_shared(smem);
 
     // 1) Initialize the mbarrier.
     if (threadIdx.x == 0) {
@@ -241,14 +248,27 @@ __global__ void tma_demo(
 
     // 2) One thread issues the TMA load and declares the expected byte count.
     if (threadIdx.x == 0) {
-        tma_1d_load(smem_addr, &tmap, /*coord_x=*/ 0, mbar_addr);
+        const int coord_x = 0;
+        asm volatile(
+            "cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes "
+            "[%0], [%1, {%2}], [%3];"
+            :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(mbar_addr)
+            : "memory");
         asm volatile(
             "mbarrier.arrive.expect_tx.release.cta.shared::cluster.b64 _, [%0], %1;"
-            :: "r"(mbar_addr), "r"((unsigned)CHUNK_BYTES) : "memory");
+            :: "r"(mbar_addr), "r"(CHUNK_BYTES) : "memory");
     }
 
     // 3) All threads wait for the load to complete.
-    mbarrier_wait(mbar_addr, /*phase=*/ 0);
+    const uint32_t phase = 0;
+    asm volatile(
+        "{\n\t .reg .pred P;\n\t"
+        "WAIT_%=: mbarrier.try_wait.parity.shared::cta.b64 P, [%0], %1;\n\t"
+        "@P bra DONE_%=;\n\t"
+        "bra WAIT_%=;\n\t"
+        "DONE_%=:\n\t"
+        "}"
+        :: "r"(mbar_addr), "r"(phase) : "memory");
 
     // 4) SMEM now contains CHUNK_BYTES of data.  Each thread reads one
     //    byte and writes it to a unique GMEM slot (defeats DCE).

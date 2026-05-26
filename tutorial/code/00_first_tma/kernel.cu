@@ -6,48 +6,16 @@
 //
 // Functionally: g_out[:CHUNK_BYTES] = g_in[:CHUNK_BYTES].
 //
+// Style note: every PTX instruction is shown inline at its use site
+// (no helper-function wrappers).  This keeps the entire kernel body
+// readable top-to-bottom — what you see is what runs.
+//
 // Compiled and launched by main.py via cuda-python (NVRTC + driver API).
 
 #include <cuda/std/cstdint>
 
 constexpr unsigned CHUNK_BYTES = 128;
 
-
-// ── TMA 1D bulk load ────────────────────────────────────────────────────────
-//
-// Issues a single cp.async.bulk.tensor.1d into SMEM.
-// `complete_tx::bytes` modifier auto-decrements the named mbarrier's
-// tx-count by the number of bytes that arrive.
-
-__device__ __forceinline__ void tma_1d_load(
-    uint32_t smem_dst, const void* tmap_ptr, int coord_x, uint32_t mbar_addr
-) {
-    asm volatile(
-        "cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes "
-        "[%0], [%1, {%2}], [%3];"
-        :: "r"(smem_dst), "l"(tmap_ptr), "r"(coord_x), "r"(mbar_addr)
-        : "memory");
-}
-
-
-// ── mbarrier try-wait spin loop ─────────────────────────────────────────────
-//
-// Blocks the calling warp until the mbarrier's current parity flips
-// to the opposite of `phase`.  For a single-shot load `phase` is 0.
-
-__device__ __forceinline__ void mbarrier_wait(uint32_t mbar_addr, uint32_t phase) {
-    asm volatile(
-        "{\n\t .reg .pred P;\n\t"
-        "WAIT_%=: mbarrier.try_wait.parity.shared::cta.b64 P, [%0], %1;\n\t"
-        "@P bra DONE_%=;\n\t"
-        "bra WAIT_%=;\n\t"
-        "DONE_%=:\n\t"
-        "}"
-        :: "r"(mbar_addr), "r"(phase) : "memory");
-}
-
-
-// ── Kernel ──────────────────────────────────────────────────────────────────
 
 extern "C" __global__ void tma_demo(
     const __grid_constant__ CUtensorMap tmap,
@@ -59,26 +27,55 @@ extern "C" __global__ void tma_demo(
     const uint32_t mbar_addr = (uint32_t)__cvta_generic_to_shared(&mbar);
     const uint32_t smem_addr = (uint32_t)__cvta_generic_to_shared(smem);
 
-    // 1) Initialize the mbarrier.
+    // ── 1) Initialize the mbarrier.
+    //
+    // The fence is required so that the async TMA proxy sees the
+    // init before its complete_tx::bytes modifier touches the mbar.
     if (threadIdx.x == 0) {
         asm volatile("mbarrier.init.shared::cta.b64 [%0], 1;" :: "r"(mbar_addr));
         asm volatile("fence.mbarrier_init.release.cluster;");
     }
     __syncthreads();
 
-    // 2) One thread issues the TMA load and declares the expected bytes.
+    // ── 2) One thread issues the TMA bulk load and declares the
+    //       expected byte count.
+    //
+    // cp.async.bulk.tensor.1d takes a SMEM destination, a CUtensorMap
+    // pointer + a coordinate vector ({coord_x} for 1D), and the
+    // mbarrier whose tx-count it will decrement when bytes land.
+    //
+    // mbarrier.arrive.expect_tx adds CHUNK_BYTES to the mbarrier's
+    // tx_count and decrements arrival_count by 1.
     if (threadIdx.x == 0) {
-        tma_1d_load(smem_addr, &tmap, /*coord_x=*/ 0, mbar_addr);
+        const int coord_x = 0;
+        asm volatile(
+            "cp.async.bulk.tensor.1d.shared::cta.global.mbarrier::complete_tx::bytes "
+            "[%0], [%1, {%2}], [%3];"
+            :: "r"(smem_addr), "l"(&tmap), "r"(coord_x), "r"(mbar_addr)
+            : "memory");
         asm volatile(
             "mbarrier.arrive.expect_tx.release.cta.shared::cluster.b64 _, [%0], %1;"
             :: "r"(mbar_addr), "r"(CHUNK_BYTES) : "memory");
     }
 
-    // 3) All threads wait for the load to complete.
-    mbarrier_wait(mbar_addr, /*phase=*/ 0);
+    // ── 3) All threads spin on try_wait.parity until the load lands.
+    //
+    // For a single-shot load `phase` is 0 (the parity bit will flip
+    // from 0 → 1 when both counters reach zero, at which point
+    // try_wait succeeds).
+    const uint32_t phase = 0;
+    asm volatile(
+        "{\n\t .reg .pred P;\n\t"
+        "WAIT_%=: mbarrier.try_wait.parity.shared::cta.b64 P, [%0], %1;\n\t"
+        "@P bra DONE_%=;\n\t"
+        "bra WAIT_%=;\n\t"
+        "DONE_%=:\n\t"
+        "}"
+        :: "r"(mbar_addr), "r"(phase) : "memory");
 
-    // 4) SMEM now contains CHUNK_BYTES of data.  Each thread reads one
-    //    byte and writes it to a unique GMEM slot to defeat DCE.
+    // ── 4) SMEM now contains CHUNK_BYTES of data.  Each thread reads
+    //       one byte and writes it to a unique GMEM slot to defeat
+    //       dead-code elimination.
     if (threadIdx.x < CHUNK_BYTES) {
         g_out[threadIdx.x] = smem[threadIdx.x];
     }
