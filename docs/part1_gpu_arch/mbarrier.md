@@ -46,20 +46,66 @@ Both must reach zero before the phase completes.
 
 ## Phase parity (the tricky part)
 
-The mbarrier maintains a 1-bit phase parity that flips on each
-completion.  `try_wait.parity P, [mbar], phaseParity` succeeds when
-the mbarrier's *current* parity bit is **opposite** to the
-`phaseParity` operand.
+In addition to the two counters described above, an mbarrier carries
+a third piece of state: a single **parity bit**.  Conceptually, the
+mbarrier packs all three fields into its 8 bytes:
 
-This means each waiter keeps a software mirror of the parity bit it
-*expects to see*, flips it after each successful wait, and passes the
-flipped value to the next `try_wait`.  After init, parity is 0; the
-first successful completion flips it to 1; the next to 0; and so on.
+```
+struct mbarrier {
+    uint  arrival_count;      // counts down as threads arrive
+    uint  tx_count;           // counts down as async-tx bytes land
+    bit   parity;             // hardware-managed flip-flop
+};
+```
 
-A common trick is to **pre-arrive** on an mbarrier just after init so
-the first wait returns immediately — this avoids needing a special
-branch at iteration 0.  Concrete patterns for both the waiter loop and
-the pre-arrive trick are shown in Part 2.
+When both counters reach zero, the hardware **atomically**:
+
+1. Flips `parity` (the bit inside the mbarrier).
+2. Resets `arrival_count` back to the value passed at init.
+3. Resets `tx_count` to 0, ready for the next `expect_tx`.
+
+All three transitions happen in one cycle.  This is the **auto-reset**
+that makes mbarriers cheap to reuse across many iterations of a
+producer/consumer loop — no software intervention is needed to recycle
+the mbarrier between phases.
+
+### The phase-parity wait
+
+`try_wait.parity P, [mbar], phaseParity` succeeds when the mbarrier's
+*current* parity bit is **opposite** to the `phaseParity` operand.
+Equivalently: it succeeds once "the phase whose parity bit was
+`phaseParity` has just completed."
+
+To use the same mbarrier across many phases, each waiter keeps a
+software **mirror** of the parity bit it expects to see next.  After
+each successful wait, it flips its mirror so the next wait checks
+against the new parity:
+
+```
+hardware parity (inside the mbarrier):  0 → 1 → 0 → 1 → 0 → 1 → ...
+software mirror (per-thread variable):  0 → 1 → 0 → 1 → 0 → 1 → ...
+```
+
+The two stay in lockstep because the mirror is flipped right after
+each wait returns — exactly when the hardware has just flipped its
+own parity.
+
+If PTX had a `try_wait.next_phase` form that figured this out
+automatically, no software mirror would be needed.  As it stands,
+maintaining the mirror is the user's responsibility, and getting it
+wrong is one of the easier ways to deadlock an mbarrier-based kernel.
+
+### The pre-arrive trick
+
+After init, the mbarrier's parity is 0 and no phase has completed yet.
+If the first user-side `arrive` is *also* a logical reset (e.g. when
+the first iteration of a ring buffer has nothing real to wait for),
+one common idiom is to **pre-arrive** on the mbarrier immediately
+after init.  That brings the counters to zero, triggers an auto-reset
+to parity = 1, and lets the first `try_wait.parity` with mirror = 0
+return immediately — avoiding a special-case branch at iteration 0.
+Concrete patterns for both the waiter loop and the pre-arrive trick
+are shown in Part 2.
 
 ## The instruction family
 
