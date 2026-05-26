@@ -6,6 +6,11 @@ global memory into shared memory — and nothing else.  No matmul.  No
 ring buffer.  No pipelining.  Just *one* TMA load and the minimum
 scaffolding around it.
 
+> 📁 **Runnable code:** [`tutorial/code/00_first_tma/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/00_first_tma).
+> The kernel and host launcher shown below are reproduced verbatim there.
+> Run with `pip install -r ../requirements.txt && python main.py` on a
+> Blackwell (sm_100a) GPU.
+
 The point is to internalize each piece in isolation:
 
 * Host side: how to build a `CUtensorMap` descriptor.

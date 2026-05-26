@@ -30,7 +30,7 @@ html:
 # Repository link — drives the "View source" / "Edit on GitHub" buttons.
 repository:
   url: "https://github.com/tongzhou8086/mmcomposer"
-  path_to_book: "docs"
+  path_to_book: "tutorial/book"
   branch: "master"
 
 # Sphinx config passthrough.
