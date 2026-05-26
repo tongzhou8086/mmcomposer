@@ -5,14 +5,17 @@ three phases that execute in order:
 
 * **Prologue** — one-time setup before the K-loop.  Compute the
   per-CTA tile offsets `(off_m, off_n)`, derive shared-memory addresses
-  for the A and B staging slots, build MMA descriptors, and apply any
+  for the A and B staging slots, and apply any
   CTA-swizzle to the block-id → tile mapping.
 
 * **Main K-loop** — a loop over the K-dimension tiles.  Each iteration
-  *fetches* the next pair of A and B tiles into shared memory, and
-  *computes* an MMA against the tiles staged by earlier iterations.
+  loads a pair of A and B tiles from global memory and accumulates
+  their product into the running C tile.  How fetch and compute are
+  scheduled relative to each other (sequential, overlapped, multi-stage
+  pipelined) is one of the central optimization choices — see the next
+  section.
 
-* **Epilogue** — drain the in-flight MMAs, optionally apply a fused
+* **Epilogue** — drain the in-flight MMAs if any, optionally apply a fused
   elementwise function, and write the accumulated C tile back to
   global memory.
 
@@ -27,9 +30,7 @@ The K-loop does two things — fetch and compute — and both want to be
 * **Tile fetch.**  Explicitly async on Ampere and later: `cp.async`
   (Ampere) or `cp.async.bulk.tensor` (Hopper TMA, Blackwell TMA).
   Even pre-Ampere kernels achieved a weaker form of overlap, since
-  the warp scheduler could reorder around long-latency global loads,
-  but `cp.async` made the parallelism explicit and easy to reason
-  about.
+  the warp scheduler could keep issuing independent global loads.
 
 * **MMA compute.**  Sync vs async depends on the instruction:
   * `mma.sync` — synchronous; supported on Volta through Blackwell.
@@ -50,11 +51,16 @@ consumed by MMA; when MMA finishes consuming slot `i`, that slot
 becomes available for the next fetch.
 
 ```
-              iter k-1     iter k       iter k+1     iter k+2
-TMA warp:    [ fetch ]   [ fetch  ]   [ fetch   ]   [ fetch ]
-MMA warp:        ...    [ compute ]   [ compute ]   ...
-                            ↑ overlapped with the next fetch
+                iter k-1     iter k       iter k+1     iter k+2
+Tile fetch:    [ fetch ]   [ fetch  ]   [ fetch   ]   [ fetch ]
+MMA compute:       ...    [ compute ]   [ compute ]   ...
+                              ↑ overlapped with the next fetch
 ```
+
+(How "tile fetch" and "MMA compute" are mapped onto threads/warps
+varies by architecture — they can run in the same warp interleaved,
+or in dedicated warps via warp specialization.  The pipeline shape is
+the same either way.)
 
 Almost every Part 2 optimization is *either* an improvement to one end
 of this pipeline (faster fetch, faster MMA), *or* a richer way to keep
