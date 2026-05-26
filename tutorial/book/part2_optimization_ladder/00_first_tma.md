@@ -78,9 +78,8 @@ CUDA tensor):
 ```python
 ROWS, COLS, ELEM_BYTES = 8, 64, 2  # BF16
 
-g_in  = (torch.arange(ROWS * COLS, dtype=torch.float32) % 17.0).to(
-    device="cuda", dtype=torch.bfloat16).view(ROWS, COLS)
-g_out = torch.zeros(COLS, device="cuda", dtype=torch.bfloat16)
+g_in  = torch.randn(ROWS, COLS, dtype=torch.bfloat16, device="cuda")
+g_out = torch.zeros(COLS,        dtype=torch.bfloat16, device="cuda")
 
 tmap = encode_tensor_map(
     dtype=TMA_BFLOAT16,

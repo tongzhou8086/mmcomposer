@@ -44,11 +44,8 @@ tma_demo = fns["tma_demo"]
 
 
 # ── 2. Allocate device buffers via torch ───────────────────────────────────
-# Cycle values 0..16 through the tensor so the verification has something
-# non-trivial to compare against; BF16 represents these exactly.
-g_in  = (torch.arange(ROWS * COLS, dtype=torch.float32) % 17.0).to(
-    device="cuda", dtype=torch.bfloat16).view(ROWS, COLS)
-g_out = torch.zeros(COLS, device="cuda", dtype=torch.bfloat16)
+g_in  = torch.randn(ROWS, COLS, dtype=torch.bfloat16, device="cuda")
+g_out = torch.zeros(COLS, dtype=torch.bfloat16, device="cuda")
 
 
 # ── 3. Build the 2D BF16 CUtensorMap ───────────────────────────────────────
