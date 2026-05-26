@@ -33,8 +33,6 @@ Passed to the kernel as a `__grid_constant__` parameter.  Encodes:
 * Out-of-bounds fill mode
 * L2 promotion policy
 
-TODO: walk through a concrete `init_tmap_2d_128B(...)` and a 3D one.
-
 ## The bulk-tensor copy instructions
 
 The PTX instruction family is `cp.async.bulk.tensor.{1d,2d,3d,4d,5d}`.
@@ -61,15 +59,11 @@ cp.async.bulk.tensor.<rank>d
 * `.multicast::cluster` — broadcasts the bulk to multiple CTAs in the
   cluster via a CTA mask.
 
-TODO: a short example of each form.
-
 ## Coordinates and box dimensions
 
 The coords passed to the instruction are *not* byte offsets — they are
 indices into the descriptor's logical shape.  Box dims are encoded
 once in the descriptor; the coords pick *which* box at runtime.
-
-TODO: worked example with a (M, K) row-major A and a (BM, BK) box.
 
 ## Swizzling
 

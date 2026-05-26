@@ -53,26 +53,13 @@ the mbarrier's *current* parity bit is **opposite** to the
 
 This means each waiter keeps a software mirror of the parity bit it
 *expects to see*, flips it after each successful wait, and passes the
-flipped value to the next `try_wait`:
+flipped value to the next `try_wait`.  After init, parity is 0; the
+first successful completion flips it to 1; the next to 0; and so on.
 
-```cuda
-uint32_t phase = 0;
-for (;;) {
-    mbarrier_wait(mb, phase);   // succeeds when mbar parity != phase
-    phase ^= 1;
-    // ...
-}
-```
-
-A common trick: **pre-arrive** on an mbarrier just after init so the
-first wait returns immediately.  This avoids a branch at iter 0:
-
-```cuda
-mbarrier_init(&mb, 1);
-asm volatile("mbarrier.arrive.shared::cta.b64 _, [%0];" :: "r"(addr));
-asm volatile("fence.mbarrier_init.release.cluster;");
-// ... now wait(phase=0) returns immediately
-```
+A common trick is to **pre-arrive** on an mbarrier just after init so
+the first wait returns immediately — this avoids needing a special
+branch at iteration 0.  Concrete patterns for both the waiter loop and
+the pre-arrive trick are shown in Part 2.
 
 ## The instruction family
 
@@ -94,16 +81,10 @@ mbarrier.try_wait.parity.shared::cta.b64 P, [addr], phaseParity;
 Within a single CTA, mbarriers are just SMEM addresses.  In a 2-CTA
 cluster, **peer-CTA mbarriers are addressed via a special bit pattern**:
 clearing bit 24 of the SMEM address routes the address to CTA 0's
-mbarrier from CTA 1.  In our codebase:
-
-```cuda
-const uint32_t mb_local = (uint32_t)__cvta_generic_to_shared(&mb);
-const uint32_t mb_cta0  = mb_local & 0xFEFFFFFF;   // route to CTA 0
-```
-
-This is how cross-CTA tx-count bookkeeping works: both CTAs' TMA bulks
-target the same CTA 0 mbarrier even though they're issued from different
-SMs.
+mbarrier from CTA 1.  This is how cross-CTA tx-count bookkeeping works:
+both CTAs' TMA bulks target the same CTA 0 mbarrier even though they're
+issued from different SMs.  The concrete address-mask idiom is shown in
+Part 2's cluster chapter.
 
 ## Common pitfalls
 
