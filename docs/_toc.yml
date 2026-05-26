@@ -14,7 +14,7 @@ parts:
 
   - caption: "Part 2 — The optimization ladder"
     chapters:
-      - file: part2_optimization_ladder/00_naive
+      - file: part2_optimization_ladder/00_first_tma
       - file: part2_optimization_ladder/01_blocked_tiling
       - file: part2_optimization_ladder/02_smem_staging
       - file: part2_optimization_ladder/03_cp_async
