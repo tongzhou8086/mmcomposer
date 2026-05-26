@@ -160,6 +160,41 @@ with st.sidebar:
         help="Shapes the generated kernel will be tuned for.",
     )
 
+    # ── Epilogue fusion ───────────────────────────────────────────────
+    st.subheader("Epilogue fusion")
+    st.caption(
+        "Optional elementwise function applied to the matmul result "
+        "*before* writing back to global memory.  Must be a single "
+        "expression in `x` (the per-element FP32 accumulator value)."
+    )
+    epilogue_fusion = st.text_area(
+        "Function of x",
+        value="",
+        height=70,
+        placeholder="e.g.  max(0, x)         — ReLU\n"
+                    "      x / (1 + exp(-x)) — SiLU / Swish",
+        help="Leave empty for no fusion.  Must be a valid expression in `x` "
+             "using only the supported functions listed below.",
+    )
+    with st.expander("Supported functions (epilogue fusion)"):
+        st.markdown(
+            "- **Arithmetic:** `+`, `-`, `*`, `/`, `**`  (power)\n"
+            "- **Comparison:** `max(a, b)`, `min(a, b)`\n"
+            "- **Unary:** `abs(x)`, `exp(x)`, `log(x)`, `sqrt(x)`, `tanh(x)`\n"
+            "- **Constants:** integer / float literals, `pi`, `e`\n\n"
+            "Examples:\n"
+            "- `max(0, x)`           — ReLU\n"
+            "- `min(6, max(0, x))`   — ReLU6\n"
+            "- `x / (1 + exp(-x))`   — SiLU / Swish\n"
+            "- `1 / (1 + exp(-x))`   — sigmoid\n"
+            "- `tanh(x)`             — tanh\n"
+            "- `0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x**3)))`\n"
+            "                        — GELU (approximate)\n\n"
+            "*This set will grow as the generator matures.  More complex "
+            "patterns (matmul + bias-add + activation, scaled outputs, "
+            "etc.) are out-of-scope for now.*"
+        )
+
 
 # ── Intent JSON: live preview ────────────────────────────────────────────────
 
@@ -214,6 +249,7 @@ intent = {
         "epilogue_8_warps":    epilogue_8w,
     },
     "shapes": parse_shapes(shapes_text),
+    "epilogue_fusion": (epilogue_fusion.strip() or None),
 }
 
 
