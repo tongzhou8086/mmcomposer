@@ -9,7 +9,11 @@ load of 128 bytes from GMEM into SMEM, and verifies the round-trip.
 
 - `kernel.cu` — the kernel source.  Compiled at runtime via NVRTC.
 - `main.py` — cuda-python host-side launcher: builds the descriptor,
-  compiles, launches, verifies, frees.
+  launches the kernel, verifies the result.
+- `../cuda_utils.py` — shared plumbing (CUDA init, NVRTC compile,
+  cuLaunchKernel argument packing, error checking).  Lives one
+  directory up so other chapters reuse it; this `main.py` imports
+  from there.
 
 ## Run
 

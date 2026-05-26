@@ -163,10 +163,6 @@ tile = A[m0:m0+BM, k0:k0+BK]       # one box; tile.shape == (BM, BK)
 One TMA instruction is essentially a hardware-accelerated
 `A[m0:m0+BM, k0:k0+BK]`, copied directly into SMEM.
 
-(One linguistic gotcha: `torch.Tensor.size()` returns the same tuple
-as `.shape` — it's not the element count.  Numpy's bare `arr.size`
-returns the count.  Neither corresponds to `globalDim`; `globalDim`
-is always a shape tuple.)
 
 That's it for the host side.  Once `tmap` is built, it's passed to
 the kernel by value — the kernel parameter is
