@@ -1,0 +1,34 @@
+# Jupyter Book table of contents.
+# Generates the left-hand navigation in the rendered book.
+
+format: jb-book
+root: index
+
+parts:
+  - caption: "Part 1 — Target architecture"
+    chapters:
+      - file: part1_gpu_arch/b200_overview
+
+  - caption: "Part 2 — The optimization ladder"
+    chapters:
+      - file: part2_optimization_ladder/00_naive
+      - file: part2_optimization_ladder/01_blocked_tiling
+      - file: part2_optimization_ladder/02_smem_staging
+      - file: part2_optimization_ladder/03_cp_async
+      - file: part2_optimization_ladder/04_tma_2d
+      - file: part2_optimization_ladder/05_multi_stage_buffering
+      - file: part2_optimization_ladder/06_tcgen05
+      - file: part2_optimization_ladder/07_warp_spec
+      - file: part2_optimization_ladder/08_tma_3d
+      - file: part2_optimization_ladder/09_two_cta_cluster
+      - file: part2_optimization_ladder/10_cta_swizzle
+      - file: part2_optimization_ladder/11_epilogue_warps
+      - file: part2_optimization_ladder/12_autotune
+
+  - caption: "Part 3 — Autotuning"
+    chapters:
+      - file: part3_autotuning
+
+  - caption: "Part 4 — Reference"
+    chapters:
+      - file: part4_b200_reference

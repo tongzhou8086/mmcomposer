@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# Jupyter Book build output
+docs/_build/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

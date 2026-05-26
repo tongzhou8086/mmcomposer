@@ -1,0 +1,40 @@
+# Jupyter Book configuration — minimal.  See https://jupyterbook.org for the
+# full reference.
+
+title: "Matrix Multiplication Optimization on B200"
+author: "Tong Zhou & contributors"
+copyright: "2026"
+logo: ""
+
+# Build settings.
+execute:
+  execute_notebooks: "off"     # Tutorial is prose + code-blocks; no live runs.
+
+# Markdown extensions (MyST).
+parse:
+  myst_enable_extensions:
+    - amsmath
+    - colon_fence
+    - deflist
+    - dollarmath
+    - linkify
+    - substitution
+    - tasklist
+
+# HTML output.
+html:
+  use_repository_button: true
+  use_issues_button: true
+  use_edit_page_button: true
+
+# Repository link (placeholder — update when repo is hosted).
+repository:
+  url: "https://github.com/REPLACE_ME/mmcomposer"
+  path_to_book: "docs"
+  branch: "main"
+
+# Sphinx config passthrough.
+sphinx:
+  config:
+    html_show_copyright: true
+    language: "en"
