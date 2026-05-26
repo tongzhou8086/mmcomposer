@@ -28,12 +28,16 @@ A single-CTA kernel that:
 
 1. TMA-loads **one row** (64 BF16 elements = 128 bytes) from a global
    8×64 BF16 tensor into shared memory.
-2. Has each thread read one byte from SMEM and write it to
-   `g_out[threadIdx.x]`.
+2. Has threads 0..63 each read one BF16 element from SMEM and write
+   it to `g_out[threadIdx.x]`.
 
 The "read back and write" part exists only to prevent the compiler
 from optimizing the entire load away.  Functionally it's
 `g_out = first_row(g_in)` done through TMA + SMEM.
+
+Both buffers are **torch BF16 tensors** on CUDA — torch handles
+allocation and deallocation, we just pass `g_in.data_ptr()` and
+`g_out.data_ptr()` to the kernel.
 
 We'll use:
 
@@ -68,15 +72,20 @@ through `libcuda` directly is more stable and the call site reads
 cleaner.  See [`tutorial/code/cuda_utils.py`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/cuda_utils.py)
 for the binding.
 
-The call site for our 8 × 64 BF16 tensor:
+The call site for our 8 × 64 BF16 tensor (where `g_in` is a torch
+CUDA tensor):
 
 ```python
 ROWS, COLS, ELEM_BYTES = 8, 64, 2  # BF16
 
+g_in  = (torch.arange(ROWS * COLS, dtype=torch.float32) % 17.0).to(
+    device="cuda", dtype=torch.bfloat16).view(ROWS, COLS)
+g_out = torch.zeros(COLS, device="cuda", dtype=torch.bfloat16)
+
 tmap = encode_tensor_map(
     dtype=TMA_BFLOAT16,
     rank=2,
-    gptr=int(g_in_d),                  # device pointer to the buffer
+    gptr=g_in.data_ptr(),              # torch tensor's device pointer
     global_dim=[COLS, ROWS],           # innermost first
     global_strides=[COLS * ELEM_BYTES],  # bytes per row
     box_dim=[COLS, 1],                 # per-load tile = one row
@@ -321,13 +330,18 @@ arrangement.
 Putting it all together — every PTX op is inline at its use site:
 
 ```cpp
-constexpr unsigned CHUNK_BYTES = 128;   // one row: 64 BF16 elems = 128 bytes
+#include <cuda.h>          // CUtensorMap
+#include <cuda_bf16.h>     // __nv_bfloat16
+#include <cstdint>         // uint32_t, uint64_t
+
+constexpr unsigned COLS        = 64;
+constexpr unsigned CHUNK_BYTES = COLS * 2;   // 64 BF16 elems = 128 bytes
 
 extern "C" __global__ void tma_demo(
     const __grid_constant__ CUtensorMap tmap,
-    uint8_t* __restrict__ g_out
+    __nv_bfloat16* __restrict__ g_out
 ) {
-    extern __shared__ __align__(128) uint8_t smem[];
+    extern __shared__ __align__(128) __nv_bfloat16 smem[];
     __shared__ uint64_t mbar;
     const uint32_t mbar_addr = (uint32_t)__cvta_generic_to_shared(&mbar);
     const uint32_t smem_addr = (uint32_t)__cvta_generic_to_shared(smem);
@@ -364,9 +378,9 @@ extern "C" __global__ void tma_demo(
         "}"
         :: "r"(mbar_addr), "r"(phase) : "memory");
 
-    // 4) SMEM now contains the row's CHUNK_BYTES of data.  Each thread
-    //    reads one byte and writes it to a unique GMEM slot (defeats DCE).
-    if (threadIdx.x < CHUNK_BYTES) {
+    // 4) SMEM now holds the first row's COLS BF16 elements.  Threads
+    //    0..COLS-1 each write one element to g_out.
+    if (threadIdx.x < COLS) {
         g_out[threadIdx.x] = smem[threadIdx.x];
     }
 }
@@ -374,17 +388,20 @@ extern "C" __global__ void tma_demo(
 
 A few asides on the kernel:
 
-* `extern __shared__ __align__(128) uint8_t smem[]` — TMA requires
-  128-byte SMEM alignment.  We declare it explicitly.
+* `extern __shared__ __align__(128) __nv_bfloat16 smem[]` — TMA
+  requires 128-byte SMEM alignment.  We declare it explicitly.
 * `__shared__ uint64_t mbar` lives in static SMEM; its address is
   converted to a 32-bit SMEM index via `__cvta_generic_to_shared`.
 * The `const __grid_constant__ CUtensorMap` parameter is how the
   128-byte tensor map is passed by value.  The runtime copies the
   struct into the kernel's parameter area; `&tmap` gives a generic
   pointer the TMA instruction can use.
-* The kernel also declares `CUtensorMap` itself locally as an opaque
-  128-byte struct because NVRTC's default include path doesn't have
-  the CUDA driver-API headers that normally provide the type.
+* The file is compiled with **nvcc** (not NVRTC), so we get the
+  standard CUDA headers — `<cuda.h>` for `CUtensorMap`,
+  `<cuda_bf16.h>` for `__nv_bfloat16`, `<cstdint>` for the integer
+  typedefs.  The cubin is cached on disk next to `kernel.cu` and
+  rebuilt only when the source is newer (`cuda_utils.compile_kernel`
+  handles this).
 
 ## Step 6 — host launch
 

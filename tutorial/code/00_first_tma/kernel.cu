@@ -2,40 +2,32 @@
 //
 // One CTA, 128 threads.  A single 2D TMA bulk load fetches one row
 // (64 BF16 elements = 128 bytes) of an 8x64 row-major BF16 tensor
-// into shared memory.  Each thread then reads one byte from SMEM
-// and writes it to a unique GMEM slot (defeats DCE).
+// into shared memory.  Threads 0..63 then write that row out to
+// `g_out`, one BF16 element each.
 //
-// Functionally: g_out[:128] = g_in[0, :] (the first row, as bytes).
+// Functionally: g_out[:64] = g_in[0, :64]  (the first row).
 //
 // Style note: every PTX instruction is shown inline at its use site
 // (no helper-function wrappers).  This keeps the entire kernel body
 // readable top-to-bottom — what you see is what runs.
 //
-// Compiled and launched by main.py via cuda-python (NVRTC + driver API).
+// Compiled by main.py via nvcc → cubin (cached on disk by mtime).
 
-// NVRTC's default include path does not have libcu++ (`cuda/std/*`) or
-// the host `<cstdint>` header.  Provide the integer typedefs we need
-// locally so this file compiles standalone.
-typedef unsigned char       uint8_t;
-typedef unsigned int        uint32_t;
-typedef unsigned long long  uint64_t;
+#include <cuda.h>          // CUtensorMap
+#include <cuda_bf16.h>     // __nv_bfloat16
+#include <cstdint>         // uint32_t, uint64_t
 
-// NVRTC also lacks the CUDA driver-API headers that declare CUtensorMap.
-// Declare it locally as a 128-byte opaque struct (the actual layout is
-// filled in host-side by cuTensorMapEncodeTiled; the kernel only ever
-// takes &tmap to pass to the TMA instruction).
-struct alignas(64) CUtensorMap {
-    uint64_t opaque[16];   // 128 bytes
-};
-
-constexpr unsigned CHUNK_BYTES = 128;
+constexpr unsigned ROWS        = 8;
+constexpr unsigned COLS        = 64;             // BF16 elements per row
+constexpr unsigned ELEM_BYTES  = 2;              // BF16
+constexpr unsigned CHUNK_BYTES = COLS * ELEM_BYTES;   // 128
 
 
 extern "C" __global__ void tma_demo(
     const __grid_constant__ CUtensorMap tmap,
-    uint8_t* __restrict__ g_out
+    __nv_bfloat16* __restrict__ g_out
 ) {
-    extern __shared__ __align__(128) uint8_t smem[];
+    extern __shared__ __align__(128) __nv_bfloat16 smem[];
     __shared__ uint64_t mbar;
 
     const uint32_t mbar_addr = (uint32_t)__cvta_generic_to_shared(&mbar);
@@ -95,10 +87,11 @@ extern "C" __global__ void tma_demo(
         "}"
         :: "r"(mbar_addr), "r"(phase) : "memory");
 
-    // ── 4) SMEM now contains CHUNK_BYTES of data.  Each thread reads
-    //       one byte and writes it to a unique GMEM slot to defeat
-    //       dead-code elimination.
-    if (threadIdx.x < CHUNK_BYTES) {
+    // ── 4) SMEM now holds the first row (COLS BF16 elements).  Threads
+    //       0..COLS-1 each write one element to g_out.  The store
+    //       prevents DCE — without it, the compiler could prove the
+    //       load has no observable effect and elide the whole kernel.
+    if (threadIdx.x < COLS) {
         g_out[threadIdx.x] = smem[threadIdx.x];
     }
 }

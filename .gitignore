@@ -13,3 +13,6 @@ docs/_build/
 *.swp
 .idea/
 .vscode/
+
+# nvcc compile output for the tutorial examples
+tutorial/code/**/*.cubin

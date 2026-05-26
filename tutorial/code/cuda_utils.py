@@ -12,6 +12,8 @@ Used by `<chapter>/main.py` via:
 """
 
 import ctypes
+import os
+import subprocess
 import sys
 
 import numpy as np
@@ -195,33 +197,44 @@ def compute_arch(device) -> str:
     return f"sm_{major}{minor}a"
 
 
-# ── NVRTC compile ───────────────────────────────────────────────────────────
+# ── nvcc compile (with mtime-based cubin cache) ─────────────────────────────
 
 def compile_kernel(src_path: str, device, kernels: list, extra_opts: list = None):
-    """Compile a .cu file via NVRTC and resolve named kernels.
+    """Compile a .cu file via `nvcc --cubin` and resolve named kernels.
+
+    The cubin is cached on disk next to the .cu file (suffix
+    `_sm_XYZa.cubin`).  Re-compile happens only when the .cu's mtime
+    is newer than the cubin's — so repeated runs are fast.
+
+    nvcc is used (rather than NVRTC) so the kernel can include
+    standard CUDA headers (`<cuda.h>`, `<cuda_bf16.h>`, `<cstdint>`,
+    etc.) without manual workarounds.
 
     Returns (module, {kernel_name: CUfunction}).
     """
-    with open(src_path, "rb") as f:
-        src = f.read()
-    prog = cu(nvrtc.nvrtcCreateProgram(src, src_path.encode(), 0, [], []))
     arch = compute_arch(device)
-    opts = [f"--gpu-architecture={arch}".encode(),
-            b"-std=c++17",
-            b"-default-device"]
-    if extra_opts:
-        opts.extend(o.encode() if isinstance(o, str) else o for o in extra_opts)
-    err, = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
-    if err != nvrtc.nvrtcResult.NVRTC_SUCCESS:
-        log_size = cu(nvrtc.nvrtcGetProgramLogSize(prog))
-        log = bytearray(log_size)
-        cu(nvrtc.nvrtcGetProgramLog(prog, log))
-        sys.stderr.write(log.decode(errors="replace"))
-        raise RuntimeError("NVRTC compile failed")
-    cubin_size = cu(nvrtc.nvrtcGetCUBINSize(prog))
-    cubin = bytearray(cubin_size)
-    cu(nvrtc.nvrtcGetCUBIN(prog, cubin))
-    module = cu(driver.cuModuleLoadData(bytes(cubin)))
+    cubin_path = src_path[:-3] + f"_{arch}.cubin"
+
+    needs_rebuild = (not os.path.exists(cubin_path)
+                     or os.path.getmtime(src_path) > os.path.getmtime(cubin_path))
+    if needs_rebuild:
+        print(f"[nvcc] compiling {os.path.basename(src_path)} → "
+              f"{os.path.basename(cubin_path)} ... ",
+              end="", flush=True)
+        nvcc = os.environ.get("NVCC", "nvcc")
+        cmd = [nvcc, f"-arch={arch}", "-O3", "--std=c++17", "--cubin"]
+        if extra_opts:
+            cmd.extend(extra_opts)
+        cmd += [src_path, "-o", cubin_path]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.stderr.write(r.stderr)
+            raise RuntimeError(f"nvcc failed (exit {r.returncode})")
+        print("done", flush=True)
+
+    with open(cubin_path, "rb") as f:
+        cubin = f.read()
+    module = cu(driver.cuModuleLoadData(cubin))
     fns = {k: cu(driver.cuModuleGetFunction(module, k.encode()))
            for k in kernels}
     return module, fns
