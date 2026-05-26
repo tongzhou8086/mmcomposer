@@ -8,6 +8,7 @@ parts:
   - caption: "Part 1 — Target architecture"
     chapters:
       - file: part1_gpu_arch/b200_overview
+      - file: part1_gpu_arch/matmul_kernel_anatomy
       - file: part1_gpu_arch/tma
       - file: part1_gpu_arch/mbarrier
 
