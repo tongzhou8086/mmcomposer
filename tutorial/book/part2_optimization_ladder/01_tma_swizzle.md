@@ -355,6 +355,77 @@ conflict-free reads in the kernel are the within-chunk 16-byte run a
 single lane grabs, and the coalesced GMEM→SMEM staging copy — neither is
 what the swizzle protects.)
 
+## Who reads the swizzled tile — `ldmatrix` vs `tcgen05.mma`
+
+The bank discussion above was framed around `ldmatrix`, the
+Ampere/Ada/Hopper way of getting operands into the tensor core.  On
+B200 the matmul chapters use `tcgen05.mma` instead, which reads SMEM
+differently — but, satisfyingly, around the *same* 8×8 unit.
+
+**`ldmatrix` (legacy path).**  The warp cooperatively loads operand
+fragments SMEM→registers in **8×8 tiles**, then `mma.sync` consumes the
+registers.  The 8×8 is a register-fragment granularity, and *you* compute
+the swizzled address in software.  In the Ampere-style kernel the `XOR`
+is right there in the source — both in the staging copy and the load:
+
+```cpp
+// staging into SMEM — explicit swizzle:
+const int sc   = ((c/8) ^ ((r/A_SHIFT) % A_SWZ)) * 8 + (c%8);
+// ldmatrix read — explicit swizzle again:
+const int phys = lg ^ ((ar / A_SHIFT) % A_SWZ);
+```
+
+**`tcgen05.mma` (Blackwell path).**  There are *no* operand registers and
+*no* `ldmatrix`.  A single instruction computes a whole tile —
+`M = 128` (or 256 across a 2-CTA cluster) × `N ≤ 256` × `K = 16` for
+16-bit — and the tensor core reads the operand slabs straight from SMEM,
+addressed by a 64-bit **matrix descriptor**.  The swizzle is one field
+of that descriptor, so the hardware does all the XOR addressing
+internally — the kernel never computes a swizzled index.
+
+### The 8×8 reappears as the *core matrix*
+
+Even though the `tcgen05.mma` instruction is huge, the SMEM layout its
+descriptor describes is built from **core matrices** — for 16-bit types,
+**8 rows × 16 bytes = 8×8 BF16**.  The descriptor's leading/stride byte
+offsets (`LBO`/`SBO`) are how the hardware steps between core matrices as
+it gathers an operand (e.g. `SBO = 8 * 128` in our `make_desc`).
+
+So the 8×8 you know from `ldmatrix` doesn't disappear — it changes role:
+
+```
+ mma.sync  (Ampere)   : 8×8 = the ldmatrix register fragment you load by hand
+ wgmma     (Hopper)   : 8×8 = the SMEM core matrix the descriptor tiles
+ tcgen05   (Blackwell): 8×8 = the SMEM core matrix the descriptor tiles
+```
+
+And this is the answer to "why is the swizzle period 8 rows?" — because
+the **core matrix is 8 rows tall**.  The 8-row swizzle period, the 8-row
+core matrix, and the 8-deep `ldmatrix` tile are the same constant for the
+same reason: 8 chunks × 4 banks = the 32-bank SMEM, the granularity at
+which a swizzled read is conflict-free.
+
+> **A precision worth keeping.**  The 8×8 core matrix is the unit the
+> operand *layout, addressing, and swizzle* are built around — that's
+> documented and is what you program against.  Whether it's also the
+> literal per-cycle SMEM read transaction is a microarchitectural detail
+> Nvidia doesn't expose, so treat "8×8 core matrix" as the layout atom,
+> not a claim about bus-transaction width.
+
+| | `ldmatrix` + `mma.sync` | `tcgen05.mma` |
+|---|---|---|
+| operand path | SMEM → registers → MMA | SMEM → MMA (direct) |
+| role of 8×8 | register-load fragment | SMEM core matrix |
+| who reads SMEM | 32 warp lanes | tensor-core read ports |
+| swizzle applied by | software (you write the XOR) | hardware (descriptor field) |
+| per-instruction shape | `m16n8k16`-ish | `M128 × N≤256 × K16` |
+
+Building that matrix descriptor — base address, `SBO`, swizzle field,
+plus the instruction-shape `idesc` — is exactly what the next chapter
+sets up.  For now the takeaway is just: the swizzled SMEM layout we built
+here is consumed natively by `tcgen05.mma` via its descriptor, with the
+same 8×8 / 16-byte / 32-bank structure underneath.
+
 ## Aside — swizzle is keyed off the *absolute* SMEM offset
 
 A subtlety that costs people hours.  The XOR amount isn't derived from
