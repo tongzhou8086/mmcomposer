@@ -124,7 +124,7 @@ def time_median(kern, threads, sh, args, grid, n_batches=5, iters=5):
     block = (threads, 1, 1)
     # warmup
     for _ in range(2):
-        launch(kern, grid=grid, block=block, shared=sh, args=args)
+        launch(kern, grid=grid, block=block, shared=sh, args=args, sync=False)
     torch.cuda.synchronize()
     times_us = []
     for _ in range(n_batches):
@@ -134,7 +134,11 @@ def time_median(kern, threads, sh, args, grid, n_batches=5, iters=5):
         end   = torch.cuda.Event(enable_timing=True)
         start.record()
         for _ in range(iters):
-            launch(kern, grid=grid, block=block, shared=sh, args=args)
+            # sync=False: queue launches back-to-back so we measure
+            # device throughput, not host launch-sync round trips.
+            # At small shapes (~5 µs kernels), per-launch sync would
+            # double or triple the apparent runtime.
+            launch(kern, grid=grid, block=block, shared=sh, args=args, sync=False)
         end.record()
         torch.cuda.synchronize()
         times_us.append(start.elapsed_time(end) / iters * 1e3)

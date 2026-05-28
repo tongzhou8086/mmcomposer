@@ -258,12 +258,19 @@ def dtoh(d: int, nbytes: int, dtype) -> np.ndarray:
 
 # ── Launch ──────────────────────────────────────────────────────────────────
 
-def launch(kernel, *, grid, block, shared: int, args: list, stream: int = 0):
+def launch(kernel, *, grid, block, shared: int, args: list, stream: int = 0,
+           sync: bool = True):
     """Launch a kernel.
 
     `args` is a list of ctypes objects (one per kernel parameter).
     For by-value structs, pass a `(ctypes.c_byte * N).from_buffer_copy(bytes)`.
     For pointers, pass a `ctypes.c_void_p(int_address)`.
+
+    `sync=True` (default) blocks the host until the kernel completes —
+    convenient for chapter examples that read C right after launching.
+    Timing harnesses should pass `sync=False` and synchronize once at
+    the end of a batch; otherwise the per-launch sync (~5–10 µs round
+    trip) inflates small-shape timings significantly.
     """
     arg_ptrs = (ctypes.c_void_p * len(args))(
         *[ctypes.addressof(a) for a in args]
@@ -277,4 +284,5 @@ def launch(kernel, *, grid, block, shared: int, args: list, stream: int = 0):
         arg_ptrs,
         0,    # extra (unused)
     ))
-    cu(driver.cuCtxSynchronize())
+    if sync:
+        cu(driver.cuCtxSynchronize())

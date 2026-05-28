@@ -329,19 +329,23 @@ __device__ __forceinline__ void matmul_cluster_impl(
     // are required.  mma_done[s] count = 1: one multicast commit
     // per stage from CTA 0 fires both CTAs' mma_done via the
     // multicast::cluster modifier.
-    if (warp_id == 0) {
-        if (elect_sync()) {
-            #pragma unroll
-            for (int s = 0; s < NS; s++) {
-                mbarrier_init((uint32_t)__cvta_generic_to_shared(&tile_ready[s]),
-                              CTA_GROUP);
-                mbarrier_init((uint32_t)__cvta_generic_to_shared(&mma_done[s]), 1);
-            }
-            mbarrier_init((uint32_t)__cvta_generic_to_shared(&all_mmas_done), 1);
-            mbarrier_arrive_no_tx(
-                (uint32_t)__cvta_generic_to_shared(&mma_done[NS - 1]));
-            asm volatile("fence.mbarrier_init.release.cluster;");
+    // Split init across two warps: warp 0 (single lane) initializes
+    // mbarriers, warp 1 (whole warp) runs tcgen05.alloc.  The alloc is
+    // a relatively heavy PTX call; running it concurrently with the
+    // mbar inits shaves fixed prologue latency that every CTA pays —
+    // a win at small shapes where the K-loop can't amortize it.
+    if (warp_id == 0 && elect_sync()) {
+        #pragma unroll
+        for (int s = 0; s < NS; s++) {
+            mbarrier_init((uint32_t)__cvta_generic_to_shared(&tile_ready[s]),
+                          CTA_GROUP);
+            mbarrier_init((uint32_t)__cvta_generic_to_shared(&mma_done[s]), 1);
         }
+        mbarrier_init((uint32_t)__cvta_generic_to_shared(&all_mmas_done), 1);
+        mbarrier_arrive_no_tx(
+            (uint32_t)__cvta_generic_to_shared(&mma_done[NS - 1]));
+        asm volatile("fence.mbarrier_init.release.cluster;");
+    } else if (warp_id == 1) {
         tcgen05_alloc_g2((uint32_t)__cvta_generic_to_shared(tmem_addr_holder), BN);
     }
 
