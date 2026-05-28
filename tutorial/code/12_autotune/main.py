@@ -83,14 +83,31 @@ for cfg, kern in kernels.items():
         shared_for(ns)))
 
 
-# ── 2. Median-of-batches timing ────────────────────────────────────────────
+# ── 2. L2 invalidation + median-of-batches timing ──────────────────────────
+#
+# B200 L2 cache is 132 MB.  Allocate a 256-MB scratch buffer once and
+# write through it before each timed batch to evict whatever the
+# previous batch left in L2.  Without this, configs that happen to
+# benefit from cross-launch L2 reuse get an inflated reading, biasing
+# the tuner toward configs that look good in steady-state but are
+# slower for the more realistic "first call" scenario.  The
+# invalidation runs once per *batch*, not per launch — within a batch
+# the L2 warms up normally, which is what kernels see in practice.
+L2_FLUSH_BYTES = 256 * 1024 * 1024
+_l2_scratch    = torch.empty(L2_FLUSH_BYTES, dtype=torch.uint8, device="cuda")
+
+def invalidate_l2():
+    _l2_scratch.zero_()
+
 def time_median(kern, threads, sh, args, grid, n_batches=5, iters=5):
     """Return median per-call time (µs).
 
     Records n_batches independent timed segments, each averaging
     `iters` launches.  Returns the median of those n_batches numbers.
     Using median (not mean) discards single-batch noise — important
-    when ranking variants whose true gaps are a few percent.
+    when ranking variants whose true gaps are a few percent.  L2 is
+    flushed before each batch so warmth from the previous batch
+    doesn't bias the timing.
     """
     block = (threads, 1, 1)
     # warmup
@@ -99,6 +116,8 @@ def time_median(kern, threads, sh, args, grid, n_batches=5, iters=5):
     torch.cuda.synchronize()
     times_us = []
     for _ in range(n_batches):
+        invalidate_l2()
+        torch.cuda.synchronize()
         start = torch.cuda.Event(enable_timing=True)
         end   = torch.cuda.Event(enable_timing=True)
         start.record()
@@ -171,12 +190,14 @@ def setup(M, N, K):
 
 
 def time_pytorch_median(A, B, n_batches=11, iters=20):
-    """PyTorch (cuBLAS) baseline, same median methodology."""
+    """PyTorch (cuBLAS) baseline, same median + L2-flush methodology."""
     for _ in range(2):
         _ = A @ B
     torch.cuda.synchronize()
     times_us = []
     for _ in range(n_batches):
+        invalidate_l2()
+        torch.cuda.synchronize()
         start = torch.cuda.Event(enable_timing=True)
         end   = torch.cuda.Event(enable_timing=True)
         start.record()

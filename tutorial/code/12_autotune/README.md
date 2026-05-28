@@ -83,7 +83,46 @@ After pruning, the small-shape picks stabilize.  General lesson:
 distinguish it from a variant you're already timing.**  Equivalent
 variants are just expensive ways to add noise.
 
-## Median timing, not mean
+## L2 invalidation between timed batches
+
+Without flushing the L2 between timed batches, configs that happen
+to leave useful state in L2 get an unfair tailwind on the *next*
+batch — the timer measures "warm-cache steady state" instead of "first
+call after a gap," which biases the ranking toward configs whose
+benefit only materializes when the L2 is already populated by a
+previous identical call.
+
+Standard fix: allocate a buffer bigger than the L2 (~256 MB > B200's
+132 MB), and write through it before each timed batch.  Touching all
+256 MB evicts whatever the previous batch left behind.
+
+```python
+L2_FLUSH_BYTES = 256 * 1024 * 1024
+_l2_scratch    = torch.empty(L2_FLUSH_BYTES, dtype=torch.uint8, device="cuda")
+
+def invalidate_l2():
+    _l2_scratch.zero_()
+```
+
+Crucially, invalidation runs **once per batch, not per launch**.
+Within a batch the L2 warms up naturally — that's the realistic
+state real kernels see.  Per-launch invalidation would over-penalize
+configs that rely on intra-launch L2 reuse (like the CTA swizzle's
+B-stripe sharing across consecutive CTAs in a chunk).
+
+The same `invalidate_l2()` is called before each PyTorch / cuBLAS
+batch for an apples-to-apples baseline.
+
+In practice this dropped one of our cells (8192³) from a previously
+measured 98 % → 91 %.  The earlier number wasn't a lie — it was a
+real measurement of a different scenario.  The L2-flushed result is
+the one to trust for "what happens when this kernel is called once
+after a long gap"; the warm-cache result is the one to trust for
+"called back-to-back in a tight loop."  Both are valid; the autotuner
+should commit to one and apply it uniformly, which is what flushing
+does.
+
+## A pruning lesson — equivalent configs are noise
 
 Autotuning is finicky when the gaps between variants are a few
 percent.  Arithmetic mean across N launches mixes one slow outlier
@@ -118,15 +157,15 @@ B200; PyTorch matmul as the cuBLAS baseline.
 
 | shape | tune | best (NS, GSM, NW, LDX) | **ours TFLOPS** | cuBLAS | ratio |
 |---|---|---|---|---|---|
-| 2048³  |  0.3s | (5,  8, 8, 32)         | **646**  | 1223  | 53 % |
-| 3072³  |  0.7s | (4,  1, 8, 16)         | **1100** | 1672  | 66 % |
-| 4096³  |  2.1s | (5,  1, 4,  8)         | **1138** | 1552  | 73 % |
-| 5120³  |  3.9s | (5,  1, 4,  8)         | **1209** | 1492  | 81 % |
-| 6144³  |  6.4s | (5,  8, 8, 64)         | **1277** | 1529  | 84 % |
-| 7168³  | 10.1s | (7,  8, 8, 16)         | **1301** | 1380  | 94 % |
-| 8192³  | 14.8s | (7,  8, 8, 64)         | **1337** | 1359  | **98 %** |
-| 9216³  | 21.2s | (6,  4, 4, 16)         | **1294** | 1363  | 95 % |
-| 10240³ | 28.9s | (6, 16, 8, 16)         | **1298** | 1378  | 94 % |
+| 2048³  |  0.4s | (5,  1, 8, 32)         | **646**  | 1216  | 53 % |
+| 3072³  |  0.7s | (4,  4, 8, 16)         | **1131** | 1669  | 68 % |
+| 4096³  |  2.1s | (7, 16, 8, 16)         | **1164** | 1535  | 76 % |
+| 5120³  |  4.0s | (5,  1, 4, 16)         | **1182** | 1475  | 80 % |
+| 6144³  |  6.5s | (5,  1, 4,  8)         | **1223** | 1387  | 88 % |
+| 7168³  | 10.1s | (6,  8, 8,  8)         | **1303** | 1362  | 96 % |
+| 8192³  | 14.9s | (5,  8, 4, 16)         | **1312** | 1442  | 91 % |
+| 9216³  | 21.3s | (6,  8, 8, 64)         | **1313** | 1373  | 96 % |
+| 10240³ | 28.9s | (7,  8, 4,  8)         | **1323** | 1368  | **97 %** |
 
 A few things worth reading off:
 
