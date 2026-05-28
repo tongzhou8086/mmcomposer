@@ -514,6 +514,7 @@ level:
 
 Everything in this chapter generalizes directly to matmul: keep the
 2D descriptor, change `SWIZZLE_NONE` to `SWIZZLE_128B`, bump `boxDim`
-to a real tile size like `(64, 128)`, and feed the SMEM into a
-`tcgen05.mma` instruction instead of reading it back to GMEM.  That's
-the next chapter.
+to a real tile size, and feed the SMEM into a `tcgen05.mma` instruction
+instead of reading it back to GMEM.  The next chapter takes the first
+of those steps — flipping on `SWIZZLE_128B` and watching exactly how it
+rearranges the bytes in SMEM.
