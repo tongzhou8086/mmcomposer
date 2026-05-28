@@ -153,7 +153,7 @@ class Autotuner:
         self.cache   = {}     # (M, N, K) -> cfg
 
     def pick(self, M, N, K, args, grid,
-             tune_batches=5, tune_iters=20):
+             tune_batches=7, tune_iters=50):
         key = (M, N, K)
         if key in self.cache:
             return self.kernels[self.cache[key]], self.cache[key]
