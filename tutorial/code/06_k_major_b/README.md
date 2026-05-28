@@ -155,8 +155,18 @@ B_tmap = encode_tensor_map(
 
 The kernel does the same total work as ch05 — same MMAs, same TMA
 bytes, same epilogue — so per-call kernel time should be essentially
-unchanged.  `main.py` runs three problem sizes (2048³, 4096³, 8192³)
-and reports `us/call` and TFLOPS against PyTorch's cuBLAS path.
+unchanged.  Measured on B200:
+
+| shape | ch05 (transposed B) | ch06 (native B) | PyTorch (cuBLAS) | ch06 / cuBLAS |
+|---|---|---|---|---|
+| `2048³` | 537 TFLOPS | **548 TFLOPS** | 1250 TFLOPS | 44% |
+| `4096³` | 786 TFLOPS | **791 TFLOPS** | 1512 TFLOPS | 52% |
+| `8192³` | 797 TFLOPS | **823 TFLOPS** | 1273 TFLOPS | 65% |
+
+The per-call timing is ~the same (very slight improvement, +1–3%
+depending on shape — different TMA scheduling for B's sub-tile loads
+vs ch05's single load).  The headline numbers move ch06 from 42→44%,
+51→52%, 63→65% of cuBLAS.
 
 What *did* change is the **end-to-end story**: a one-shot `A @ B` no
 longer pays a `K · N · 2` byte transpose before launching.  In settings
