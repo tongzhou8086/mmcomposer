@@ -1,4 +1,4 @@
-# Multi-stage buffering — overlapping TMA and MMA
+# Multi-stage buffering + warp specialization — overlapping TMA and MMA
 
 > 📁 **Code on GitHub:** [`tutorial/code/04_multi_stage/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/04_multi_stage) — `kernel.cu` + `main.py`.
 
@@ -6,13 +6,25 @@ Chapter 03 worked, but each K-iteration is dead time for the other
 unit: the MMA sits idle while TMA fetches the next tile, then TMA sits
 idle while the MMA chews through it.  The hardware *can* run them in
 parallel — they're entirely separate engines — but the kernel held them
-in lock-step because there's only one SMEM tile to share.
+in lock-step because there's only one SMEM tile to share, and all
+warps moved through the same outer loop together.
 
-This chapter introduces **multi-stage buffering**: a small ring of
-SMEM tiles (`NUM_STAGES = 2` here) so TMA can write the *next* slot
-while MMA reads the *current* one.  The two units overlap.  This is
-the single highest-impact optimization in the ladder — roughly **2×
-throughput** in our measurements below.
+This chapter introduces **two coupled changes that arrive together**:
+
+1. **Multi-stage buffering** — a small ring of SMEM tiles (`NUM_STAGES
+   = 2` here) so TMA can write the *next* slot while MMA reads the
+   *current* one.
+2. **Warp specialization** — the TMA and MMA roles move into *separate
+   warps with their own independent K-loops*, synchronizing only at
+   the per-slot mbarrier pairs.  Earlier chapters had a single warp
+   issuing both; the split would have been cosmetic without (1).
+
+Both changes are necessary, neither is sufficient: more SMEM slots
+with a single shared K-loop would still serialize at the
+all-threads-wait barriers; independent warp loops with one slot would
+still serialize at the single shared mbar.  Together they unlock
+overlap — this is the single highest-impact step in the ladder,
+roughly **2× throughput** in our measurements below.
 
 ```
    chapter 03 (1 slot):     │TMA│       │TMA│       │TMA│

@@ -151,12 +151,13 @@ extern "C" __global__ void matmul_k_loop(
     const uint32_t tile_ready_mb = (uint32_t)__cvta_generic_to_shared(&tile_ready);
     const uint32_t mma_done_mb   = (uint32_t)__cvta_generic_to_shared(&mma_done);
 
-    // ── 1) One-time setup ───────────────────────────────────────────
-    if (warp_id == 0 && elect_sync()) {
-        mbarrier_init(tile_ready_mb, 1);
-        mbarrier_init(mma_done_mb,   1);
-        asm volatile("fence.mbarrier_init.release.cluster;");
-    } else if (warp_id == 1) {
+    // ── 1) One-time setup (all done by warp 0) ──────────────────────
+    if (warp_id == 0) {
+        if (elect_sync()) {
+            mbarrier_init(tile_ready_mb, 1);
+            mbarrier_init(mma_done_mb,   1);
+            asm volatile("fence.mbarrier_init.release.cluster;");
+        }
         tcgen05_alloc((uint32_t)__cvta_generic_to_shared(tmem_addr_holder), BN);
     }
     __syncthreads();
@@ -192,8 +193,9 @@ extern "C" __global__ void matmul_k_loop(
         mbarrier_wait_phase(tile_ready_mb, phase);
         tcgen05_fence_after_thread_sync();
 
-        // ── 4 MMAs covering BK = 64
-        if (warp_id == 1 && elect_sync()) {
+        // ── 4 MMAs covering BK = 64 (same issuing warp as TMA — they
+        //    serialize anyway via the mbar waits above and below)
+        if (warp_id == 0 && elect_sync()) {
             #pragma unroll
             for (int kk = 0; kk < K_MMAS; kk++) {
                 const uint64_t a_desc = make_desc(A_BASE + kk * 32);

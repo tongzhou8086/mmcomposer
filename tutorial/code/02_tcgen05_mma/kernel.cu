@@ -175,11 +175,17 @@ extern "C" __global__ void tcgen05_demo(
     const uint32_t mma_done_mb   = (uint32_t)__cvta_generic_to_shared(&mma_done);
 
     // ── 1) One-time setup: mbar inits + TMEM alloc ──────────────────
-    if (warp_id == 0 && elect_sync()) {
-        mbarrier_init(tile_ready_mb, 1);
-        mbarrier_init(mma_done_mb,   1);
-        asm volatile("fence.mbarrier_init.release.cluster;");
-    } else if (warp_id == 1) {
+    //
+    // All issuing done by warp 0.  `tcgen05.alloc` is `.sync.aligned`
+    // so the full warp must participate (no `elect_sync` for that
+    // one); the mbar inits are single-lane work and gated by
+    // `elect_sync` inside the warp.
+    if (warp_id == 0) {
+        if (elect_sync()) {
+            mbarrier_init(tile_ready_mb, 1);
+            mbarrier_init(mma_done_mb,   1);
+            asm volatile("fence.mbarrier_init.release.cluster;");
+        }
         tcgen05_alloc((uint32_t)__cvta_generic_to_shared(tmem_addr_holder), N);
     }
     __syncthreads();
@@ -217,7 +223,7 @@ extern "C" __global__ void tcgen05_demo(
 
     // ── 4) Issue K_MMAS = 4 back-to-back MMAs (K = 16 each → K = 64) ─
     // Only one thread issues; the tensor core does the work async.
-    if (warp_id == 1 && elect_sync()) {
+    if (warp_id == 0 && elect_sync()) {
         #pragma unroll
         for (int kk = 0; kk < K_MMAS; kk++) {
             const uint64_t a_desc = make_desc(A_BASE + kk * 32);   // K-step = 16 BF16 = 32 B
