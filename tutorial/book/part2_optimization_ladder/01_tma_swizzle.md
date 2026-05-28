@@ -107,6 +107,44 @@ its own inverse, the same formula reads both directions: physical chunk
 (`32B` and `64B` swizzle are the same idea over 2 and 4 chunks
 respectively; `128B` is what matmul uses, so it's the one we show.)
 
+### Reading the table by flipping bits
+
+XOR with a value flips every bit position where that value has a `1`,
+and leaves the rest unchanged.  With 3-bit chunk indices (0–7):
+
+* `XOR 1` (`001`) → flips the **last** bit only.
+* `XOR 2` (`010`) → flips the **middle** bit only.
+* `XOR 4` (`100`) → flips the **top** bit only.
+* `XOR 7` (`111`) → flips **all three** bits.
+
+So you can derive any row of the table by flipping the marked bits of
+each chunk index:
+
+```
+chunk:   0    1    2    3    4    5    6    7
+binary: 000  001  010  011  100  101  110  111
+
+XOR 1 → flip last bit:
+        001  000  011  010  101  100  111  110
+      =  1    0    3    2    5    4    7    6     (neighbour swaps)
+
+XOR 2 → flip middle bit:
+        010  011  000  001  110  111  100  101
+      =  2    3    0    1    6    7    4    5
+
+XOR 4 → flip top bit:
+        100  101  110  111  000  001  010  011
+      =  4    5    6    7    0    1    2    3     (halves swapped)
+
+XOR 7 → flip all three:
+        111  110  101  100  011  010  001  000
+      =  7    6    5    4    3    2    1    0     (full reverse)
+```
+
+A composite key like `XOR 3` (`011`) just flips the last two bits at
+once, giving row 3's `3 2 1 0 7 6 5 4`.  Each row's permutation is fully
+determined by which bits of `(row mod 8)` are set.
+
 ## Seeing it on real hardware
 
 The kernel loads the tile with `SWIZZLE_128B`, then copies SMEM out to
