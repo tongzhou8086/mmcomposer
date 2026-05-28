@@ -66,8 +66,8 @@ TMEM is consumable.
 
 TMEM is the cleanest mental break from the pre-Blackwell world.  Each
 SM gets a slab of on-die memory dedicated to the tensor cores, viewed
-as a grid of **128 rows × 512 columns of 32-bit cells**, with the
-hardware managing physical placement.  An accumulator tile is some
+as a grid of **128 rows × 512 columns of 32-bit cells** (= 256 KB per
+SM), with the hardware managing physical placement.  An accumulator tile is some
 rectangular sub-region of that grid.
 
 You don't read or write TMEM with regular SMEM/RF instructions.  You
