@@ -465,6 +465,24 @@ self-consistent regardless of where the tile sits.  It only bites you
 here because *we* are the consumer, reading SMEM by hand and comparing
 against a model that assumed offset 0.
 
+### Rule of thumb
+
+> **Use `__align__(1024)` for any dynamic SMEM array you'll TMA-load
+> with `SWIZZLE_128B`.**
+
+1024 is the full period of the 128B-swizzle key (`8 × 128`), so the
+base always lands on a canonical-pattern boundary no matter how much
+static `__shared__` sits in front of it.  Costs essentially nothing in
+shared memory, eliminates the rotation trap.
+
+This tutorial gets away with the lighter `__align__(128)` only because
+the kernel deliberately puts the tile *first* in dynamic SMEM (the
+mbarrier is carved out *after* it) — so the base lands at window
+offset 0, which is automatically a multiple of 1024.  Real matmul
+kernels (e.g. [`b42_gsm`](https://github.com/tongzhou8086/mymatmul/blob/master/mymatmul/gpu/blackwell/_matmul_b42_gsm.cu))
+always have mbarriers in static shared, so they declare
+`__align__(1024)` on the dynamic SMEM array up front.
+
 ## The kernel
 
 Identical to chapter 00 except for the tile-first SMEM layout, the
