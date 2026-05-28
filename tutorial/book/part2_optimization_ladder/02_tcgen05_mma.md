@@ -2,7 +2,12 @@
 
 Chapter 01 set up swizzled SMEM tiles.  This chapter introduces the
 consumer those tiles were built for: **`tcgen05.mma`**, the native MMA
-instruction on Blackwell. 
+instruction on Blackwell.
+
+> 📁 **Runnable code:** [`tutorial/code/02_tcgen05_mma/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/02_tcgen05_mma).
+> The minimal end-to-end kernel — `C = A @ B` for `M=128, N=256, K=64`,
+> one CTA, no pipelining — that wires everything in this chapter
+> together and verifies against PyTorch on a B200 (sm_100a).
 
 The headline differences from `mma.sync` + `ldmatrix`:
 
