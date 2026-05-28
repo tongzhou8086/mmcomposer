@@ -233,10 +233,55 @@ extern "C" __global__ void tcgen05_demo(
 
     // ── 6) TMEM → registers → GMEM (direct, uncoalesced) ────────────
     //
-    //   4 warps × 32 lanes = 128 rows = M.  Each warp covers a 32-row
-    //   strip of TMEM and loops over N in steps of 8 cols.  Each lane
-    //   reads 8 float32 accumulators per call, packs to BF16, and
-    //   writes a 16-byte int4 to its row's column window.
+    // What TMEM holds at this point:
+    //
+    //     a M-row × N-col grid of FLOAT32 accumulators — one cell per
+    //     output element C[m, n], 4 bytes each, written there by the
+    //     four tcgen05.mma calls above.  Total: 128 × 256 × 4 B = 128 KB
+    //     of TMEM.  The hardware allocated us BN=256 columns spanning
+    //     M=128 fixed rows (TMEM has 128 rows per allocation block).
+    //
+    // TMEM addressing recap:  bits [31:16] = row, bits [15:0] = col.
+    // So  `taddr + (row << 16) + col`  is the cell at (row, col).
+    //
+    //   taddr_row_base = taddr + (warp_id * 32) << 16
+    //       → points at the *start* of this warp's 32-row strip of TMEM
+    //         (column 0).  Each warp owns rows [warp_id*32, warp_id*32+32).
+    //
+    // What `tcgen05.ld.32x32b.x8` does — it's a warp-collective load:
+    //
+    //   * "32x32b" — the warp's 32 lanes cooperatively read **32 TMEM
+    //     rows × 1 column** per "step", lane L getting the value at row L
+    //     of the warp's strip.
+    //   * ".x8"    — packing factor: the instruction reads **8 such
+    //     columns at once** (32 rows × 8 cols = 256 floats / warp), and
+    //     distributes them so each lane ends up with its 8 floats —
+    //     consecutive N-columns of its single row.
+    //
+    // So after one call, this lane's `tmp[0..7]` holds the 8 FP32
+    // accumulators for output row `my_row` at columns `[n, n+8)`.
+    //
+    // The per-warp picture:
+    //
+    //        TMEM strip (warp_id = 0, so rows 0..31):
+    //
+    //            col:  0   1   2   3   4   5   6   7   ←─ one .x8 call
+    //          row 0:  •   •   •   •   •   •   •   •     → lane 0 gets these 8
+    //          row 1:  •   •   •   •   •   •   •   •     → lane 1 gets these 8
+    //          row 2:  •   •   •   •   •   •   •   •     → lane 2 ...
+    //           ...
+    //          row 31: •   •   •   •   •   •   •   •     → lane 31 gets these 8
+    //
+    //        The `for (n = 0; n < N; n += 8)` loop slides this window
+    //        across N, so each lane covers all 256 N-cols of its row.
+    //
+    // Then per-thread: 8 FP32 → 4 bfloat162 (= 8 BF16 = 16 B) via
+    // `__floats2bfloat162_rn`, and store one int4 to GMEM at
+    // C[my_row * N + n].  This is the *uncoalesced* part: lane L's int4
+    // store lands at byte offset `my_row * N * 2 + n*2`, and consecutive
+    // lanes are `N*2 = 512` bytes apart → 32 scattered transactions per
+    // warp instead of one coalesced cycle.  Fine for this minimal demo;
+    // a later chapter stages through SMEM to coalesce.
     //
     // Mirror of step 3's fence, opposite direction: mma_done mbar told
     // the thread "all MMAs finished," but tcgen05.ld reads TMEM through
@@ -250,14 +295,18 @@ extern "C" __global__ void tcgen05_demo(
     #pragma unroll
     for (int n = 0; n < N; n += 8) {
         float tmp[8];
+        // 32 rows × 8 cols per call; this lane gets the 8 floats of
+        // (my_row, n..n+7).
         tcgen05_ld_32x32b_x8(taddr_row_base + (uint32_t)n, tmp);
         tcgen05_wait_ld();
 
+        // Pack 8 FP32 accumulators → 4 bfloat162 (= 8 BF16 = 16 bytes).
         __nv_bfloat162 packed[4];
         #pragma unroll
         for (int i = 0; i < 4; i++) {
             packed[i] = __floats2bfloat162_rn(tmp[2 * i], tmp[2 * i + 1]);
         }
+        // One int4 (16 B) store covers this lane's 8 N-cols at my_row.
         *reinterpret_cast<int4*>(&C_ptr[my_row * N + n]) =
             *reinterpret_cast<int4*>(packed);
     }
