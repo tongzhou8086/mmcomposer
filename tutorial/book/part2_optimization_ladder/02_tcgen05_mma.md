@@ -83,7 +83,7 @@ the **row index** (0..127) and bits `[15..0]` are the **column index**
 (0..511).  So `(taddr_base + (row_offset << 16) + col_offset)` is the
 TMEM cell at `(base_row + row_offset, base_col + col_offset)`.
 
-The matmul convention used by `b5_tma`:
+The matmul convention:
 
 ```cpp
 __shared__ uint32_t tmem_addr_holder[1];
@@ -107,7 +107,7 @@ A few practical notes:
 * `cta_group::2` allocations span two CTAs in a cluster — the allocator
   reserves the same column range on both CTAs' TMEM, and the kernel
   addresses the resulting `2 × BM × BN` accumulator using cluster-wide
-  logical row indices.  `b42` uses this.
+  logical row indices.  (We'll see this in the 2-CTA-cluster chapter.)
 * TMEM rows are *fixed at 128 rows* per allocation block; you size by
   picking `n_cols`.  `BN = 256` means 256 columns.
 
@@ -134,15 +134,13 @@ encodes:
 | `49..51` | "base offset" / matrix-A vs B alignment hints | mostly zero in our kernels |
 | `61..63` | swizzle mode | `0` = none, `1` = 32B, `2` = 64B (wait — see encoding below) |
 
-The exact `swizzle` field encoding is the one that bites: PTX uses
-`0=none, 1=128B, 2=64B, 3=32B` (yes, 128B is *1*, not the highest), but
-the `gau-nernst` / `b5` make_desc convention encodes it as
-`2 << 61 = SWIZZLE_128B`.  We use the convention that's already in the
-codebase — what matters is that the same value is written on TMA's
-descriptor side and the matrix-descriptor side, so they agree.
+The exact `swizzle` field encoding has a few historical conventions in
+circulation.  What matters in practice is that the same value is written
+on TMA's descriptor side and the matrix-descriptor side, so they agree.
+We'll use `2 << 61 = SWIZZLE_128B`, which is what the matmul kernels in
+this tutorial use throughout.
 
-The whole thing comes together as a single bit-packed `uint64_t`.  From
-`b5_tma.cu`:
+The whole thing comes together as a single bit-packed `uint64_t`:
 
 ```cpp
 __device__ __forceinline__ uint64_t make_desc(uint32_t smem_addr) {
@@ -166,9 +164,9 @@ __device__ __forceinline__ uint64_t make_desc(uint32_t smem_addr) {
   grid of **8-row × 16-byte core matrices**.  `SBO = 8 × 128` is
   "advance 8 rows × 128-byte-wide = one full swizzle row vertical."
 * The **`1 << 46`** picks the "operand is MN-major" layout variant
-  (rows along M for A, along N for B).  For K-major B (used in `b42`'s
-  K-major path) you set bit 16 of `idesc` and use a different
-  `make_desc_K_major` that fills in the `LBO` field.
+  (rows along M for A, along N for B).  For K-major B (a variant we'll
+  see in a later chapter) you set bit 16 of `idesc` and use a
+  `make_desc_K_major` variant that also fills in the `LBO` field.
 * **`2 << 61`** = `SWIZZLE_128B`.  This must match the swizzle the TMA
   descriptor used; otherwise the MMA's swizzle XOR won't agree with the
   TMA's, and the operand reads land in the wrong physical chunks
@@ -187,16 +185,17 @@ for (int kk = 0; kk < K_MMAS; kk++) {           // K_MMAS = BK / 16
 }
 ```
 
-(The real `b5` loop is slightly more elaborate because the SMEM layout
-splits the K-dimension into 64-element "sub-tiles" — `_k1` indexes
-sub-tiles and `_k2` steps inside one — but the pattern is the same: a
-new descriptor per MMA, K-strip walked by 32 bytes at a time.)
+(Real kernels' loops are slightly more elaborate because the SMEM
+layout typically splits the K-dimension into 64-element "sub-tiles" —
+an outer index selects the sub-tile and an inner index steps inside
+one — but the pattern is the same: a new descriptor per MMA, K-strip
+walked by 32 bytes at a time.)
 
 ## Part 3 — the instruction descriptor (`idesc`)
 
 Where the matrix descriptor describes *operand placement*, `idesc`
 describes the **MMA itself**: shape and dtype.  32 bits, also
-bit-packed.  From `b5_tma.cu`:
+bit-packed:
 
 ```cpp
 __device__ __forceinline__ uint32_t make_idesc_bf16(int M, int N) {
@@ -218,7 +217,7 @@ The relevant fields:
 | `7..9`  | A format | `1 = BF16`, `0 = F16`, FP8 codes, … | BF16 |
 | `10..12`| B format | (same enum as A) | BF16 |
 | `15`    | A transpose | `1` flips A's K-major-ness | 0 |
-| `16`    | B transpose | `1` flips B's K-major-ness | 0 in `b5`, **1 in `b42`** |
+| `16`    | B transpose | `1` flips B's K-major-ness | 0 for MN-major B, 1 for K-major B |
 | `17..22`| N dim | `N / 8` (so N ≤ 504 representable) | `BN/8` |
 | `24..28`| M dim | `M / 16` (so M ≤ 240 representable on one CTA) | `BM/16 = 8` |
 
@@ -227,9 +226,8 @@ shape for that MMA.  A and B's K dimension is implied by the `kind::`
 on the instruction (16 for BF16, 32 for FP8 — see chapter 01).  `idesc`
 is built **once** outside the K-loop and reused for every MMA call.
 
-For 2-CTA cluster MMA, the M-dim spans both CTAs — `b42` uses
-`make_idesc_bf16_cluster(BLOCK_M * CTA_GROUP, BLOCK_N)` so `m_dim` =
-`256/16 = 16`.
+For 2-CTA cluster MMA, the M-dim spans both CTAs — you'd build the
+`idesc` with `M = BLOCK_M × 2 = 256`, so `m_dim = 256/16 = 16`.
 
 ## Part 4 — the instruction
 
@@ -361,7 +359,7 @@ The load is async-ish too — it can issue while the tensor cores are
 still working — so a `tcgen05.wait::ld.sync.aligned` follows before
 the registers are used.
 
-In `b41` / `b42`, each warp covers a 32-row strip of TMEM at a time
+A common pattern: each warp covers a 32-row strip of TMEM at a time
 and loops over the N-columns:
 
 ```cpp
