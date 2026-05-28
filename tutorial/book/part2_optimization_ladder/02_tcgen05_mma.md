@@ -2,16 +2,19 @@
 
 Chapter 01 set up swizzled SMEM tiles.  This chapter introduces the
 consumer those tiles were built for: **`tcgen05.mma`**, the native MMA
-instruction on Blackwell.  Concept and surface only — we'll wire a
-runnable kernel together in chapter 03.
+instruction on Blackwell. 
 
-The headline differences from `mma.sync` + `ldmatrix` (the Ampere/Hopper
-path that `b1_tc5` still uses):
+The headline differences from `mma.sync` + `ldmatrix`:
 
-* **One instruction, a huge tile.**  `mma.sync` consumes an `m16n8k16`
-  fragment of registers per call.  `tcgen05.mma` issues a single
-  asynchronous instruction that contracts `M = 128 × N ≤ 256 × K_dtype`
-  in one go (and `M = 256` across a 2-CTA cluster).
+* **One thread issues, the tensor core does the work.**  `mma.sync`
+  is a *warp-collective* instruction — all 32 lanes participate, each
+  holding a fragment of an `m16n8k16` MMA in their registers.
+  `tcgen05.mma` flips this entirely: **a single thread fires off one
+  instruction**, and that one instruction is offloaded to the tensor
+  core engine, which then chews through a `M = 128 × N ≤ 256 × K_dtype`
+  tile on its own (or `M = 256` across a 2-CTA cluster).  The issuing
+  thread is free the moment the instruction is launched. It's the same "issue a big async unit of work" model as
+  TMA, applied to the tensor cores.
 * **No register operands.**  The tensor core reads operand tiles
   *directly from SMEM* via a 64-bit matrix descriptor.  There is no
   `ldmatrix`, no warp-cooperative fragment load, no register fragment
