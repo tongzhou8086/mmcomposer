@@ -1,5 +1,7 @@
 # Streaming K — the outer K-loop
 
+> 📁 **Code on GitHub:** [`tutorial/code/03_outer_k_loop/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/03_outer_k_loop) — `kernel.cu` + `main.py`.
+
 Chapter 02's kernel fit the whole problem in a single SMEM tile.  That
 only works while `K` is small enough that A and B fit in SMEM at once
 — which in practice means `K ≤ 64` for our `BM = 128, BN = 256` setup.

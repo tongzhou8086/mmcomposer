@@ -1,5 +1,7 @@
 # TMA with 128-byte swizzling
 
+> 📁 **Code on GitHub:** [`tutorial/code/01_tma_swizzle/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/01_tma_swizzle) — `kernel.cu` + `main.py`.
+
 Chapter 00 loaded bytes from global memory into shared memory with
 `SWIZZLE_NONE` — SMEM came out byte-for-byte identical to the source.
 This chapter changes exactly one thing: `SWIZZLE_NONE` →

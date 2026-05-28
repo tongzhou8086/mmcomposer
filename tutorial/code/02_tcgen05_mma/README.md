@@ -1,5 +1,7 @@
 # `tcgen05.mma` — the Blackwell async tensor-core MMA
 
+> 📁 **Code on GitHub:** [`tutorial/code/02_tcgen05_mma/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/02_tcgen05_mma) — `kernel.cu` + `main.py`.
+
 Chapter 01 set up swizzled SMEM tiles.  This chapter introduces the
 consumer those tiles were built for: **`tcgen05.mma`**, the native MMA
 instruction on Blackwell.

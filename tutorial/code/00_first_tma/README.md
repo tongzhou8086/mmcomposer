@@ -1,5 +1,7 @@
 # A first TMA program
 
+> 📁 **Code on GitHub:** [`tutorial/code/00_first_tma/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/00_first_tma) — `kernel.cu` + `main.py`.
+
 This chapter is hands-on.  By the end of it you will have a complete,
 runnable B200 kernel that uses TMA to copy a chunk of bytes from
 global memory into shared memory — and nothing else.  No matmul.  No

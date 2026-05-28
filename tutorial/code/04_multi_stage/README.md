@@ -1,5 +1,7 @@
 # Multi-stage buffering — overlapping TMA and MMA
 
+> 📁 **Code on GitHub:** [`tutorial/code/04_multi_stage/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/04_multi_stage) — `kernel.cu` + `main.py`.
+
 Chapter 03 worked, but each K-iteration is dead time for the other
 unit: the MMA sits idle while TMA fetches the next tile, then TMA sits
 idle while the MMA chews through it.  The hardware *can* run them in
