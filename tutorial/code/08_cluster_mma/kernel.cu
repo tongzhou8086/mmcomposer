@@ -42,6 +42,35 @@ constexpr int A_SLOT_BYTES = BM       * BK * BF16_BYTES;       // 16 KB
 constexpr int B_SLOT_BYTES = BN_LOCAL * BK * BF16_BYTES;       // 16 KB
 constexpr int SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES;      // 32 KB / slot
 
+// ── Important: dynamic SMEM is used in TWO non-overlapping phases ──
+//
+// 1.  During the K-loop, the kernel uses `NS * SLOT_BYTES` bytes —
+//     NS slots × (A + B) per slot — as the multi-stage ring buffer.
+// 2.  During the epilogue, the same dynamic SMEM is REINTERPRETED as
+//     a `[BM][BN+8]` BF16 staging buffer for the coalesced writeback
+//     (see ch07).  Its size is `EPILOGUE_STAGING_BYTES` below.
+//
+// The two phases never overlap in time (`all_mmas_done` separates
+// them), so SMEM can be reused.  But the launcher MUST size the
+// dynamic SMEM allocation to the MAX of the two phases:
+//
+//     shared_bytes = max(NS * SLOT_BYTES, EPILOGUE_STAGING_BYTES)
+//                  + padding for __align__(1024)
+//
+// In ch07 (single-CTA) the K-loop term always dominated, so we never
+// had to think about this.  In ch08, the per-CTA B-slot SMEM cost
+// drops from 32 KB to 16 KB (cluster splits B), which means at low
+// NS the K-loop SMEM can fall *below* the staging buffer's needs.
+// Specifically, at NS=2, `NS * SLOT_BYTES = 64 KB < 67584 B` and the
+// staging dominates.  Allocate too little dynamic SMEM and the
+// epilogue scribbles past it → CUDA_ERROR_ILLEGAL_ADDRESS.
+//
+// See `shared_for()` in `main.py` for the launcher-side computation,
+// and the README's "Sizing the dynamic SMEM" subsection for the
+// full discussion.
+constexpr int BN_PAD                 = BN + 8;
+constexpr int EPILOGUE_STAGING_BYTES = BM * BN_PAD * BF16_BYTES;   // 67584 B ≈ 66 KB
+
 constexpr int THREADS   = 128;
 constexpr int WARP_SIZE = 32;
 
@@ -348,7 +377,11 @@ __device__ __forceinline__ void matmul_cluster_impl(
     //
     // TMEM is cluster-wide: this CTA's TMEM holds physical rows
     // [0, BM), addressed cluster-logically as [cta_rank*BM, (cta_rank+1)*BM).
-    constexpr int BN_PAD = BN + 8;
+    //
+    // C_sh aliases the dynamic SMEM (the same allocation that held
+    // the multi-stage A/B ring during the K-loop).  Launcher must
+    // have sized the dynamic SMEM ≥ EPILOGUE_STAGING_BYTES — see the
+    // dual-use comment at the top of the file.
     auto C_sh = reinterpret_cast<__nv_bfloat16(*)[BN_PAD]>(smem);
 
     tcgen05_fence_after_thread_sync();

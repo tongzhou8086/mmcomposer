@@ -160,6 +160,75 @@ The MMA descriptor for B continues to use `make_desc_K_major`; the
 LBO field walks N-sub-tiles inside the local CTA's `BN/2`, and the
 cluster MMA fans across both CTAs to assemble the full N=BN slice.
 
+## Sizing the dynamic SMEM — a footgun the cluster exposes
+
+This chapter introduces a sizing requirement on the launcher that
+ch04–ch07 happened to satisfy by accident.  The dynamic SMEM the
+kernel needs is the **max of two non-overlapping uses**, not just the
+K-loop term:
+
+1. During the K-loop: `NS × SLOT_BYTES` bytes of A + B ring buffer.
+2. During the epilogue: `BM × (BN+8) × 2 = 67584 B ≈ 66 KB` of staging
+   for the coalesced TMEM → SMEM → GMEM writeback (the `+8` is the
+   bank-conflict pad from ch07).
+
+The two phases never overlap in time — `all_mmas_done` cleanly
+separates them — so SMEM is reused.  But the *allocation* must be
+sized to cover both:
+
+```python
+shared_bytes_per_CTA = max(NS × SLOT_BYTES, EPILOGUE_STAGING_BYTES) + 1024
+```
+
+| | `NS × SLOT_BYTES` | staging | which dominates? |
+|---|---|---|---|
+| ch07 NS=2 (single-CTA, 48 KB/slot)  | 96 KB | 66 KB | K-loop ✓ |
+| ch07 NS=3 (single-CTA, 48 KB/slot)  | 144 KB | 66 KB | K-loop ✓ |
+| **ch08 NS=2 (2-CTA, 32 KB/slot)**   | **64 KB** | **66 KB** | **staging ⚠️** |
+| ch08 NS=3 (2-CTA, 32 KB/slot)       | 96 KB | 66 KB | K-loop ✓ |
+| ch08 NS≥3 (2-CTA)                   | ≥ 96 KB | 66 KB | K-loop ✓ |
+
+ch07 never hit the staging-dominates case because its K-loop SMEM
+was always ≥ 96 KB.  ch08 at `NS = 2` is the *first* configuration
+in the tutorial where the K-loop term falls below the staging — so
+naïvely setting `shared_bytes = NS * SLOT_BYTES + 1024` (the pattern
+that's been correct through ch04–ch07) **under-allocates the dynamic
+SMEM, and the epilogue writes past the allocation → CUDA_ERROR_ILLEGAL_ADDRESS**.
+
+### Why we don't just shrink the staging
+
+A few alternatives don't work:
+
+- **Smaller pad than `+8`.**  `+8` is already the smallest 16-byte-
+  aligned padding that breaks the 32-way SMEM bank conflict from
+  ch07's columnar phase-1 writes.  Going to `+4` BF16 = 8 B isn't
+  `int4`-aligned, breaking the phase-2 stores.
+- **Chunk the epilogue in row strips.**  Each warp would need its own
+  17 KB staging slice, so 4 warps × 17 KB = 68 KB — same total.
+- **Don't reuse A/B SMEM at all.**  The kernel would then need
+  `K-loop + staging ≈ 130 KB` regardless of NS, wasting more than the
+  reuse pattern saves.
+
+So the `max(...)` is the production-correct pattern.  CUTLASS and
+`gau-nernst` both do the same.  ch08 just makes it impossible to
+ignore.
+
+### What we did about it
+
+- **`EPILOGUE_STAGING_BYTES`** is a `constexpr` at the top of
+  `kernel.cu`, with a comment block calling out the dual use of
+  dynamic SMEM and what the launcher must do.
+- **`shared_for(ns)`** in `main.py` computes the correct allocation
+  per NS, and a comment cross-references the kernel-side constant.
+- The TMEM `__syncthreads` between phase 1 and phase 2 (which already
+  exists for correctness) is the natural seam between the two SMEM
+  uses, so the reuse is safe.
+
+If you write a future kernel built on this one, **inherit the
+`max(K-loop, staging)` pattern verbatim** — the bug doesn't show up
+in correctness tests until NS or geometry crosses the threshold, so
+it's easy to miss.
+
 ## Performance — `NS` sweep at constant kernel structure
 
 `main.py` compiles ch07 (single-CTA, fixed `NS = 2`) and ch08 with
