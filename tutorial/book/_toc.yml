@@ -22,6 +22,7 @@ parts:
       - file: part2_optimization_ladder/05_multi_cta
       - file: part2_optimization_ladder/06_k_major_b
       - file: part2_optimization_ladder/07_coalesced_epilogue
+      - file: part2_optimization_ladder/08_cluster_mma
       - file: part2_optimization_ladder/01_blocked_tiling
       - file: part2_optimization_ladder/02_smem_staging
       - file: part2_optimization_ladder/03_cp_async
