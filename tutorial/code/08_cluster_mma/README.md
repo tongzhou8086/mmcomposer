@@ -90,36 +90,18 @@ The TMEM allocator and MMA both get `cta_group::2` variants:
 `idesc` carries the doubled M-dim: `make_idesc_bf16_cluster(2·BM, BN)`
 sets `m_dim = (2·BM)/16 = 16` instead of `BM/16 = 8`.
 
-#### Asymmetric work: only one CTA issues the MMA
-
-A point worth dwelling on because it surprised me the first time:
-**the cluster's MMA warp is on CTA 0 only.**  CTA 1's warp 1 doesn't
-issue any MMAs — it just waits on its local `mma_done` mbar, which
-gets armed by CTA 0's `multicast::cluster` commit when the MMA
-finishes.
-
-The two CTAs play very different roles inside one cluster:
+#### Asymmetric work — only CTA 0 issues the MMA
 
 | phase | CTA 0 | CTA 1 |
 |---|---|---|
-| init | warp 0 inits mbars + allocs TMEM | warp 0 inits mbars + allocs TMEM (sync.aligned across cluster) |
-| **TMA warp**  | loads its own half of A + B | loads its own half of A + B (peer arrival routed to CTA 0's mbar) |
-| **MMA warp**  | issues `tcgen05.mma.cta_group::2` | **idle, waiting on `mma_done`** |
-| epilogue | reads its own TMEM half + writes its GMEM half | reads its own TMEM half + writes its GMEM half |
+| TMA warp | loads its half of A + B | loads its half of A + B |
+| MMA warp | issues `tcgen05.mma.cta_group::2` | **idle, waiting on `mma_done`** |
+| epilogue | reads its TMEM half + GMEM writes | reads its TMEM half + GMEM writes |
 
-So CTA 1 isn't idle *overall* — it does the TMA loads and the
-epilogue, both of which are essential.  Its operand data lives in its
-own SMEM, and the cluster MMA fans across to read it.  But during the
-MMA *instruction itself*, only CTA 0 is "doing work" in any visible
-sense — and the tensor-core engine is what makes it look like the
-cluster cooperates.
-
-This is the right design: tensor-core MMAs are dispatched by *one
-issuer* per cluster.  Two issuers would race on the pipeline and
-produce undefined results.  CTA 1 sitting idle for the MMA duration
-is the cost of having that single issuer; what it bought you is the
-cluster-wide TMEM allocation, the multicast B load, and the fanned
-operand read.
+CTA 1 isn't idle overall — TMA and epilogue still run there, and the
+cluster MMA reads its A/B from CTA 1's SMEM via fan-out.  But the MMA
+*instruction itself* has a single issuer per cluster (two would race
+the pipeline), and that issuer is always `cta_rank == 0`.
 
 ### 4. Cross-cluster mbarrier accounting
 

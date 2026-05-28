@@ -336,15 +336,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
         }
     }
 
-    // ── MMA warp — only CTA 0 issues the cluster MMA.
-    //
-    // CTA 1's warp 1 doesn't enter this branch at all: it just falls
-    // through and ends up waiting on its local mma_done mbar below.
-    // The multicast commit from CTA 0 fires mma_done on both CTAs, so
-    // CTA 1 wakes up at the same time.  CTA 1 isn't idle overall (it
-    // ran the TMA warp and runs the epilogue), but during the MMA
-    // instruction itself only CTA 0 is doing work — that single
-    // issuer is required by the tensor-core dispatch model.
+    // ── MMA warp — only CTA 0 issues; cta_group::2 result lands in both CTAs' TMEM
     else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {
         uint32_t tile_ready_phase[NS] = {};
 
