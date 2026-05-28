@@ -19,6 +19,7 @@ parts:
       - file: part2_optimization_ladder/02_tcgen05_mma
       - file: part2_optimization_ladder/03_outer_k_loop
       - file: part2_optimization_ladder/04_multi_stage
+      - file: part2_optimization_ladder/05_multi_cta
       - file: part2_optimization_ladder/01_blocked_tiling
       - file: part2_optimization_ladder/02_smem_staging
       - file: part2_optimization_ladder/03_cp_async
