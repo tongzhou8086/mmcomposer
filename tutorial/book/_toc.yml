@@ -24,6 +24,8 @@ parts:
       - file: part2_optimization_ladder/07_coalesced_epilogue
       - file: part2_optimization_ladder/08_cluster_mma
       - file: part2_optimization_ladder/09_cta_swizzle
+      - file: part2_optimization_ladder/10_epilogue_tune
+      - file: part2_optimization_ladder/11_hoist_desc
       - file: part2_optimization_ladder/01_blocked_tiling
       - file: part2_optimization_ladder/02_smem_staging
       - file: part2_optimization_ladder/03_cp_async
