@@ -104,6 +104,33 @@ That's it.  No new PTX instructions, no new layouts, no new
 mbarriers — just a different formula for "where in the output grid am
 I?"
 
+## Composing with the 2-CTA cluster — the unit of grouping
+
+A point worth being precise about: the swizzle groups *clusters*, not
+individual CTAs.  In ch08 each cluster already owns `CTA_GROUP × BM =
+2 × 128 = 256` M-rows of output.  When we say `GROUP_SIZE_M = 8`, we
+mean 8 *cluster-rows* per chunk → **`8 × 256 = 2048` M-rows of
+output per chunk** (= 16 BM-tiles in M).
+
+| `GSM` | M-rows per chunk | A working set per chunk @ K = 8192 |
+|---|---|---|
+| 1  |  256 (one cluster row)  |  4 MB |
+| 4  | 1024                    | 16 MB |
+| **8**  | **2048 = 16 BM-tiles**  | **32 MB** |
+| 16 | 4096                    | 64 MB |
+
+For our 8192³ headline run, GSM=8 chunks the M-dimension into
+groups of 2048 rows (16 BM-tiles, or 8 cluster-tiles), giving a 32 MB
+A working set per chunk — comfortably inside L2 — while still leaving
+~100 MB of L2 for B to stay hot across the `grid_n` N-sweeps inside
+the chunk.  That's the sweet spot for this geometry; `GSM = 16` would
+push A's working set to 64 MB and start crowding B out.
+
+So when you read `GROUP_SIZE_M = N` in the kernel, the practical
+meaning is **"how many BM-tiles in M do we serialize before
+advancing N"** is `2 · N`, not `N` — the factor of 2 comes for free
+from the cluster.
+
 ## Sanity check — does `GSM = 1` recover ch08?
 
 Yes.  With `GROUP_SIZE_M = 1`:
