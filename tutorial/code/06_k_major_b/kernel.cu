@@ -24,7 +24,8 @@ constexpr int BK      = 64;
 constexpr int MMA_K   = 16;
 constexpr int K_MMAS  = BK / MMA_K;          // 4
 
-constexpr int NS      = 2;                   // multi-stage depth
+constexpr int NS            = 2;             // multi-stage depth
+constexpr int BF16_BYTES = 2;             // byte size of the operand element
 
 // ── SWIZZLE_128B constraint on K-major B ────────────────────────────
 //
@@ -36,10 +37,10 @@ constexpr int NS      = 2;                   // multi-stage depth
 // SMEM offset.  (Ch05 dodged this by host-transposing B so K — also
 // 64 BF16 — was the inner dim.)
 //
-// 64 below is therefore not a free parameter; it's `128 / sizeof(BF16)`.
+// 64 below is therefore not a free parameter; it's `128 / BF16_BYTES`.
 
-constexpr int A_SLOT_BYTES = BM * BK * 2;    // 16 KB
-constexpr int B_SLOT_BYTES = BN * BK * 2;    // 32 KB  (same total as ch05)
+constexpr int A_SLOT_BYTES = BM * BK * BF16_BYTES;     // 16 KB
+constexpr int B_SLOT_BYTES = BN * BK * BF16_BYTES;     // 32 KB
 constexpr int SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES;          // 48 KB / slot
 
 constexpr int THREADS   = 128;
@@ -178,8 +179,7 @@ extern "C" __global__ void matmul_k_major_b(
         return SMEM_BASE + s * SLOT_BYTES;
     };
     // B_base points at sub-tile 0 of slot s.  Sub-tile at N-offset n
-    // (n in {0, 64, 128, 192}) sits at B_base(s) + n * BK * 2 bytes
-    // (= n * BK * sizeof(BF16)).
+    // (n in {0, 64, 128, 192}) sits at B_base(s) + n * BK * BF16_BYTES.
     auto B_base = [SMEM_BASE](int s) -> uint32_t {
         return SMEM_BASE + s * SLOT_BYTES + A_SLOT_BYTES;
     };
@@ -229,10 +229,10 @@ extern "C" __global__ void matmul_k_major_b(
             // BN/64 sub-tile loads — see SWIZZLE_128B constraint above.
             #pragma unroll
             for (int n = 0; n < BN; n += 64) {
-                tma_2d_load(B_base(s) + n * BK * 2,           // SMEM offset of this sub-tile
+                tma_2d_load(B_base(s) + n * BK * BF16_BYTES,    // SMEM offset of this sub-tile
                             &B_tmap,
-                            /*x=*/ off_n + n,                  // N-coord (innermost)
-                            /*y=*/ s * BK,                     // K-coord
+                            /*x=*/ off_n + n,                      // N-coord (innermost)
+                            /*y=*/ s * BK,                         // K-coord
                             mb);
             }
             mbarrier_arrive_expect_tx(mb, SLOT_BYTES);
@@ -249,7 +249,7 @@ extern "C" __global__ void matmul_k_major_b(
                         /*x=*/ (k + NS - 1) * BK, /*y=*/ off_m, ready_mb);
             #pragma unroll
             for (int n = 0; n < BN; n += 64) {
-                tma_2d_load(B_base(slot) + n * BK * 2,
+                tma_2d_load(B_base(slot) + n * BK * BF16_BYTES,
                             &B_tmap,
                             /*x=*/ off_n + n,
                             /*y=*/ (k + NS - 1) * BK,
@@ -278,13 +278,17 @@ extern "C" __global__ void matmul_k_major_b(
 
             #pragma unroll
             for (int kk = 0; kk < K_MMAS; kk++) {
-                const uint64_t a_desc = make_desc(A_base(slot) + kk * 32);
-                // K-major B descriptor: addr points at sub-tile 0 at the
-                // current K-strip; LBO = BK*128 = bytes between N-sub-tiles
-                // tells the MMA hardware how to walk to sub-tiles 1..3.
+                // A K-step = MMA_K elements = MMA_K * BF16_BYTES bytes,
+                // walking within one 128-B SMEM row.
+                const uint64_t a_desc = make_desc(
+                    A_base(slot) + kk * MMA_K * BF16_BYTES);
+                // K-major B: addr points at sub-tile 0, K-row kk*MMA_K;
+                // LBO = BK rows × one 128-B swizzle atom = BK * 64 *
+                // BF16_BYTES — tells MMA hardware how to walk to
+                // sub-tiles 1..3.
                 const uint64_t b_desc = make_desc_K_major(
-                    B_base(slot) + kk * MMA_K * 128,    // sub-tile 0, K-row kk*16
-                    BK * 128);
+                    B_base(slot) + kk * MMA_K * (64 * BF16_BYTES),
+                    BK * (64 * BF16_BYTES));
                 const bool first_ever = (k == 0) && (kk == 0);
                 tcgen05_mma(taddr, a_desc, b_desc, idesc, /*enable_d=*/ !first_ever);
             }
