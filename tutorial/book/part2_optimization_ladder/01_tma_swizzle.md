@@ -3,12 +3,8 @@
 Chapter 00 loaded bytes from global memory into shared memory with
 `SWIZZLE_NONE` — SMEM came out byte-for-byte identical to the source.
 This chapter changes exactly one thing: `SWIZZLE_NONE` →
-`SWIZZLE_128B`, and watches what happens to the layout.
+`SWIZZLE_128B` (Another building block of high performance matmul), and watches what happens to the layout.
 
-Still no matmul.  The goal is to *see*, concretely, the byte
-rearrangement that `tcgen05.mma` will depend on in the next chapter —
-so that when we get there, the swizzled SMEM layout is already
-familiar instead of magic.
 
 > 📁 **Runnable code:** [`tutorial/code/01_tma_swizzle/`](https://github.com/tongzhou8086/mmcomposer/tree/master/tutorial/code/01_tma_swizzle).
 > Run with `pip install -r ../requirements.txt && python main.py` on a
@@ -25,7 +21,7 @@ a **bank conflict**.
 A matmul consumer like `tcgen05.mma` reads operand tiles from SMEM in a
 very regular strided pattern.  Stored naively (row-major, `SWIZZLE_NONE`),
 that pattern makes whole groups of threads land in the same bank on
-every access — worst-case conflicts, throughput cut by up to 8×.
+every access — worst-case conflicts.
 
 Swizzling fixes this by permuting where each 16-byte chunk physically
 lands, so the consumer's strided reads spread across all 32 banks.  The
@@ -50,8 +46,16 @@ permutation is *row-dependent* — a single row wouldn't reveal it.  And
 we use a structured input instead of random noise so the permutation is
 legible: each 16-byte chunk (8 consecutive BF16 values) is filled with
 the constant `row*10 + chunk_index`.  Since 128B swizzle only ever
-moves whole chunks — never elements within a chunk — chunk-constant
-values show the reordering with nothing to distract from it.
+moves whole chunks — never elements within a chunk.
+
+To give a quick preview of what SWIZZLE_128B does: it applies a
+**per-row XOR** to the chunk index of each row of the tile — row 0 is
+XOR-ed by 0 (untouched), row 1 by 1, row 2 by 2, …, row 7 by 7.  So
+row 0 comes out identical to the input, row 7 comes out with its 8
+chunks fully reversed, and the rows in between sit on a smooth gradient
+between those two extremes.  We derive the rule and the full table in
+[the next section](#the-128b-swizzle-rule); for now just know that
+*every row gets its own permutation, keyed by its row index*.
 
 ```python
 row_idx   = torch.arange(ROWS, device="cuda").view(ROWS, 1)
