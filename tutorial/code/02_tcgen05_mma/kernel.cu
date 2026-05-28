@@ -194,6 +194,24 @@ extern "C" __global__ void tcgen05_demo(
     }
 
     // ── 3) All threads wait for SMEM, then publish to the MMA proxy ─
+    //
+    // These two lines synchronize *different things* and both are needed:
+    //
+    //   mbarrier_wait_phase0  — TMA (async proxy) → THREAD (generic proxy).
+    //       When the wait returns, TMA's writes to SMEM are visible to
+    //       this thread.  An ordinary ld.shared here would see the data.
+    //
+    //   tcgen05.fence::after_thread_sync — THREAD → TENSOR CORE (tcgen05
+    //       proxy).  The MMA we're about to issue doesn't read SMEM from
+    //       the thread's proxy; it tells the tensor-core unit to go fetch
+    //       SMEM through *its own* pipeline.  Without this fence the
+    //       tensor core could race ahead of the mbarrier's effect and
+    //       grab stale/partial data.  The fence publishes the thread's
+    //       prior synchronization to the tcgen05 proxy.
+    //
+    // mbarrier = cross-actor ordering (did the event happen?).
+    // fence    = cross-proxy ordering (is the result visible to the other
+    //            hardware unit?).  Different axes, both required.
     mbarrier_wait_phase0(tile_ready_mb);
     tcgen05_fence_after_thread_sync();
 
@@ -219,6 +237,11 @@ extern "C" __global__ void tcgen05_demo(
     //   strip of TMEM and loops over N in steps of 8 cols.  Each lane
     //   reads 8 float32 accumulators per call, packs to BF16, and
     //   writes a 16-byte int4 to its row's column window.
+    //
+    // Mirror of step 3's fence, opposite direction: mma_done mbar told
+    // the thread "all MMAs finished," but tcgen05.ld reads TMEM through
+    // the tcgen05 proxy — fence publishes the thread's mbar-wait order
+    // to the tcgen05 unit so the ld sees the MMA's writes.
     tcgen05_fence_after_thread_sync();
 
     const int my_row = warp_id * 32 + lane;
