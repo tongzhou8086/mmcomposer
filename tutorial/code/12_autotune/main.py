@@ -47,7 +47,7 @@ NS_SWEEP      = [3, 4, 5, 6, 7]
 GSM_SWEEP     = [1, 4, 8, 16]
 NW_SWEEP      = [8]      # NW=4 dropped — NW=8 wins more consistently and
 LDX_SWEEP     = [8, 16, 32, 64]
-SHAPES        = list(range(2048, 8192 + 1, 1024))    # 7 shapes
+SHAPES        = list(range(2048, 12288 + 1, 1024))   # 11 shapes
 
 A_SLOT_BYTES  = BM       * BK * ELEM_BYTES
 B_SLOT_BYTES  = BN_LOCAL * BK * ELEM_BYTES
