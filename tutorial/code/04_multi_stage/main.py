@@ -19,7 +19,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cuda_utils import (
-    cu, init_cuda, compile_kernel, launch,
+    cu, init_cuda, compile_kernel, launch, time_kernel_us,
     encode_tensor_map, TMA_BFLOAT16, TMA_SWIZZLE_128B,
 )
 
@@ -109,32 +109,24 @@ else:
 
 
 # ── 4. Timing: ch03 vs ch04 ────────────────────────────────────────────────
-def time_kernel(kernel, shared_bytes, iters=1000, warmup=50):
-    start = torch.cuda.Event(enable_timing=True)
-    end   = torch.cuda.Event(enable_timing=True)
-    args  = [arg_a, arg_b, arg_c, arg_K]
-    # warmup
-    for _ in range(warmup):
-        launch(kernel, grid=(1,1,1), block=(THREADS,1,1),
-               shared=shared_bytes, args=args)
-    torch.cuda.synchronize()
-    start.record()
-    for _ in range(iters):
-        launch(kernel, grid=(1,1,1), block=(THREADS,1,1),
-               shared=shared_bytes, args=args)
-    end.record()
-    torch.cuda.synchronize()
-    return start.elapsed_time(end) / iters * 1e3   # microseconds / call
-
-us_03 = time_kernel(k03, SHARED_03)
-us_04 = time_kernel(k04, SHARED_04)
+# Use the shared do_bench-based timer.  It flushes L2 between samples and
+# picks an adaptive iter count to fit a 200 ms rep window — so fast and
+# slow kernels both get well-sampled measurements under cold-cache
+# conditions (the same harness ch12's autotuner uses).
+args = [arg_a, arg_b, arg_c, arg_K]
+us_03 = time_kernel_us(lambda: launch(
+    k03, grid=(1,1,1), block=(THREADS,1,1),
+    shared=SHARED_03, args=args, sync=False))
+us_04 = time_kernel_us(lambda: launch(
+    k04, grid=(1,1,1), block=(THREADS,1,1),
+    shared=SHARED_04, args=args, sync=False))
 
 # FLOPs: 2 * M * N * K (one MAC = 2 FLOPs).
 flops = 2.0 * M * N * K
 tflops_03 = flops / (us_03 * 1e-6) / 1e12
 tflops_04 = flops / (us_04 * 1e-6) / 1e12
 
-print("Timing  (single CTA, mean over 1000 launches):")
+print("Timing  (single CTA, median via triton.testing.do_bench):")
 print(f"  ch03 (NS = 1, no overlap):  {us_03:7.2f} us/call   {tflops_03:6.1f} TFLOPS")
 print(f"  ch04 (NS = {NS}, overlap):       {us_04:7.2f} us/call   {tflops_04:6.1f} TFLOPS")
 print(f"  speedup ch04 / ch03:        {us_03 / us_04:.2f}x")

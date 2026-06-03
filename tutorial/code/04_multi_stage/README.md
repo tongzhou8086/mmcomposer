@@ -200,7 +200,8 @@ TMA side and another on the MMA side.
 ## Measured speedup over chapter 03
 
 Same problem (`M=128, N=256, K=4096`), same single CTA, same epilogue.
-Mean kernel time over 1000 launches on B200:
+Median kernel time on B200, measured via `triton.testing.do_bench`
+(see `cuda_utils.time_kernel_us`):
 
 | Kernel | Time / call | TFLOPS |
 |---|---|---|
@@ -209,12 +210,12 @@ Mean kernel time over 1000 launches on B200:
 
 The kernel below times itself and prints both numbers — run it to see
 your B200's measured speedup.  On our reference run (`K = 4096`, single
-CTA), `main.py` measured **67.7 µs/call → 43.5 µs/call = 1.56× speedup**
+CTA), `main.py` measured **93.2 µs/call → 53.3 µs/call = 1.75× speedup**
 just from flipping `NS = 1 → 2`.  Going to `NS = 3` or 4 gives
 diminishing returns at this problem size because MMA latency dominates
 once TMA is fully hidden.
 
-(Absolute TFLOPS are low here — ~4 → ~6 — because a single CTA can't
+(Absolute TFLOPS are low here — ~3 → ~5 — because a single CTA can't
 saturate a B200.  What we're measuring is the ratio, which captures the
 TMA/MMA overlap.  Multi-CTA + full-grid kernels in later chapters get
 the absolute numbers up.)
