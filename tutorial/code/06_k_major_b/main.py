@@ -13,7 +13,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cuda_utils import (
-    cu, init_cuda, compile_kernel, launch,
+    cu, init_cuda, compile_kernel, launch, time_kernel_us,
     encode_tensor_map, TMA_BFLOAT16, TMA_SWIZZLE_128B,
 )
 
@@ -75,29 +75,10 @@ def run_and_time(M, N, K, iters=200, warmup=20):
     C_ref = (A.float() @ B.float()).to(torch.bfloat16)
     rel = (C.float() - C_ref.float()).abs().max().item() / C_ref.float().abs().max().item()
 
-    start = torch.cuda.Event(enable_timing=True)
-    end   = torch.cuda.Event(enable_timing=True)
-    for _ in range(warmup):
-        launch(kernel, grid=grid, block=(THREADS,1,1),
-               shared=SHARED_BYTES, args=args)
-    torch.cuda.synchronize()
-    start.record()
-    for _ in range(iters):
-        launch(kernel, grid=grid, block=(THREADS,1,1),
-               shared=SHARED_BYTES, args=args)
-    end.record()
-    torch.cuda.synchronize()
-    us_ours = start.elapsed_time(end) / iters * 1e3
-
-    for _ in range(warmup):
-        _ = A @ B
-    torch.cuda.synchronize()
-    start.record()
-    for _ in range(iters):
-        C_pt = A @ B
-    end.record()
-    torch.cuda.synchronize()
-    us_pt = start.elapsed_time(end) / iters * 1e3
+    us_ours = time_kernel_us(lambda: launch(
+        kernel, grid=grid, block=(THREADS, 1, 1),
+        shared=SHARED_BYTES, args=args, sync=False))
+    us_pt   = time_kernel_us(lambda: A @ B)
 
     flops = 2.0 * M * N * K
     return {

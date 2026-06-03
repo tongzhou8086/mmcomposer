@@ -155,18 +155,19 @@ B_tmap = encode_tensor_map(
 
 The kernel does the same total work as ch05 — same MMAs, same TMA
 bytes, same epilogue — so per-call kernel time should be essentially
-unchanged.  Measured on B200:
+unchanged.  Measured on B200 via `triton.testing.do_bench`:
 
 | shape | ch05 (transposed B) | ch06 (native B) | PyTorch (cuBLAS) | ch06 / cuBLAS |
 |---|---|---|---|---|
-| `2048³` | 537 TFLOPS | **548 TFLOPS** | 1250 TFLOPS | 44% |
-| `4096³` | 786 TFLOPS | **791 TFLOPS** | 1512 TFLOPS | 52% |
-| `8192³` | 797 TFLOPS | **823 TFLOPS** | 1273 TFLOPS | 65% |
+| `2048³` | 541 TFLOPS | **541 TFLOPS** |  880 TFLOPS | 62% |
+| `4096³` | 770 TFLOPS | **794 TFLOPS** | 1411 TFLOPS | 56% |
+| `8192³` | 826 TFLOPS | **820 TFLOPS** | 1359 TFLOPS | 60% |
 
-The per-call timing is ~the same (very slight improvement, +1–3%
-depending on shape — different TMA scheduling for B's sub-tile loads
-vs ch05's single load).  The headline numbers move ch06 from 42→44%,
-51→52%, 63→65% of cuBLAS.
+The per-call timing is essentially the same (small +/- variations
+shape-by-shape — different TMA scheduling for B's sub-tile loads vs
+ch05's single load, well within run-to-run noise).  The point of this
+chapter isn't a speedup at this stage — it's removing the host-side
+`B.t().contiguous()` so the GPU consumes B in its native layout.
 
 What *did* change is the **end-to-end story**: a one-shot `A @ B` no
 longer pays a `K · N · 2` byte transpose before launching.  In settings
