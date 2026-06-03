@@ -160,22 +160,22 @@ To isolate the swizzle effect we hold everything else constant:
   — close enough to optimal that the GSM contribution is what we're
   measuring.
 
-Measured on B200:
+Measured on B200 via `triton.testing.do_bench`:
 
 | `GSM` | walk pattern | TFLOPS |
 |---|---|---|
-| **1** (= ch08's walk) | N-fast within each M-row              | **1178** |
-| 4                     | M-fast within chunks of 4 cluster-rows | 1219 (+3.5 %) |
-| **8**                 | M-fast within chunks of 8 cluster-rows | **1225** (+4 %) |
-| 16                    | M-fast within chunks of 16 cluster-rows | 1199 (+1.8 %) |
+| **1** (= ch08's walk) | N-fast within each M-row              | **1216** |
+| 4                     | M-fast within chunks of 4 cluster-rows | 1286 (+5.8 %) |
+| **8**                 | M-fast within chunks of 8 cluster-rows | **1352** (+11.2 %) |
+| 16                    | M-fast within chunks of 16 cluster-rows | 1289 (+6.0 %) |
 
 `GSM = 8` is the sweet spot at 8192³: enough M-stripes in flight per
 chunk to give B genuine L2 reuse, not so many that A's working set
 spills the L2.  `GSM = 16` is past the peak — the extra A working set
 costs more than the extra B reuse buys.
 
-Against cuBLAS at the same shape: ch09 best = 1225 / cuBLAS ≈ 1264 =
-**~97 %**.  Very close to library parity at this scale.
+Against cuBLAS at the same shape: ch09 best = 1352 / cuBLAS ≈ 1455 =
+**~93 %**.  Very close to library parity at this scale.
 
 ### When the swizzle *doesn't* help — smaller shapes
 
