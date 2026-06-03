@@ -91,14 +91,14 @@ TMA).
 ## Performance
 
 Same shape as ch09 (`M = N = K = 8192`, `NS = 5`), head-to-head against
-ch09 at every `GSM`.  Measured on B200:
+ch09 at every `GSM`.  Measured on B200 via `triton.testing.do_bench`:
 
 | `GSM` | ch09 TFLOPS | ch11 TFLOPS | speedup |
 |---|---|---|---|
-| 1  | 1238 | 1195 | 0.97× |
-| 4  | 1209 | 1249 | 1.03× |
-| 8  | 1287 | 1288 | 1.00× |
-| 16 | 1267 | 1264 | 1.00× |
+| 1  | 1337 | 1304 | 0.98× |
+| 4  | 1347 | 1371 | 1.02× |
+| 8  | 1380 | 1375 | 1.00× |
+| 16 | 1368 | 1371 | 1.00× |
 
 **Honest read — within run-to-run noise.**  Mixed sub-3 % deltas, no
 consistent sign.  Two plausible reasons:
