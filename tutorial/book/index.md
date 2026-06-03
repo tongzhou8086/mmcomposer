@@ -24,10 +24,14 @@ to be read in two ways:
   the previous step.  Read in order.  Each chapter has the same structure:
   *why* (which bottleneck it addresses), *how* (the mechanism), *code*
   (a complete kernel pattern), *pitfalls*, and *expected perf delta*.
-- **Part 3** covers autotuning methodology — how to use `do_bench`, when
-  autotune is worth it, when it just adds noise.
-- **Part 4** is a B200-specific reference: PTX cheat sheet, common errors,
+- **Part 3** is a B200-specific reference: PTX cheat sheet, common errors,
   shared-memory layouts.
+
+Autotuning methodology — how to use `do_bench`, when autotune is worth
+it, when it just adds noise — used to be its own part.  We folded it
+into Part 2's chapter 12 instead: by that point in the ladder you've
+seen enough kernels to make autotuning a concrete activity rather than
+abstract advice.
 
 ## Prerequisites
 

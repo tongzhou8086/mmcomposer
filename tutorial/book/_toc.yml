@@ -28,10 +28,6 @@ parts:
       - file: part2_optimization_ladder/11_hoist_desc
       - file: part2_optimization_ladder/12_autotune
 
-  - caption: "Part 3 — Autotuning"
-    chapters:
-      - file: part3_autotuning
-
-  - caption: "Part 4 — Reference"
+  - caption: "Part 3 — Reference"
     chapters:
       - file: part4_b200_reference
