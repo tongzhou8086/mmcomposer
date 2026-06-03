@@ -12,7 +12,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cuda_utils import (
-    cu, init_cuda, compile_kernel, launch,
+    cu, init_cuda, compile_kernel, launch, time_kernel_us,
     encode_tensor_map, TMA_BFLOAT16, TMA_SWIZZLE_128B,
 )
 
@@ -72,20 +72,11 @@ def setup(M, N, K):
     return A, B, C, grid, args
 
 
-def time_kernel(kernel, grid, args, iters=200, warmup=20):
-    start = torch.cuda.Event(enable_timing=True)
-    end   = torch.cuda.Event(enable_timing=True)
-    for _ in range(warmup):
-        launch(kernel, grid=grid, block=(THREADS,1,1),
-               shared=SHARED_BYTES, args=args)
-    torch.cuda.synchronize()
-    start.record()
-    for _ in range(iters):
-        launch(kernel, grid=grid, block=(THREADS,1,1),
-               shared=SHARED_BYTES, args=args)
-    end.record()
-    torch.cuda.synchronize()
-    return start.elapsed_time(end) / iters * 1e3   # us / call
+def time_kernel(kernel, grid, args):
+    """Median per-call time (µs) via the shared do_bench wrapper."""
+    return time_kernel_us(lambda: launch(
+        kernel, grid=grid, block=(THREADS, 1, 1),
+        shared=SHARED_BYTES, args=args, sync=False))
 
 
 for (M, N, K) in [(2048, 2048, 2048), (4096, 4096, 4096), (8192, 8192, 8192)]:

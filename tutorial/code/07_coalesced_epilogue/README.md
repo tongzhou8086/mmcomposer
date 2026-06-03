@@ -148,22 +148,22 @@ worst-case bank traffic.
 ## Performance
 
 `main.py` compiles both this kernel and chapter 06's, runs them on
-three shapes, and reports the head-to-head.  Measured on B200:
+three shapes, and reports the head-to-head.  Measured on B200 via
+`triton.testing.do_bench`:
 
 | shape | ch06 (direct) | ch07 (coalesced) | speedup |
 |---|---|---|---|
-| `2048³` | 534 TFLOPS | **557 TFLOPS** | **1.04×** |
-| `4096³` | 791 TFLOPS | **803 TFLOPS** | **1.02×** |
-| `8192³` | 811 TFLOPS | 785 TFLOPS | 0.97× |
+| `2048³` | 541 TFLOPS | 542 TFLOPS | 1.00× |
+| `4096³` | 776 TFLOPS | **786 TFLOPS** | **1.01×** |
+| `8192³` | 858 TFLOPS | 845 TFLOPS | 0.98× |
 
-**Honest read:** the standalone win is modest at small shapes
-(`+4%` at 2K) and inverts slightly at 8K.  The reason is that the
-epilogue is only a meaningful fraction of total runtime when the
-K-loop is short — at `K = 8192` we run 128 K-iterations per CTA, and
-the few-microsecond epilogue gets dwarfed.  The extra
+**Honest read:** the standalone win is within noise at all three
+shapes.  The epilogue is only a meaningful fraction of total runtime
+when the K-loop is short — at `K = 8192` we run 128 K-iterations per
+CTA, and the few-microsecond epilogue gets dwarfed.  The extra
 `__syncthreads` + SMEM round-trip of the two-phase pattern adds a
-small overhead that doesn't pay for itself when there's nothing to
-amortize it against.
+small overhead that doesn't quite pay for itself when there's nothing
+to amortize it against.
 
 **Why the chapter still matters:** this is structural scaffolding for
 chapter 08.  With only 4 warps, the two-phase structure is just "spend
