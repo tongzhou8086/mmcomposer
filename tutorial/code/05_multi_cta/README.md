@@ -76,24 +76,28 @@ chapter 04.
 
 ## Performance — real TFLOPS, not microbenchmark numbers
 
-Single CTA in ch04 measured ~6 TFLOPS because most of the GPU was
+Single CTA in ch04 measured ~5 TFLOPS because most of the GPU was
 parked.  With a full grid the SMs actually fill up.  Measured on B200
-(`main.py` re-runs these — your numbers will be in the same ballpark):
+via `triton.testing.do_bench` (`main.py` re-runs these — your numbers
+will be in the same ballpark):
 
 | shape (M, N, K) | grid | this kernel | PyTorch `A @ B` (cuBLAS) | us / cuBLAS |
 |---|---|---|---|---|
-| `2048³` | 16 × 8 = 128 CTAs (one wave) | **537 TFLOPS** | 1277 TFLOPS | **42%** |
-| `4096³` | 32 × 16 = 512 CTAs (multi-wave) | **786 TFLOPS** | 1536 TFLOPS | **51%** |
-| `8192³` | 64 × 32 = 2048 CTAs (many waves) | **797 TFLOPS** | 1264 TFLOPS | **63%** |
+| `2048³` | 16 × 8 = 128 CTAs (one wave)    | **541 TFLOPS** |  876 TFLOPS | **62%** |
+| `4096³` | 32 × 16 = 512 CTAs (multi-wave) | **770 TFLOPS** | 1443 TFLOPS | **53%** |
+| `8192³` | 64 × 32 = 2048 CTAs (many waves)| **826 TFLOPS** | 1454 TFLOPS | **57%** |
 
-From ~6 TFLOPS (ch04, single CTA) to **~800 TFLOPS** — roughly **130×**
+From ~5 TFLOPS (ch04, single CTA) to **~800 TFLOPS** — roughly **160×**
 just from sizing the grid to the problem.
 
-Notice the **us / cuBLAS** ratio improves with problem size (42% → 51%
-→ 63%).  Larger shapes amortize per-tile setup and the still-uncoalesced
-epilogue over more inner-loop compute, so the inner-loop limitations
-(naive walk, no 2-CTA cluster) become a larger share of the remaining
-gap.  That's the territory the next chapters operate in.
+Our absolute throughput climbs with shape (541 → 770 → 826), but the
+**us / cuBLAS** ratio doesn't move monotonically.  At `2048³` cuBLAS
+itself is hobbled by the small problem (876 TFLOPS, far below its 1.4
+TFLOPS plateau), so a 62% ratio there reflects cuBLAS struggling at
+small shapes as much as our kernel doing well.  At `4096³` and `8192³`
+cuBLAS hits its stride (~1450 TFLOPS) while we lag at ~800; that ~50%
+gap is the headroom the next chapters chase — chunked grid walk for L2
+reuse, 2-CTA cluster MMA, coalesced SMEM-staged epilogue.
 
 We're not at parity yet — `cuBLAS` (what PyTorch calls under the hood)
 uses CTA-tile swizzling for L2 reuse on A, 2-CTA cluster MMA, and a
