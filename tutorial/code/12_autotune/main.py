@@ -16,11 +16,10 @@ import time
 import ctypes
 
 import torch
-import triton.testing
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cuda_utils import (
-    cu, init_cuda, compile_kernel, launch,
+    cu, init_cuda, compile_kernel, launch, time_kernel_us,
     encode_tensor_map, TMA_BFLOAT16, TMA_SWIZZLE_128B,
 )
 
@@ -83,37 +82,18 @@ for cfg, kern in kernels.items():
         shared_for(ns)))
 
 
-# ── 2. Timing — delegated to triton.testing.do_bench ──────────────────────
+# ── 2. Timing — shared do_bench wrapper from cuda_utils ──────────────────
 #
-# The README walks through what a from-scratch timer would need to handle
-# (L2 invalidation between batches, the per-launch-sync foot-gun, median
-# vs mean, etc.).  Once you understand WHY those things matter, the right
-# next move in production is to delegate to a battle-tested timer that
-# already gets them right.  triton.testing.do_bench is exactly that:
-#   - flushes a 256 MB scratch buffer through L2 between samples,
-#   - adaptively picks iter count to fit the rep window,
-#   - times via CUDA events with the right sync semantics,
-#   - returns quantiles so we get median / min / max for free.
-def time_kernel_us(kern, threads, sh, args, grid, warmup_ms=20, rep_ms=200):
-    """Median per-call time (µs) via triton.testing.do_bench.
-
-    do_bench handles the things we'd otherwise have to handle manually:
-      - L2 cache flushing between samples,
-      - adaptive iter count to fit the rep window across fast/slow kernels,
-      - correct event-based timing with implicit per-batch synchronize.
-
-    We keep our own custom timer's lessons in the README (L2 flushing,
-    median vs mean, per-launch sync foot-gun, tournament budget) because
-    they explain WHY do_bench is structured the way it is — but for the
-    actual timing in this chapter's autotuner and final-measurement, we
-    use the battle-tested library function.
-    """
-    block = (threads, 1, 1)
-    def call():
-        launch(kern, grid=grid, block=block, shared=sh, args=args, sync=False)
-    ms_med, _, _ = triton.testing.do_bench(
-        call, warmup=warmup_ms, rep=rep_ms, quantiles=(0.5, 0.0, 1.0))
-    return ms_med * 1000.0   # ms -> µs
+# Every chapter in the tutorial uses cuda_utils.time_kernel_us for kernel
+# timing (a thin wrapper around triton.testing.do_bench).  This chapter is
+# no exception — both the autotuner's per-config ranking and the final
+# reported numbers go through the same harness.
+def time_my_kernel(kern, threads, sh, args, grid, warmup_ms=20, rep_ms=200):
+    return time_kernel_us(
+        lambda: launch(kern, grid=grid, block=(threads, 1, 1),
+                       shared=sh, args=args, sync=False),
+        warmup_ms=warmup_ms, rep_ms=rep_ms,
+    )
 
 
 # ── 3. The Autotuner ───────────────────────────────────────────────────────
@@ -139,7 +119,7 @@ class Autotuner:
             ns, gsm, nw, _ldx = cfg
             if gsm > grid_m_clusters:
                 continue
-            us = time_kernel_us(kern, nw * WARP_SIZE, shared_for(ns),
+            us = time_my_kernel(kern, nw * WARP_SIZE, shared_for(ns),
                                 args, grid,
                                 warmup_ms=warmup_ms, rep_ms=rep_ms)
             if us < best_us:
@@ -176,11 +156,9 @@ def setup(M, N, K):
 
 
 def time_pytorch_us(A, B, warmup_ms=20, rep_ms=200):
-    """PyTorch (cuBLAS) baseline via do_bench for apples-to-apples."""
-    ms_med, _, _ = triton.testing.do_bench(
-        lambda: A @ B,
-        warmup=warmup_ms, rep=rep_ms, quantiles=(0.5, 0.0, 1.0))
-    return ms_med * 1000.0
+    """PyTorch (cuBLAS) baseline via the same do_bench harness."""
+    return time_kernel_us(lambda: A @ B,
+                          warmup_ms=warmup_ms, rep_ms=rep_ms)
 
 
 # ── 5. Sweep all shapes ────────────────────────────────────────────────────
@@ -209,7 +187,7 @@ for sz in SHAPES:
     # Final timings — same do_bench harness as the autotuner uses for
     # ranking, just with a bit more rep budget so the reported number
     # is more stable.
-    us_ours = time_kernel_us(kern, nw * WARP_SIZE, shared_for(ns),
+    us_ours = time_my_kernel(kern, nw * WARP_SIZE, shared_for(ns),
                              args, grid, warmup_ms=50, rep_ms=500)
     us_pt   = time_pytorch_us(A, B, warmup_ms=50, rep_ms=500)
     flops   = 2.0 * M * N * K
