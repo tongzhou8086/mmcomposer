@@ -246,17 +246,17 @@ it's easy to miss.
 
 `main.py` compiles ch07 (single-CTA, fixed `NS = 2`) and ch08 with
 `NS = 2..7` and runs them all at three problem sizes.  Measured on
-B200, TFLOPS (higher is better):
+B200 via `triton.testing.do_bench`, TFLOPS (higher is better):
 
 | config | per-CTA SMEM | 2K³ | 4K³ | 8K³ |
 |---|---|---|---|---|
-| ch07 NS=2 (single-CTA)  | 97 KB   |  568 |  805 |  820 |
-| **ch08 NS=2** (2-CTA)   | **67 KB** | **574** | **768** | **825** |
-| ch08 NS=3 (2-CTA)       | 97 KB   |  651 | 1020 | 1009 |
-| ch08 NS=4 (2-CTA)       | 129 KB  |  665 | 1191 | 1127 |
-| ch08 NS=5 (2-CTA)       | 161 KB  |  **671** | **1209** | 1153 |
-| ch08 NS=6 (2-CTA)       | 193 KB  |  657 | 1144 | **1168** |
-| ch08 NS=7 (2-CTA)       | 225 KB  |  662 | 1133 | 1163 |
+| ch07 NS=2 (single-CTA)  | 97 KB   |  542 |  789 |  850 |
+| **ch08 NS=2** (2-CTA)   | **67 KB** | **542** | **750** | **862** |
+| ch08 NS=3 (2-CTA)       | 97 KB   |  672 | 1008 | 1068 |
+| ch08 NS=4 (2-CTA)       | 129 KB  |  730 | 1209 | 1223 |
+| ch08 NS=5 (2-CTA)       | 161 KB  |  **800** | 1255 | 1289 |
+| ch08 NS=6 (2-CTA)       | 193 KB  |  798 | 1278 | **1297** |
+| ch08 NS=7 (2-CTA)       | 225 KB  |  798 | **1290** | 1275 |
 
 Two cleanly separable effects:
 
@@ -265,24 +265,27 @@ Two cleanly separable effects:
 at this `(BM, BN, BK)` and `NS = 2`, the gain is within noise.  By
 itself, 2-CTA is not the headline.
 
-**The freed SMEM unlocking deeper `NS`** (rows 2 → 5, 4K and 8K):
-**+45–50%**.  At 4K, 768 → 1209 TFLOPS as NS climbs from 2 to 5.  At
-8K, 825 → 1168 TFLOPS as NS climbs to 6.  *This* is where the chapter
-earns its keep.
+**The freed SMEM unlocking deeper `NS`** (rows 2 → highest, all three
+shapes): **+48–72%**.  At 2K, 542 → 800 TFLOPS as NS climbs from 2 to
+5.  At 4K, 750 → 1290 TFLOPS at NS = 7.  At 8K, 862 → 1297 TFLOPS at
+NS = 6.  *This* is where the chapter earns its keep.
 
-The best `NS` shifts with problem size (5 at 4K, 6 at 8K).  That's a
-preview of the autotuning chapter — picking `NS` per-shape becomes
-worthwhile once the playable range is large enough.
+The best `NS` shifts with problem size (5 at 2K, 7 at 4K, 6 at 8K).
+That's a preview of the autotuning chapter — picking `NS` per-shape
+becomes worthwhile once the playable range is large enough.
 
 cuBLAS comparison (PyTorch's reference at the same shapes):
 
 | shape | ch07 best | **ch08 best** | cuBLAS | ch08 / cuBLAS |
 |---|---|---|---|---|
-| 2048³ |  568 |  **671** | ~1278 | **53%** |
-| 4096³ |  805 | **1209** | ~1500 | **81%** |
-| 8192³ |  820 | **1168** | ~1264 | **92%** |
+| 2048³ |  542 |  **800** | ~880 | **91%** |
+| 4096³ |  789 | **1290** | ~1440 | **90%** |
+| 8192³ |  850 | **1297** | ~1455 | **89%** |
 
-At 8192³ we're closing in on parity.
+We close in on parity across all three sizes — the gap to cuBLAS
+hovers around 10 %, with the remaining headroom being the territory
+the next chapters (chunked grid walk, epilogue tuning, hoisted
+descriptors) chase.
 
 ## The relationship between cluster and NS — complementary, not coupled
 
