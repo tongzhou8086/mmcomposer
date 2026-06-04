@@ -72,6 +72,77 @@ for (int n = col_base; n < col_end; n += LD_X) {
 }
 ```
 
+## Output assignment breakdown
+
+### The base unit: `tcgen05.ld.32x32b.x{8,16,32,64}`
+
+A single `tcgen05.ld.32x32b.xN` instruction:
+
+- Reads a **32-row × N-column** strip of TMEM.
+- Is issued by **one warp** (32 lanes).
+- Distributes the values across the warp such that each lane gets
+  **N values** (one per column).
+
+So one warp's `ld.32x32b.x8` produces a 32×8 strip where lane `i`
+(`i ∈ 0..31`) holds the 8 fp32 values from **row `i`** of that strip,
+columns 0..7.
+
+**Key fact:** lane = row.  Within one `tcgen05.ld` instruction, each
+lane owns *one row* of the 32-row strip, holding `LD_X` columns of it
+in registers.
+
+### `NUM_WARPS = 8` epilogue partitioning (from `kernel.cu`)
+
+```cpp
+const int row_warp = warp_id & 3;    // 0..3 — selects 32-row strip in the 128-row tile
+const int col_warp = warp_id >> 2;   // 0..1 — selects left half or right half of BN
+my_row         = row_warp * 32 + lane;
+taddr_row_base = taddr + ((row_warp * 32) << 16);   // start at row (row_warp * 32) in TMEM
+col_base       = col_warp * (BN / 2);
+col_end        = col_base + (BN / 2);
+```
+
+| warp_id | row_warp | col_warp | TMEM rows | TMEM cols |
+|---|---|---|---|---|
+| 0 | 0 | 0 |    0–31 |   0–127 |
+| 1 | 1 | 0 |   32–63 |   0–127 |
+| 2 | 2 | 0 |   64–95 |   0–127 |
+| 3 | 3 | 0 |  96–127 |   0–127 |
+| 4 | 0 | 1 |    0–31 | 128–255 |
+| 5 | 1 | 1 |   32–63 | 128–255 |
+| 6 | 2 | 1 |   64–95 | 128–255 |
+| 7 | 3 | 1 |  96–127 | 128–255 |
+
+So warps 0 and 4 both work on rows 0–31 of the output tile, but on
+disjoint columns.  Warps 0 and 1 work on the same column range but
+disjoint rows.  And so on.
+
+### Within one warp: the per-lane split
+
+Each warp owns a `32 rows × 128 cols` region.  The phase 1 inner loop
+is:
+
+```cpp
+for (int n = col_base; n < col_end; n += LD_X) {
+    float tmp[LD_X];
+    tcgen05_ld_packed<LD_X>(taddr_row_base + n, tmp);   // 32 rows × LD_X cols
+    ...
+    *(int4*)&C_sh[my_row][n + j*8] = packed[j];         // lane writes its row
+}
+```
+
+So per loop iteration:
+
+- The whole warp issues one `tcgen05.ld.32x32b.xN` → 32 rows × `LD_X`
+  cols.
+- Each lane gets `LD_X` fp32 values from **its row**
+  (row = `row_warp * 32 + lane`).
+- Each lane packs those into bf16 and writes them to its SMEM row.
+
+The outer loop walks the warp's 128-column slice in steps of `LD_X`.
+With `LD_X = 8`, that's 16 iterations per warp; with `LD_X = 64`,
+that's 2 iterations.
+
 ## Performance sweep
 
 `M = N = K = 8192`, `NS = 5`, `GSM = 8` (best from ch09).  Full
