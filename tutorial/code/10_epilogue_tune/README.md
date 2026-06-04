@@ -143,6 +143,63 @@ The outer loop walks the warp's 128-column slice in steps of `LD_X`.
 With `LD_X = 8`, that's 16 iterations per warp; with `LD_X = 64`,
 that's 2 iterations.
 
+### How threads write to SMEM in phase 1
+
+The SMEM staging buffer `C_sh` is sized to fit the **entire** `BM × BN`
+output tile — no rounds, no reuse:
+
+```cpp
+constexpr int BN_PAD = BN + 8;                       // 264 (BN=256 + 8 padding bf16)
+constexpr int EPILOGUE_STAGING_BYTES = BM * BN_PAD * 2;   // 128 × 264 × 2 ≈ 66 KB
+auto C_sh = reinterpret_cast<__nv_bfloat16(*)[BN_PAD]>(smem);
+```
+
+So `C_sh` is a `bf16[128][264]` — **128 rows × 256 used cols**, with 8
+columns of dead-zone padding per row.  Phase 1 writes each output
+element exactly once.  After phase 1's `__syncthreads()` the whole
+output tile lives in SMEM; phase 2 then drains it to GMEM.
+
+The SMEM layout is *logically* identical to TMEM (same `[row][col]`
+semantics for the output values), but *physically* a regular
+shared-memory bank array with the `+ 8` per-row padding.  The
+`EPILOGUE_STAGING_BYTES` allocation **aliases** the same dynamic-SMEM
+bytes that held the multi-stage A/B ring during the K-loop — they're
+time-multiplexed via the `all_mmas_done` barrier (see the dual-use
+comment at the top of `kernel.cu`).
+
+Inside the inner loop, the per-warp int4 store is:
+
+```cpp
+*reinterpret_cast<int4*>(&C_sh[my_row][n + j*8]) = packed[j];
+```
+
+Per warp-wide store:
+
+- **32 lanes** in the warp execute this together.
+- Each lane writes one `int4` = 16 bytes = **8 bf16 values** at SMEM
+  address `C_sh[my_row][n + j*8]`.
+- `my_row = row_warp * 32 + lane` — so lane `i` writes to a *different
+  row* than its neighbours.
+- The column offset `n + j*8` is the **same** across all lanes in the
+  warp.
+
+So one warp-wide int4 store writes **32 rows × 8 cols** of bf16 in a
+single transaction — each lane handles a different row at the same
+column range.
+
+### Why the `BN + 8` row padding
+
+SMEM has 32 banks, each 4 bytes wide.  A row of `bf16[256]` is exactly
+128 bank-words = `4 × 32 banks`, so without padding lane `i`'s starting
+bank is `(i × 128) mod 32 = 0` for *every* lane — a 32-way bank conflict
+on every int4 store.
+
+Padding the row to `bf16[264]` makes the row stride 132 bank-words =
+`4 × 32 + 4`.  Now lane `i`'s starting bank is `(i × 4) mod 32 = 0, 4,
+8, …` — collisions reduce to 8-way (lanes 0/8/16/24, 1/9/17/25, …),
+about a 4× improvement over the unpadded case.  Cheap to buy: 8 cols ×
+2 bytes × 128 rows = 2 KB of wasted SMEM per CTA.
+
 ## Performance sweep
 
 `M = N = K = 8192`, `NS = 5`, `GSM = 8` (best from ch09).  Full
