@@ -27,6 +27,7 @@ parts:
       - file: part2_optimization_ladder/10_epilogue_tune
       - file: part2_optimization_ladder/11_hoist_desc
       - file: part2_optimization_ladder/12_autotune
+      - file: part2_optimization_ladder/13_triton_baseline
 
   - caption: "Part 3 — Reference"
     chapters:
