@@ -87,34 +87,63 @@ with st.sidebar:
     gpu = st.selectbox(
         "GPU",
         ["B200 (sm_100a)", "H100 (sm_90a) — coming soon", "RTX 50xx (sm_120) — coming soon"],
+        help="The first supported target is NVIDIA B200.  Other backends will "
+             "land as the tutorial expands.",
     )
     dtype = st.selectbox(
         "Data type",
         ["bfloat16", "float16 — coming soon", "fp8 e4m3 — coming soon"],
+        help="Input data type for A and B.  C is fp32 accumulator → output dtype.",
     )
 
     st.subheader("Tile shape")
-    bm = st.number_input("BM", value=128, min_value=64, max_value=256, step=64)
-    bn = st.number_input("BN", value=256, min_value=64, max_value=256, step=64)
-    bk = st.number_input("BK", value=64,  min_value=64, max_value=64,  step=64,
-                         help="Currently locked at 64 — the tutorial kernels' inner contract.")
-    gsm = st.number_input("CTA swizzling factor (GSM)", value=8,
-                          min_value=1, max_value=32, step=1,
-                          help="Chunk size for the L2-friendly grid walk. "
-                               "GSM=1 disables swizzle (natural N-fast walk).")
-    nw  = st.number_input("num_warps", value=8, min_value=4, max_value=16, step=4)
+    bm  = st.selectbox(
+        "BM", [64, 128, 256], index=1,
+        help="M-dimension tile size per CTA.  Each CTA owns BM output rows.  "
+             "The tutorial baseline expects BM == num_warps × 32 (epilogue "
+             "row partitioning).",
+    )
+    bn  = st.selectbox(
+        "BN", [64, 128, 256, 512], index=2,
+        help="N-dimension tile size per CTA.  Each CTA owns BN output cols.  "
+             "Must be a multiple of 64 (the K-major B TMA sub-tile width).",
+    )
+    bk  = st.selectbox(
+        "BK", [32, 64, 128], index=1,
+        help="K-dimension tile size per stage — one SMEM tile streamed per "
+             "K-loop iteration.  Locked at 64 in the tutorial: the K-major B "
+             "descriptor uses SWIZZLE_128B, which constrains the inner box "
+             "to one 128 B swizzle atom = 64 BF16 elements.",
+    )
+    gsm = st.selectbox(
+        "CTA swizzling factor (GSM)", [1, 2, 4, 8, 16, 32], index=3,
+        help="Chunked block-id rasterization for L2 reuse on B.  GSM CTAs in "
+             "a row share the same B-stripe; consecutive CTAs walk M-fast "
+             "inside chunks of GSM × grid_n.  GSM=1 disables swizzle "
+             "(natural N-fast walk).  See ch09 for the full L2-cache rationale.",
+    )
+    nw  = st.selectbox(
+        "num_warps", [4, 8, 16], index=0,
+        help="Total warps per CTA = threads / 32.  The baseline epilogue "
+             "partitions BM rows across (num_warps × 32) lanes one-row-each, "
+             "so BM must equal num_warps × 32.",
+    )
 
     st.subheader("Optimizations")
     ms_ws = st.toggle(
-        "Multi-staging + warp specialization",
-        value=False,
-        help="Deepen the SMEM ring (NS≥3) AND split TMA/MMA into dedicated warps.",
+        "Multi-staging + warp specialization", value=False,
+        help="Deepen the SMEM ring (NS ≥ 3) AND split TMA + MMA into "
+             "dedicated warps so the producer (TMA) and consumer (MMA) can "
+             "run their own K-loops, synchronizing only at the per-slot "
+             "mbarriers.  Decouples async producer and consumer.",
     )
     two_cta = st.toggle(
-        "2-CTA cluster MMA",
-        value=False,
-        help="Use `__cluster_dims__(2,1,1)` + `cta_group::2` MMA.  "
-             "Requires multi-stage + warp specialization (above).",
+        "2-CTA cluster MMA", value=False,
+        help="`__cluster_dims__(2, 1, 1)` + `cta_group::2` MMA.  Two CTAs "
+             "cooperate inside a single tcgen05.mma — halves per-CTA B SMEM, "
+             "doubles M per MMA, unlocks deeper NS.  Requires multi-stage + "
+             "warp specialization (above) — the cluster MMA only fits in the "
+             "warp-specialized kernel.",
     )
 
     st.subheader("Problem shapes")
@@ -122,15 +151,50 @@ with st.sidebar:
         "Target shapes (one M,N,K per line)",
         value="4096,4096,4096\n8192,8192,8192",
         height=80,
+        help="Shapes the generated kernel will be benchmarked at.  Each line "
+             "is one (M, N, K) triple in row-major, comma-separated.  Only "
+             "shapes with a cached number in the pre-baked benchmark table "
+             "display a TFLOPS value — others show `—`.",
     )
+
+    st.divider()
+    generate = st.button("🛠  Generate kernel", type="primary", use_container_width=True)
+
+
+# ── Gate everything on the Generate button ────────────────────────────
+#
+# Values from the sidebar widgets are "staged"; nothing on the right
+# side changes until Generate is clicked.  We snapshot the staged
+# config into st.session_state so subsequent reruns (re-clicks,
+# expander toggles, tab switches) display the same code.
+
+if generate:
+    st.session_state.applied = dict(
+        bm=bm, bn=bn, bk=bk, gsm=gsm, nw=nw,
+        ms_ws=ms_ws, two_cta=two_cta,
+        shapes_text=shapes_text,
+    )
+
+if "applied" not in st.session_state:
+    st.info(
+        "Configure parameters in the sidebar, then click **🛠  Generate kernel**.  "
+        "The kernel + host code + pre-baked benchmark will appear here."
+    )
+    st.stop()
+
+cfg = st.session_state.applied
+bm, bn, bk          = cfg["bm"], cfg["bn"], cfg["bk"]
+gsm, nw             = cfg["gsm"], cfg["nw"]
+ms_ws, two_cta      = cfg["ms_ws"], cfg["two_cta"]
+shapes_text         = cfg["shapes_text"]
 
 
 # ── Validate the toggle combination ───────────────────────────────────
 
 if two_cta and not ms_ws:
     st.error(
-        "**2-CTA cluster MMA** requires **Multi-staging + warp specialization** to be on. "
-        "(Cluster MMA only fits in the warp-specialized multi-stage kernel.)"
+        "**2-CTA cluster MMA** requires **Multi-staging + warp specialization** "
+        "to be on.  (Cluster MMA only fits in the warp-specialized multi-stage kernel.)"
     )
     st.stop()
 
@@ -143,6 +207,66 @@ st.markdown(f"### {tier['label']}")
 st.caption(tier["desc"])
 if tier.get("pending"):
     st.warning(tier["pending_note"])
+
+
+# ── Validation — run at Generate-time, before showing the code ──────
+
+def validate_config(bm, bn, bk, gsm, nw, chapter):
+    """Return a list of human-readable warnings.  Empty list = clean."""
+    out = []
+    # SWIZZLE_128B inner-box: B's inner dim is 64 BF16 = 128 B (one
+    # swizzle atom).  Changing BK breaks make_desc_K_major's LBO math.
+    if bk != 64:
+        out.append(
+            f"**BK = {bk}**: the tutorial's K-major B descriptor + SWIZZLE_128B "
+            "TMA constrain BK to 64.  Other values won't compile without "
+            "rewriting `make_desc_K_major` and the LBO math."
+        )
+    # BN must be a multiple of the TMA sub-tile width (64).
+    if bn % 64 != 0:
+        out.append(
+            f"**BN = {bn}** must be a multiple of 64 (the TMA sub-tile width on K-major B)."
+        )
+    # Epilogue partitioning: my_row = warp_id*32 + lane, needs BM == NUM_WARPS*32.
+    if bm != nw * 32:
+        out.append(
+            f"**BM = {bm}** but **num_warps = {nw}**: the coalesced epilogue "
+            f"assumes BM == num_warps × 32 (= {nw * 32}).  Phase 1 would write "
+            "out of range."
+        )
+    # Phase-2 flat-walk needs BM*BN divisible by THREADS*8.
+    if (bm * bn) % (nw * 32 * 8) != 0:
+        out.append(
+            f"**BM × BN = {bm * bn}** is not a multiple of `THREADS × 8 = "
+            f"{nw * 32 * 8}` — Phase-2 epilogue flat walk leaves uncovered "
+            "output positions."
+        )
+    # SMEM budget (B200 = 228 KB/CTA).
+    a_slot = bm * bk * 2
+    b_slot = bn * bk * 2
+    slot   = a_slot + b_slot
+    ns     = 2   # baseline
+    epi    = bm * (bn + 8) * 2
+    smem   = max(ns * slot, epi) + 1024
+    if smem > 228 * 1024:
+        out.append(
+            f"**SMEM usage {smem/1024:.0f} KB > B200 cap (228 KB)** at "
+            f"(BM={bm}, BN={bn}, BK={bk}, NS={ns}).  Kernel will fail to launch."
+        )
+    return out
+
+
+config_warnings = validate_config(bm, bn, bk, gsm, nw, tier["chapter"])
+if config_warnings:
+    st.error(
+        f"⚠️  **{len(config_warnings)} configuration warning(s)** — the substituted "
+        "code below likely won't compile.  Fix in the sidebar and re-generate, "
+        "or accept the defaults."
+    )
+    for w in config_warnings:
+        st.warning(w)
+else:
+    st.success("✓ Configuration passes all constraint checks for the selected tier.")
 
 
 # ── Load chapter files ────────────────────────────────────────────────
@@ -211,66 +335,6 @@ def substitute_main_constants(src: str | None, **values) -> str | None:
 KNOBS = {"BM": bm, "BN": bn, "BK": bk, "NS": 2, "GROUP_SIZE_M": gsm, "NUM_WARPS": nw}
 kernel_view = substitute_kernel_constexprs(kernel_src, **KNOBS)
 main_view   = substitute_main_constants(main_src, **KNOBS)
-
-
-# ── Validation — warn (don't block) on constraint violations ────────
-
-def validate_config(bm, bn, bk, gsm, nw, chapter):
-    """Return a list of human-readable warnings.  Empty list = clean."""
-    out = []
-    # SWIZZLE_128B inner-box: B's inner dim is 64 BF16 = 128 B (one
-    # swizzle atom).  Changing BK breaks make_desc_K_major's LBO math.
-    if bk != 64:
-        out.append(
-            f"**BK = {bk}**: the tutorial's K-major B descriptor + SWIZZLE_128B "
-            "TMA constrain BK to 64.  Other values won't compile without "
-            "rewriting `make_desc_K_major` and the LBO math."
-        )
-    # BN must be a multiple of the TMA sub-tile width (64).
-    if bn % 64 != 0:
-        out.append(f"**BN = {bn}** must be a multiple of 64 (the TMA sub-tile width on K-major B).")
-    # Epilogue partitioning: my_row = warp_id*32 + lane, needs BM == NUM_WARPS*32.
-    if bm != nw * 32:
-        out.append(
-            f"**BM = {bm}** but **num_warps = {nw}**: the coalesced epilogue "
-            f"assumes BM == num_warps × 32 (= {nw * 32}).  Phase 1 will write "
-            "out of range."
-        )
-    # Phase-2 flat-walk needs BM*BN divisible by THREADS*8.
-    if (bm * bn) % (nw * 32 * 8) != 0:
-        out.append(
-            f"**BM × BN = {bm * bn}** is not a multiple of `THREADS × 8 = "
-            f"{nw * 32 * 8}` — the Phase-2 epilogue flat walk leaves "
-            "uncovered output positions."
-        )
-    # SMEM budget (B200 = 228 KB/CTA).
-    a_slot = bm * bk * 2
-    b_slot = bn * bk * 2
-    slot   = a_slot + b_slot
-    ns     = 2   # baseline
-    epi    = bm * (bn + 8) * 2
-    smem   = max(ns * slot, epi) + 1024
-    if smem > 228 * 1024:
-        out.append(
-            f"**SMEM usage {smem/1024:.0f} KB > B200 cap (228 KB)** at this "
-            f"(BM={bm}, BN={bn}, BK={bk}, NS={ns}).  Kernel will fail to launch."
-        )
-    if gsm < 1:
-        out.append(f"**GSM = {gsm}** must be ≥ 1.")
-    return out
-
-
-warnings = validate_config(bm, bn, bk, gsm, nw, tier["chapter"])
-if warnings:
-    with st.expander(f"⚠️  {len(warnings)} configuration warning(s) — click for details",
-                      expanded=True):
-        for w in warnings:
-            st.warning(w)
-        st.caption(
-            "The substituted code is still displayed below so you can see what "
-            "the change would look like, but it likely won't compile.  Fix the "
-            "warnings in the sidebar or accept the defaults."
-        )
 
 
 # ── Pre-baked benchmark lookup (stub for MVP) ────────────────────────
