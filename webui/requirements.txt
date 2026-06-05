@@ -1,4 +1,5 @@
 # Web UI dependencies (Streamlit-based pitch demo).
 # Install with: pip install -r webui/requirements.txt
 
-streamlit>=1.36,<2.0
+# width="stretch" (replacing the deprecated use_container_width) needs >=1.49.
+streamlit>=1.49,<2.0

@@ -16,3 +16,4 @@ docs/_build/
 
 # nvcc compile output for the tutorial examples
 tutorial/code/**/*.cubin
+webui/tests/_scratch/
