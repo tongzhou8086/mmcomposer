@@ -31,8 +31,13 @@
 //     tier (ch08/ch09) is for (each CTA holds 128 of the 256 rows).
 // So BM=128 is THE single-CTA value.  Larger M → 2-CTA toggle.
 //
-// NW is pinned at 4: empirically NW<4 also produces wrong output
-// (a separate ≥4-warp tcgen05 quirk we haven't traced).  NW ≥ 4 OK.
+// NW ∈ {4, 8, 16} all verified correct at BM=128.  Perf is flat
+// across them because Phase 1 of the epilogue divides work by 32-row
+// stripes (BM/32 = 4 stripes at BM=128), so only warps 0-3 ever do
+// Phase-1 reads — extra warps idle there and only help Phase 2's
+// SMEM→GMEM store, a tiny fraction of runtime.  NW < 4 (e.g. 2)
+// produces wrong output (a separate ≥4-warp tcgen05 quirk we haven't
+// traced), so the webui menu starts at 4.  Default 4.
 //
 // Toggling those on in the MVP web UI moves the user up to ch07 or
 // ch09 respectively.  This chapter is the "all toggles off" point.
