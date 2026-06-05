@@ -270,7 +270,7 @@ with col_run:
         "**Generate kernel** to walk through the build."
     )
 
-    go = st.button("🛠  Generate kernel", type="primary", use_container_width=True)
+    go = st.button("🛠  Generate kernel", type="primary", width="stretch")
     out = st.container()
 
 # ── Mocked agent-loop run ────────────────────────────────────────────────────
@@ -375,7 +375,7 @@ if go:
                     "TFLOPS @ 8192³":  [tflops for _, _, tflops in LADDER],
                     "vs cuBLAS":       [f"{tflops/1373:.0%}" for _, _, tflops in LADDER],
                 },
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
