@@ -1,8 +1,11 @@
 """Runnable companion for Chapter 03b — double-buffer baseline.
 
-Compiles all four GROUP_SIZE_M variants of the baseline kernel and
-benchmarks each at three square shapes.  Picks the best GSM at the
-biggest shape and reports the speedup over GSM=1 (no swizzle).
+One launch per shape, single kernel symbol (`matmul_dbuf`).  All
+tunables — BM, BN, BK, NS, GROUP_SIZE_M, NUM_WARPS — are constexpr
+at the top of `kernel.cu`; this script reads them via simple defaults
+that mirror those constants.  The MVP webui rewrites the constexpr
+lines (and the matching constants below) per user click; you
+recompile locally with `python main.py`.
 """
 
 import os
@@ -20,32 +23,33 @@ from cuda_utils import (
 from cuda.bindings import driver
 
 
+# These mirror the constexpr values in kernel.cu — keep in sync.
 BM, BN, BK   = 128, 256, 64
 NS           = 2
+GROUP_SIZE_M = 8
+NUM_WARPS    = 4
+
 ELEM_BYTES   = 2
-THREADS      = 128
+THREADS      = NUM_WARPS * 32
 SLOT_BYTES   = BM * BK * ELEM_BYTES + BN * BK * ELEM_BYTES
 BN_PAD       = BN + 8
 EPI_BYTES    = BM * BN_PAD * ELEM_BYTES
-# K-loop ring (NS slots) AND epilogue staging share the same dynamic
-# SMEM region, but are time-disjoint — alloc max of the two.
+# K-loop ring (NS slots) and epilogue staging share the same dynamic
+# SMEM region but are time-disjoint — alloc max of the two.
 SHARED_BYTES = max(NS * SLOT_BYTES, EPI_BYTES) + 1024
 HERE         = os.path.dirname(os.path.abspath(__file__))
 
 
 device, ctx = init_cuda()
 
-KERNELS = ["matmul_dbuf_gsm1", "matmul_dbuf_gsm4",
-           "matmul_dbuf_gsm8", "matmul_dbuf_gsm16"]
 mod, fns = compile_kernel(os.path.join(HERE, "kernel.cu"),
-                          device, kernels=KERNELS)
-k = {name: fns[name] for name in KERNELS}
+                          device, kernels=["matmul_dbuf"])
+kernel = fns["matmul_dbuf"]
 
-for kern in k.values():
-    cu(driver.cuFuncSetAttribute(
-        kern,
-        driver.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
-        SHARED_BYTES))
+cu(driver.cuFuncSetAttribute(
+    kernel,
+    driver.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+    SHARED_BYTES))
 
 
 def setup(M, N, K):
@@ -73,30 +77,25 @@ def setup(M, N, K):
     return A, B, C, grid, args
 
 
-def time_kernel(kernel, grid, args):
-    return time_kernel_us(lambda: launch(
-        kernel, grid=grid, block=(THREADS, 1, 1),
-        shared=SHARED_BYTES, args=args, sync=False))
-
-
 for (M, N, K) in [(2048, 2048, 2048), (4096, 4096, 4096), (8192, 8192, 8192)]:
     A, B, C, grid, args = setup(M, N, K)
     flops = 2.0 * M * N * K
 
-    # Correctness on GSM=1.
     C.zero_()
-    launch(k["matmul_dbuf_gsm1"], grid=grid, block=(THREADS, 1, 1),
+    launch(kernel, grid=grid, block=(THREADS, 1, 1),
            shared=SHARED_BYTES, args=args)
     C_ref = (A.float() @ B.float()).to(torch.bfloat16)
     rel = (C.float() - C_ref.float()).abs().max().item() / C_ref.float().abs().max().item()
     ok = "✓" if rel < 5e-2 else "✗"
 
+    us = time_kernel_us(lambda: launch(
+        kernel, grid=grid, block=(THREADS, 1, 1),
+        shared=SHARED_BYTES, args=args, sync=False))
+    tf = flops / (us * 1e-6) / 1e12
+
     print(f"{ok}  M=N=K={M:>4}   grid={M//BM}×{N//BN}={(M//BM)*(N//BN)} CTAs   rel err={rel:.2%}")
-    for name in KERNELS:
-        us = time_kernel(k[name], grid, args)
-        tf = flops / (us * 1e-6) / 1e12
-        gsm = int(name.rsplit("gsm", 1)[1])
-        print(f"     GSM={gsm:>2d}:  {us:7.1f} us/call   {tf:6.1f} TFLOPS")
+    print(f"     BM={BM} BN={BN} BK={BK} NS={NS} GSM={GROUP_SIZE_M} NW={NUM_WARPS}   "
+          f"{us:7.1f} us/call   {tf:6.1f} TFLOPS")
     print()
 
 

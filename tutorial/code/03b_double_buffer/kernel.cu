@@ -24,25 +24,32 @@
 #include <cuda_bf16.h>
 #include <cstdint>
 
-constexpr int BM      = 128;
-constexpr int BN      = 256;
-constexpr int BK      = 64;
-constexpr int MMA_K   = 16;
-constexpr int K_MMAS  = BK / MMA_K;          // 4
+// ── User-tunable constants ──────────────────────────────────────────
+// These six lines are the contract between the webui and the kernel.
+// The webui regex-substitutes them when the user changes a value in
+// the UI; everything else in the file is *derived* from these.
+constexpr int BM           = 128;
+constexpr int BN           = 256;
+constexpr int BK           = 64;
+constexpr int NS           = 2;       // multi-stage depth ("double buffer" = 2)
+constexpr int GROUP_SIZE_M = 8;       // CTA-swizzle chunk (1 = no swizzle)
+constexpr int NUM_WARPS    = 4;       // total warps per CTA
 
-constexpr int NS                = 2;        // hardcoded double buffer
+// ── Derived constants (do not edit) ─────────────────────────────────
+constexpr int MMA_K             = 16;
+constexpr int K_MMAS            = BK / MMA_K;
 constexpr int BF16_BYTES        = 2;
 constexpr int SWIZZLE_ROW_BYTES = 128;
 
-constexpr int A_SLOT_BYTES = BM * BK * BF16_BYTES;          // 16 KB
-constexpr int B_SLOT_BYTES = BN * BK * BF16_BYTES;          // 32 KB
-constexpr int SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES;   // 48 KB / slot
+constexpr int A_SLOT_BYTES = BM * BK * BF16_BYTES;
+constexpr int B_SLOT_BYTES = BN * BK * BF16_BYTES;
+constexpr int SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES;
 
 constexpr int BN_PAD                 = BN + 8;
 constexpr int EPILOGUE_STAGING_BYTES = BM * BN_PAD * BF16_BYTES;
 
-constexpr int THREADS   = 128;
 constexpr int WARP_SIZE = 32;
+constexpr int THREADS   = NUM_WARPS * WARP_SIZE;
 
 
 // ── helpers (same as ch07) ──────────────────────────────────────────
@@ -154,16 +161,18 @@ __device__ __forceinline__ void mbarrier_wait_phase(uint32_t mb, uint32_t phase)
 
 // ── Kernel ──────────────────────────────────────────────────────────
 //
-// Template parameter: GROUP_SIZE_M (the CTA-swizzle chunk size).
-// GROUP_SIZE_M=1 → natural N-fast walk (= ch07).
-// GROUP_SIZE_M>1 → chunked M-fast walk inside groups of GSM M-rows.
-template <int GROUP_SIZE_M>
-__device__ __forceinline__ void mm_impl(
-    const CUtensorMap* A_tmap,
-    const CUtensorMap* B_tmap,
+// GROUP_SIZE_M is now a constexpr at the top of the file (not a
+// template) — this is what lets the webui's regex substitution treat
+// every knob uniformly.  GROUP_SIZE_M=1 collapses to the natural
+// N-fast walk; >1 swaps to a chunked M-fast walk for L2 reuse on B.
+extern "C" __global__ void matmul_dbuf(
+    const __grid_constant__ CUtensorMap A_tmap_,
+    const __grid_constant__ CUtensorMap B_tmap_,
     __nv_bfloat16* __restrict__ C_ptr,
     int M, int N, int K
 ) {
+    const CUtensorMap* A_tmap = &A_tmap_;
+    const CUtensorMap* B_tmap = &B_tmap_;
     // ── CTA-swizzle: derive (bid_m, bid_n) from blockIdx.x  ─────────
     //
     // Same chunked walk as ch09 but at the single-CTA granularity
@@ -344,34 +353,7 @@ __device__ __forceinline__ void mm_impl(
 }
 
 
-// ── Public entrypoints — one per (GROUP_SIZE_M) instantiation ──────
-//
-// main.py picks one of these.  GSM=1 = no swizzle (natural walk);
-// GSM=8 is usually the L2-friendliest choice for large M shapes.
-extern "C" __global__ void matmul_dbuf_gsm1(
-    const __grid_constant__ CUtensorMap A_tmap,
-    const __grid_constant__ CUtensorMap B_tmap,
-    __nv_bfloat16* __restrict__ C_ptr,
-    int M, int N, int K
-) { mm_impl<1>(&A_tmap, &B_tmap, C_ptr, M, N, K); }
-
-extern "C" __global__ void matmul_dbuf_gsm4(
-    const __grid_constant__ CUtensorMap A_tmap,
-    const __grid_constant__ CUtensorMap B_tmap,
-    __nv_bfloat16* __restrict__ C_ptr,
-    int M, int N, int K
-) { mm_impl<4>(&A_tmap, &B_tmap, C_ptr, M, N, K); }
-
-extern "C" __global__ void matmul_dbuf_gsm8(
-    const __grid_constant__ CUtensorMap A_tmap,
-    const __grid_constant__ CUtensorMap B_tmap,
-    __nv_bfloat16* __restrict__ C_ptr,
-    int M, int N, int K
-) { mm_impl<8>(&A_tmap, &B_tmap, C_ptr, M, N, K); }
-
-extern "C" __global__ void matmul_dbuf_gsm16(
-    const __grid_constant__ CUtensorMap A_tmap,
-    const __grid_constant__ CUtensorMap B_tmap,
-    __nv_bfloat16* __restrict__ C_ptr,
-    int M, int N, int K
-) { mm_impl<16>(&A_tmap, &B_tmap, C_ptr, M, N, K); }
+// No multi-launcher dispatch table — there is exactly one kernel
+// symbol (`matmul_dbuf`) compiled at the GROUP_SIZE_M baked in above.
+// The webui generates a fresh source file per user click; the user
+// recompiles locally to get a binary with their chosen knobs.

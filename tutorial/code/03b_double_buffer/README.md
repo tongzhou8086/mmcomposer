@@ -84,10 +84,14 @@ recover.
 
 ## CTA swizzle
 
-`GROUP_SIZE_M` is a template parameter; four launchers expose
-GSM ∈ {1, 4, 8, 16}.  GSM=1 collapses to the natural N-fast walk; >1
-swaps it for a chunked M-fast walk inside groups of GSM M-rows, for
-better L2 reuse on B.  See ch09 for the full rationale.
+`GROUP_SIZE_M` is a `constexpr` at the top of `kernel.cu`, alongside
+BM/BN/BK/NS/NUM_WARPS — those six constants are the file's single
+source of truth, and everything else (SMEM sizing, epilogue
+partitioning, K-loop bounds) is derived from them.  The MVP web UI
+rewrites these six lines per user click and asks them to rebuild
+locally with `nvcc`.  GSM=1 collapses to the natural N-fast walk;
+>1 swaps it for a chunked M-fast walk inside groups of GSM M-rows.
+See ch09 for the full rationale.
 
 ## Per-shape numbers (B200, BF16)
 
@@ -109,6 +113,9 @@ optimization the MVP's first toggle then unlocks.
 python main.py
 ```
 
-Compiles all 4 GSM launchers (~30 s on a cold cubin cache),
-checks correctness against PyTorch `A @ B`, then sweeps GSM at three
-shapes.
+Compiles the single `matmul_dbuf` kernel (~10 s on a cold cubin
+cache), checks correctness against PyTorch `A @ B`, then prints
+the per-call latency + TFLOPS at three shapes (2048³, 4096³, 8192³)
+using the constexpr values committed in the file.  Edit any of BM,
+BN, BK, NS, GROUP_SIZE_M, NUM_WARPS at the top of `kernel.cu` (and
+the matching line in `main.py`) to try a different config.

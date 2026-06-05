@@ -165,31 +165,112 @@ main_src   = read_or_none(main_path)
 
 # ── Substitute tile params (best-effort) into the displayed sources ──
 
-def substitute_tile_params(src: str | None, *, bm: int, bn: int, bk: int) -> str | None:
-    """Patch the top-of-file `constexpr int BM/BN/BK = ...;` lines.
+def substitute_kernel_constexprs(src: str | None, **values) -> str | None:
+    """Rewrite top-of-file `constexpr int NAME = ...;` lines for each kwarg.
 
-    Best-effort: only the kernel.cu has these as compile-time constants.
-    We don't actually recompile here — this is for display fidelity so
-    the downloaded code matches what the user requested.
+    The kernel files use these constants as the single source of
+    truth — all other tile-dependent sizing is derived from them.
+    The substitution edits the displayed/downloadable source; the
+    user recompiles locally with `nvcc` to get a binary at their
+    chosen knobs.
     """
     if src is None:
         return None
-    src = re.sub(r"constexpr\s+int\s+BM\s*=\s*\d+", f"constexpr int BM = {bm}", src)
-    src = re.sub(r"constexpr\s+int\s+BN\s*=\s*\d+", f"constexpr int BN = {bn}", src)
-    src = re.sub(r"constexpr\s+int\s+BK\s*=\s*\d+", f"constexpr int BK = {bk}", src)
+    for name, val in values.items():
+        src = re.sub(
+            rf"(constexpr\s+int\s+{re.escape(name)}\s*=\s*)\d+",
+            lambda m, v=val: f"{m.group(1)}{v}",
+            src,
+        )
     return src
 
 
-def substitute_main_params(src: str | None, *, bm: int, bn: int, bk: int) -> str | None:
+def substitute_main_constants(src: str | None, **values) -> str | None:
+    """Rewrite the matching `NAME = ...` constants in main.py."""
     if src is None:
         return None
-    src = re.sub(r"BM,\s*BN,\s*BK\s*=\s*\d+,\s*\d+,\s*\d+",
-                 f"BM, BN, BK = {bm}, {bn}, {bk}", src)
+    # Handle the combined `BM, BN, BK = a, b, c` line specially.
+    if all(k in values for k in ("BM", "BN", "BK")):
+        src = re.sub(
+            r"BM,\s*BN,\s*BK\s*=\s*\d+,\s*\d+,\s*\d+",
+            f"BM, BN, BK = {values['BM']}, {values['BN']}, {values['BK']}",
+            src,
+        )
+    # Single-name constants on their own line.
+    for name in ("NS", "GROUP_SIZE_M", "NUM_WARPS"):
+        if name in values:
+            src = re.sub(
+                rf"^({name}\s*=\s*)\d+",
+                lambda m, v=values[name]: f"{m.group(1)}{v}",
+                src,
+                flags=re.MULTILINE,
+            )
     return src
 
 
-kernel_view = substitute_tile_params(kernel_src, bm=bm, bn=bn, bk=bk)
-main_view   = substitute_main_params(main_src,   bm=bm, bn=bn, bk=bk)
+KNOBS = {"BM": bm, "BN": bn, "BK": bk, "NS": 2, "GROUP_SIZE_M": gsm, "NUM_WARPS": nw}
+kernel_view = substitute_kernel_constexprs(kernel_src, **KNOBS)
+main_view   = substitute_main_constants(main_src, **KNOBS)
+
+
+# ── Validation — warn (don't block) on constraint violations ────────
+
+def validate_config(bm, bn, bk, gsm, nw, chapter):
+    """Return a list of human-readable warnings.  Empty list = clean."""
+    out = []
+    # SWIZZLE_128B inner-box: B's inner dim is 64 BF16 = 128 B (one
+    # swizzle atom).  Changing BK breaks make_desc_K_major's LBO math.
+    if bk != 64:
+        out.append(
+            f"**BK = {bk}**: the tutorial's K-major B descriptor + SWIZZLE_128B "
+            "TMA constrain BK to 64.  Other values won't compile without "
+            "rewriting `make_desc_K_major` and the LBO math."
+        )
+    # BN must be a multiple of the TMA sub-tile width (64).
+    if bn % 64 != 0:
+        out.append(f"**BN = {bn}** must be a multiple of 64 (the TMA sub-tile width on K-major B).")
+    # Epilogue partitioning: my_row = warp_id*32 + lane, needs BM == NUM_WARPS*32.
+    if bm != nw * 32:
+        out.append(
+            f"**BM = {bm}** but **num_warps = {nw}**: the coalesced epilogue "
+            f"assumes BM == num_warps × 32 (= {nw * 32}).  Phase 1 will write "
+            "out of range."
+        )
+    # Phase-2 flat-walk needs BM*BN divisible by THREADS*8.
+    if (bm * bn) % (nw * 32 * 8) != 0:
+        out.append(
+            f"**BM × BN = {bm * bn}** is not a multiple of `THREADS × 8 = "
+            f"{nw * 32 * 8}` — the Phase-2 epilogue flat walk leaves "
+            "uncovered output positions."
+        )
+    # SMEM budget (B200 = 228 KB/CTA).
+    a_slot = bm * bk * 2
+    b_slot = bn * bk * 2
+    slot   = a_slot + b_slot
+    ns     = 2   # baseline
+    epi    = bm * (bn + 8) * 2
+    smem   = max(ns * slot, epi) + 1024
+    if smem > 228 * 1024:
+        out.append(
+            f"**SMEM usage {smem/1024:.0f} KB > B200 cap (228 KB)** at this "
+            f"(BM={bm}, BN={bn}, BK={bk}, NS={ns}).  Kernel will fail to launch."
+        )
+    if gsm < 1:
+        out.append(f"**GSM = {gsm}** must be ≥ 1.")
+    return out
+
+
+warnings = validate_config(bm, bn, bk, gsm, nw, tier["chapter"])
+if warnings:
+    with st.expander(f"⚠️  {len(warnings)} configuration warning(s) — click for details",
+                      expanded=True):
+        for w in warnings:
+            st.warning(w)
+        st.caption(
+            "The substituted code is still displayed below so you can see what "
+            "the change would look like, but it likely won't compile.  Fix the "
+            "warnings in the sidebar or accept the defaults."
+        )
 
 
 # ── Pre-baked benchmark lookup (stub for MVP) ────────────────────────
