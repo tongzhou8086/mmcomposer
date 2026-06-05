@@ -134,11 +134,12 @@ with st.sidebar:
     )
     nw  = st.selectbox(
         "num_warps", [4, 8, 16], index=0,
-        help="Total warps per CTA = threads / 32.  Empirically NW<4 produces "
-             "wrong output in the baseline kernel (some `tcgen05.alloc."
-             "cta_group::1` quirk requires ≥4 warps), so NW=2 is dropped "
-             "from the menu.  Phase 1 epilogue uses a stride-NW round-robin "
-             "over 32-row TMEM stripes, so all NW ≥ 4 are structurally OK.",
+        help="Total warps per CTA = threads / 32.  The Phase-1 epilogue "
+             "splits warps as a 2D grid: BM/32 row strips × (NW / (BM/32)) "
+             "column groups, so every warp does real work (e.g. NW=8 at "
+             "BM=128 → 4 row strips × 2 col halves).  NW must be a multiple "
+             "of BM/32 (= 4 at BM=128).  NW<4 produces wrong output (a "
+             "separate ≥4-warp tcgen05 quirk), so NW=2 is dropped.",
     )
 
     st.subheader("Optimizations")
@@ -249,14 +250,35 @@ def validate_config(bm, bn, bk, ns, gsm, nw, chapter):
         out.append(
             f"**BN = {bn}** must be a multiple of 64 (the TMA sub-tile width on K-major B)."
         )
-    # Phase 1 epilogue: stride-NW round-robin over 32-row TMEM stripes.
-    # Structural requirement: BM % 32 == 0.
+    # Phase 1 epilogue: 2D (row_warp × col_warp) grid.  row_warp =
+    # warp_id % (BM/32), col_warp = warp_id / (BM/32).  Requires:
+    #   BM % 32 == 0                 (32-row TMEM strips divide evenly)
+    #   NW % (BM/32) == 0            (warps split into whole col groups)
+    #   BN % (NW / (BM/32)) == 0     (columns divide into col groups)
+    #   (BN per col group) % 8 == 0  (8-col tcgen05.ld atoms)
     if bm % 32 != 0:
         out.append(
             f"**BM = {bm}** is not a multiple of 32 — the Phase-1 epilogue "
-            "reads TMEM in 32-row chunks (tcgen05.ld.32x32b), so BM must "
+            "reads TMEM in 32-row strips (tcgen05.ld.32x32b), so BM must "
             "divide evenly into them."
         )
+    else:
+        row_strips = bm // 32
+        if nw % row_strips != 0:
+            out.append(
+                f"**num_warps = {nw}** must be a multiple of BM/32 = {row_strips} "
+                "— the Phase-1 epilogue splits warps into (BM/32) row strips × "
+                "(NW / (BM/32)) column groups, so NW must divide into whole "
+                "column groups."
+            )
+        else:
+            col_groups = nw // row_strips
+            if bn % col_groups != 0 or (bn // col_groups) % 8 != 0:
+                out.append(
+                    f"**BN = {bn}** doesn't divide into {col_groups} column "
+                    f"groups of a multiple of 8 (got {bn // col_groups} cols/group). "
+                    "Each Phase-1 column group is read in 8-col tcgen05.ld atoms."
+                )
     # BM=128 is a hardware floor for the single-CTA kernel, not a TODO:
     # the tcgen05.mma.kind::f16 M-atom is 128 (BM<128 reads past the A
     # tile → illegal address) and TMEM is 128 lanes (BM>128 won't fit).

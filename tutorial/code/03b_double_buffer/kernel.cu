@@ -1,47 +1,3 @@
-// Runnable companion for Chapter 03b — double-buffer baseline.
-//
-// This kernel is the cleanest "no warp specialization" point on the
-// ladder.  A single warp issues both TMA loads and tcgen05 MMAs in a
-// serial inner loop, with a 2-slot SMEM ring buffer doing the
-// double-buffering: while iter K's MMAs are queued, iter K+1's TMA
-// can already be in flight.
-//
-// What it gets:
-//   - K-major B descriptor (from ch06)
-//   - NS-slot SMEM ring (NS user-tunable; 2 = double buffer)
-//   - Coalesced 2-phase epilogue (from ch07), generalized over
-//     (BM, NUM_WARPS) with constraint BM % (NUM_WARPS × 32) == 0
-//   - CTA-swizzle factor (from ch09) for L2 reuse on B
-//
-// What it deliberately doesn't have:
-//   - Warp specialization (no dedicated TMA/MMA warp split)
-//   - Cluster MMA (cta_group::2)
-//
-// All six tunables (BM, BN, BK, NS, GROUP_SIZE_M, NUM_WARPS) live as
-// constexpr at the top so the MVP web UI can regex-edit them
-// uniformly.
-//
-// BM is fixed at 128 for this single-CTA kernel, and that's a
-// hardware floor, not a missing feature:
-//   * tcgen05.mma.kind::f16 (cta_group::1) has an M-atom of 128 — one
-//     MMA always computes 128 rows.  BM=64 makes it read past the
-//     64-row A tile in SMEM → CUDA_ERROR_ILLEGAL_ADDRESS.
-//   * TMEM is 128 lanes, so the accumulator can hold at most M=128
-//     single-CTA.  BM=256 doesn't fit — that's what the 2-CTA cluster
-//     tier (ch08/ch09) is for (each CTA holds 128 of the 256 rows).
-// So BM=128 is THE single-CTA value.  Larger M → 2-CTA toggle.
-//
-// NW ∈ {4, 8, 16} all verified correct at BM=128.  Perf is flat
-// across them because Phase 1 of the epilogue divides work by 32-row
-// stripes (BM/32 = 4 stripes at BM=128), so only warps 0-3 ever do
-// Phase-1 reads — extra warps idle there and only help Phase 2's
-// SMEM→GMEM store, a tiny fraction of runtime.  NW < 4 (e.g. 2)
-// produces wrong output (a separate ≥4-warp tcgen05 quirk we haven't
-// traced), so the webui menu starts at 4.  Default 4.
-//
-// Toggling those on in the MVP web UI moves the user up to ch07 or
-// ch09 respectively.  This chapter is the "all toggles off" point.
-
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cstdint>
@@ -336,57 +292,52 @@ extern "C" __global__ void matmul_dbuf(
     mbarrier_wait_phase(
         (uint32_t)__cvta_generic_to_shared(&all_mmas_done), 0);
 
-    // ── Coalesced 2-phase epilogue (generalized from ch07) ──────────
+    // ── Coalesced 2-phase epilogue (row × col warp grid, from ch10) ──
     //
-    // Phase 1 MUST be partitioned by 32-row stripes, one stripe per
-    // warp — NOT by columns.  This is a hard tcgen05 constraint:
-    // `tcgen05.ld` hardwires warp_id → TMEM row group.  Warp W can
-    // only read TMEM rows [W·32, W·32+32); the row field of the ld
-    // address cannot redirect it to another warp's rows.  (Verified:
-    // a column-division layout where warp W reads every stripe but
-    // only its BN/NW columns gives a perfect diagonal of correctness
-    // — only the cell where stripe==warp_id is right, because the
-    // hardware always returns warp W its own rows regardless of the
-    // address.)
+    // TMEM read binding: `tcgen05.ld` ties a warp to one 32-row TMEM
+    // group, indexed by (warp_id % ROW_STRIPS) — a warp's lanes are
+    // wired to those 32 rows and the ld address's row field selects
+    // *which* of the ROW_STRIPS groups, but only the group matching
+    // (warp_id % ROW_STRIPS) returns valid data.  (Verified: a layout
+    // where a warp reads a stripe ≠ its own group gives garbage; the
+    // hardware hands back the warp's own rows regardless.)
     //
-    // So each warp reads its own stripe and walks all BN cols via the
-    // inner n-loop.  Constraint BM % 32 == 0.  When BM/32 ≥ NUM_WARPS,
-    // a warp does (BM/32)/NUM_WARPS stripes (stride-NW); when
-    // BM/32 < NUM_WARPS, only the first BM/32 warps run Phase 1 (the
-    // rest still help Phase 2's flat-walk store).  This is also why
-    // NW > BM/32 gives no Phase-1 speedup — there are only BM/32
-    // stripes to hand out.
+    // So we partition the NUM_WARPS warps as a 2D grid:
+    //   row_warp = warp_id % ROW_STRIPS   → which 32-row strip (0..3)
+    //   col_warp = warp_id / ROW_STRIPS   → which column slice
+    // Columns ARE divided across warps along col_warp — every warp
+    // does real Phase-1 work even at NW=8/16.  This mirrors ch10.
     //
-    // Examples (BN=256):
-    //   BM=128, NW=4 → 4 stripes / 4 warps = 1 stripe/warp
-    //   BM=128, NW=8 → 4 stripes / 8 warps = warps 0..3 active
+    //   BM=128, NW=4  → 4 row × 1 col  → each warp all BN cols
+    //   BM=128, NW=8  → 4 row × 2 col  → each warp BN/2 cols
+    //   BM=128, NW=16 → 4 row × 4 col  → each warp BN/4 cols
     auto C_sh = reinterpret_cast<__nv_bfloat16(*)[BN_PAD]>(smem);
 
     tcgen05_fence_after_thread_sync();
 
-    constexpr int NUM_STRIPES = BM / 32;
+    constexpr int ROW_STRIPS = BM / 32;             // TMEM row groups (4 @ BM=128)
+    constexpr int COL_GROUPS = NUM_WARPS / ROW_STRIPS;
+    constexpr int COLS_PER_WARP = BN / COL_GROUPS;
 
-    // Stride-NW round-robin: warp W handles stripes W, W+NW, W+2*NW...
-    // No `#pragma unroll` — trip count depends on runtime `warp_id`.
-    for (int stripe = warp_id; stripe < NUM_STRIPES; stripe += NUM_WARPS) {
-        const int row_base       = stripe * 32;
-        const int my_row         = row_base + lane;
-        const uint32_t taddr_row = taddr + ((uint32_t)row_base << 16);
+    const int row_warp = warp_id % ROW_STRIPS;
+    const int col_warp = warp_id / ROW_STRIPS;
+    const int my_row         = row_warp * 32 + lane;
+    const uint32_t taddr_row = taddr + ((uint32_t)(row_warp * 32) << 16);
+    const int col_base = col_warp * COLS_PER_WARP;
 
+    #pragma unroll
+    for (int n = col_base; n < col_base + COLS_PER_WARP; n += 8) {
+        float tmp[8];
+        tcgen05_ld_32x32b_x8(taddr_row + (uint32_t)n, tmp);
+        tcgen05_wait_ld();
+
+        __nv_bfloat162 packed[4];
         #pragma unroll
-        for (int n = 0; n < BN; n += 8) {
-            float tmp[8];
-            tcgen05_ld_32x32b_x8(taddr_row + (uint32_t)n, tmp);
-            tcgen05_wait_ld();
-
-            __nv_bfloat162 packed[4];
-            #pragma unroll
-            for (int i = 0; i < 4; i++) {
-                packed[i] = __floats2bfloat162_rn(tmp[2 * i], tmp[2 * i + 1]);
-            }
-            *reinterpret_cast<int4*>(&C_sh[my_row][n]) =
-                *reinterpret_cast<int4*>(packed);
+        for (int i = 0; i < 4; i++) {
+            packed[i] = __floats2bfloat162_rn(tmp[2 * i], tmp[2 * i + 1]);
         }
+        *reinterpret_cast<int4*>(&C_sh[my_row][n]) =
+            *reinterpret_cast<int4*>(packed);
     }
 
     __syncthreads();
