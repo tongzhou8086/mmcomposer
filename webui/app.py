@@ -75,6 +75,15 @@ st.divider()
 
 # ── Sidebar: controls ─────────────────────────────────────────────────
 
+# Recommended defaults = the best-measured config at the default shape, pulled
+# from the empirical matrix (data-driven, not hardcoded).  Falls back to fixed
+# indices if the matrix is unavailable.
+_rec = mc.recommended_config() or {}
+def _idx(opts, key, fallback):
+    v = _rec.get(key)
+    return opts.index(v) if v in opts else fallback
+_onoff = lambda key: 1 if _rec.get(key) else 0
+
 with st.sidebar:
     st.header("Kernel configuration")
 
@@ -85,38 +94,41 @@ with st.sidebar:
                          help="Input dtype for A and B.  C is fp32 accumulator → output dtype.")
 
     st.subheader("Options")
+    _rec_note = (f"  Defaults = the best-measured config at {_rec['shape']}³ "
+                 f"(~{_rec['tflops']:.0f} TFLOPS)." if _rec else "")
     st.caption("Composable knobs on one kernel — tile sizes *and* on/off toggles.  "
-               "No knob is guaranteed to help; the measured TFLOPS tell you what actually does.")
-    bm = st.selectbox("BM", mc.BM_OPTS, index=0,
+               "No knob is guaranteed to help; the measured TFLOPS tell you what actually does."
+               + _rec_note)
+    bm = st.selectbox("BM", mc.BM_OPTS, index=_idx(mc.BM_OPTS, "bm", 0),
                       help="M tile per CTA.  Locked at 128: tcgen05.mma.kind::f16 M-atom is 128 and "
                            "TMEM holds 128 lanes.  Larger M is served by the 2-CTA cluster tier.")
-    bn = st.selectbox("BN", mc.BN_OPTS, index=2,
+    bn = st.selectbox("BN", mc.BN_OPTS, index=_idx(mc.BN_OPTS, "bn", 2),
                       help="N tile per CTA.  Multiple of 64 (K-major B TMA sub-tile).  Caps at 256: "
                            "the tcgen05.mma N-atom max is 256, and the cluster splits M, not N.")
-    bk = st.selectbox("BK", mc.BK_OPTS, index=0,
+    bk = st.selectbox("BK", mc.BK_OPTS, index=_idx(mc.BK_OPTS, "bk", 0),
                       help="K tile per stage.  Locked at 64: the K-major B descriptor uses "
                            "SWIZZLE_128B → inner box = one 128 B atom = 64 BF16.")
-    ns = st.selectbox("NS (pipeline stages)", mc.NS_OPTS, index=0,
+    ns = st.selectbox("NS (pipeline stages)", mc.NS_OPTS, index=_idx(mc.NS_OPTS, "ns", 0),
                       help="SMEM ring slots — how many K-tiles in flight.  NS=2 is double buffering; "
                            "capped by SMEM: NS × slot ≤ 228 KB/CTA.")
-    gsm = st.selectbox("CTA swizzle factor (GROUP_SIZE_M)", mc.GSM_OPTS, index=3,
+    gsm = st.selectbox("CTA swizzle factor (GROUP_SIZE_M)", mc.GSM_OPTS, index=_idx(mc.GSM_OPTS, "gsm", 3),
                        help="Chunked block-id walk for L2 reuse on B.  GSM=1 disables swizzle.  "
                             "A universal tunable — every tier supports it.")
-    nw = st.selectbox("num_warps", mc.NW_OPTS, index=0,
+    nw = st.selectbox("num_warps", mc.NW_OPTS, index=_idx(mc.NW_OPTS, "nw", 0),
                       help="Warps per CTA.  The epilogue splits warps as a 2D grid: BM/32 row strips × "
                            "NW/(BM/32) column groups, so NW must be a multiple of BM/32 (= 4 at BM=128).")
 
     ms_ws = st.selectbox(
-        "Multi-staging + warp specialization", mc.ONOFF_OPTS, index=0,
+        "Multi-staging + warp specialization", mc.ONOFF_OPTS, index=_onoff("ms_ws"),
         help="Dedicated TMA + MMA warps (async producer/consumer) on top of the "
              "multi-stage ring.  Off = synchronous-MMA baseline (Tier 1).") == "On"
     two_cta = st.selectbox(
-        "2-CTA cluster MMA", mc.ONOFF_OPTS, index=0,
+        "2-CTA cluster MMA", mc.ONOFF_OPTS, index=_onoff("two_cta"),
         help="`__cluster_dims__(2,1,1)` + `cta_group::2`: two CTAs cooperate in one "
              "tcgen05.mma (half-B per CTA, doubles M per MMA).  Requires "
              "multi-staging + warp specialization (above).") == "On"
     tma_store = st.selectbox(
-        "TMA store epilogue", mc.ONOFF_OPTS, index=0,
+        "TMA store epilogue", mc.ONOFF_OPTS, index=_onoff("tma_store"),
         help="Epilogue Phase 2: write the result to GMEM with one async TMA store "
              "per CTA (swizzled SMEM staging) instead of all-thread int4 stores.  "
              "A universal knob across tiers — often *not* a win (see the measured "

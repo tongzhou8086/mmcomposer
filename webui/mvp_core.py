@@ -368,6 +368,37 @@ def cublas_tflops(shape_m):
     return load_compat().get("cublas_tflops", {}).get(str(shape_m))
 
 
+def toggles_for_dir(tier_dir):
+    """Reverse the tier map: tier_dir -> (ms_ws, two_cta) toggle state."""
+    for (ms_ws, two_cta), t in TIER_MAP.items():
+        if t and t["dir"] == tier_dir:
+            return ms_ws, two_cta
+    return False, False
+
+
+def recommended_config(shape_m=None):
+    """The highest-measured-TFLOPS *correct* config at a square shape, from
+    the empirical matrix — the 'recommended' defaults shown on page load.
+    Returns a dict with tier_dir, knobs, tma_store, ms_ws, two_cta, tflops;
+    or None if the matrix is empty."""
+    entries = [e for e in load_compat().get("entries", []) if e.get("correct")]
+    if not entries:
+        return None
+    if shape_m is None:
+        ps = perf_shapes()
+        shape_m = max(ps) if ps else None
+    best, best_tf = None, -1.0
+    for e in entries:
+        tf = ((e.get("perf") or {}).get(str(shape_m)) or {}).get("tflops")
+        if tf is not None and tf > best_tf:
+            best, best_tf = e, tf
+    if best is None:
+        return None
+    ms_ws, two_cta = toggles_for_dir(best["tier"])
+    return {**{k: best[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw", "tma_store")},
+            "ms_ws": ms_ws, "two_cta": two_cta, "tflops": best_tf, "shape": shape_m}
+
+
 def perf_shapes():
     """Square shapes (ints) the compat matrix recorded performance at."""
     return load_compat().get("perf_shapes", [])
