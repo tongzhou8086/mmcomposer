@@ -384,9 +384,17 @@ def recommended_config(shape_m=None):
     entries = [e for e in load_compat().get("entries", []) if e.get("correct")]
     if not entries:
         return None
-    if shape_m is None:
-        ps = perf_shapes()
-        shape_m = max(ps) if ps else None
+    ps = perf_shapes()
+    if not ps:
+        return None
+    # Recommend for the requested shape if we swept it; otherwise fall back to
+    # the nearest swept shape (a heuristic — there's no measurement for an
+    # unswept shape, and large shapes' optima are reasonably stable).
+    if shape_m is None or shape_m not in ps:
+        ref = max(ps) if shape_m is None else min(ps, key=lambda s: abs(s - shape_m))
+    else:
+        ref = shape_m
+    shape_m = ref
     best, best_tf = None, -1.0
     for e in entries:
         tf = ((e.get("perf") or {}).get(str(shape_m)) or {}).get("tflops")
