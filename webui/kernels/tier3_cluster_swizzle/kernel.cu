@@ -67,9 +67,6 @@ constexpr int SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES;      // 32 KB / slot
 // See `shared_for()` in `main.py` for the launcher-side computation,
 // and the README's "Sizing the dynamic SMEM" subsection for the
 // full discussion.
-constexpr int BN_PAD                 = BN + 8;
-constexpr int EPILOGUE_STAGING_BYTES = BM * BN_PAD * BF16_BYTES;   // 67584 B ≈ 66 KB
-
 constexpr int WARP_SIZE = 32;
 constexpr int THREADS   = NUM_WARPS * WARP_SIZE;
 

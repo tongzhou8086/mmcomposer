@@ -24,9 +24,6 @@ constexpr int A_SLOT_BYTES = BM * BK * BF16_BYTES;
 constexpr int B_SLOT_BYTES = BN * BK * BF16_BYTES;
 constexpr int SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES;
 
-constexpr int BN_PAD                 = BN + 8;
-constexpr int EPILOGUE_STAGING_BYTES = BM * BN_PAD * BF16_BYTES;
-
 constexpr int WARP_SIZE = 32;
 constexpr int THREADS   = NUM_WARPS * WARP_SIZE;
 

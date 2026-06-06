@@ -61,10 +61,6 @@ ONOFF_OPTS = ["Off", "On"]
 GPU_OPTS   = ["B200 (sm_100a)", "H100 (sm_90a) — coming soon", "RTX 50xx (sm_120) — coming soon"]
 DTYPE_OPTS = ["bfloat16", "float16 — coming soon", "fp8 e4m3 — coming soon"]
 
-# Knob name -> attribute used in substitution.  Order matters only for
-# display.  All three tiers carry the identical constexpr block.
-KNOB_NAMES = ["BM", "BN", "BK", "NS", "GROUP_SIZE_M", "NUM_WARPS"]
-
 
 # ── Tier map: (multistage+warpspec, two_cta) -> implementation ────────
 #
