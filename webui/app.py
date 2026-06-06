@@ -172,6 +172,14 @@ if tier is None:
 st.markdown(f"### {tier['label']}")
 st.caption(tier["desc"])
 
+# Load the empirical compat matrix once, up front, so it's always defined
+# (the Benchmark tab reads `cm` even when the config is invalid).  It's an
+# enhancement, so any load issue degrades gracefully rather than crashing.
+try:
+    cm = mc.load_compat()
+except Exception:
+    cm = {}
+
 
 # ── Validate (static checker) ─────────────────────────────────────────
 
@@ -184,12 +192,7 @@ if warnings:
 else:
     st.success("✅ Configuration passes all static constraint checks for the selected tier.")
     # Empirical ground truth from the committed B200 compatibility matrix.
-    # Wrapped defensively: the matrix annotation is an enhancement, so any
-    # issue loading it (e.g. a stale module right after a deploy) must not
-    # take down the configurator.
-    cm = {}
     try:
-        cm = mc.load_compat()
         status, entry = mc.compat_status(tier["dir"], bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
         pshapes = mc.perf_shapes()
         if status == "verified":
