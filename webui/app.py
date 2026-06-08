@@ -229,30 +229,30 @@ def ssh_copy_button(name, content, label):
                     border-radius: 0.5rem; background-color: #ffffff;
                     color: rgb(49,51,63); cursor: pointer; transition: all .1s; }}
         .mmc-btn:hover {{ border-color: #ff4b4b; color: #ff4b4b; }}
-        .mmc-btn:active {{ background-color: #ff4b4b; color: #ffffff; border-color: #ff4b4b; }}
-        .mmc-msg {{ font-family: "Source Sans Pro", sans-serif; font-size: 0.8rem;
-                    color: #09ab3b; margin-top: 0.35rem; text-align: center; }}
+        .mmc-btn.ok {{ color: #09ab3b; border-color: #09ab3b; }}
         @media (prefers-color-scheme: dark) {{
           .mmc-btn {{ background-color: rgb(19,23,32); color: rgb(250,250,250);
                       border-color: rgba(250,250,250,0.2); }}
         }}
       </style>
       <button class="mmc-btn" id="b">📋 Copy {label} command for SSH</button>
-      <div class="mmc-msg" id="m"></div>
       <script>
         const cmd = {payload};
-        document.getElementById('b').onclick = () => {{
+        const btn = document.getElementById('b');
+        const orig = btn.textContent;
+        btn.onclick = () => {{
           const ta = document.createElement('textarea');
           ta.value = cmd; ta.style.position = 'fixed'; ta.style.opacity = '0';
           document.body.appendChild(ta); ta.focus(); ta.select();
           let ok = false; try {{ ok = document.execCommand('copy'); }} catch (e) {{}}
           document.body.removeChild(ta);
-          document.getElementById('m').textContent = ok
-            ? '✅ Copied — paste into your SSH terminal'
-            : '⚠️ Copy blocked by browser — use the source block below';
+          // Feedback lives in the button label itself — no extra line / layout shift.
+          btn.textContent = ok ? '✅ Copied — paste into your SSH terminal' : '⚠️ Copy blocked — use the code below';
+          btn.classList.toggle('ok', ok);
+          setTimeout(() => {{ btn.textContent = orig; btn.classList.remove('ok'); }}, 1800);
         }};
       </script>
-    """, height=64)
+    """, height=46)
 
 
 tab_kernel, tab_host, tab_bench = st.tabs(["Kernel code", "Host code (self-contained)", "Benchmark (measured on B200)"])
