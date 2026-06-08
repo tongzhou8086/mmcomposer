@@ -205,9 +205,6 @@ else:
 kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
 host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
 
-_cfg_tag = f"{tier['dir']}_bm{bm}_bn{bn}_bk{bk}_ns{ns}_gsm{gsm}_nw{nw}_ts{tma_store}"
-
-
 def ssh_snippet(name, content, label):
     """A copy-paste block that recreates the file on a remote/SSH host.
 
@@ -224,15 +221,13 @@ def ssh_snippet(name, content, label):
 tab_kernel, tab_host, tab_bench = st.tabs(["Kernel code", "Host code (self-contained)", "Benchmark (measured on B200)"])
 
 with tab_kernel:
-    kname = f"mm_{_cfg_tag}.cu"
-    st.download_button("⬇ Download kernel.cu", data=kernel_src, file_name=kname, mime="text/x-c")
-    ssh_snippet(kname, kernel_src, "kernel.cu")
+    st.download_button("⬇ Download kernel.cu", data=kernel_src, file_name="kernel.cu", mime="text/x-c")
+    ssh_snippet("kernel.cu", kernel_src, "kernel.cu")
     st.code(kernel_src, language="cpp", line_numbers=True)
 
 with tab_host:
-    hname = f"host_{_cfg_tag}.py"
-    st.download_button("⬇ Download host.py", data=host_src, file_name=hname, mime="text/x-python")
-    ssh_snippet(hname, host_src, "host.py")
+    st.download_button("⬇ Download host.py", data=host_src, file_name="host.py", mime="text/x-python")
+    ssh_snippet("host.py", host_src, "host.py")
     st.code(host_src, language="python", line_numbers=True)
 
 with tab_bench:
