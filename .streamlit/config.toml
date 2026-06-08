@@ -1,0 +1,4 @@
+# Serve files under webui/static/ at <app-url>/app/static/<file> so the
+# generated kernel/host can be fetched with curl/wget from a remote/SSH host.
+[server]
+enableStaticServing = true
