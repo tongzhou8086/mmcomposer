@@ -307,21 +307,14 @@ with tab_bench:
                      tma_store=tma_store, persistent=persistent)
         sig = (tier["dir"], tuple(sorted(knobs.items())), m0, n0, k0)
         cache = st.session_state.setdefault("live_cache", {})
-        # No `disabled=` — the button stays clickable so you can re-measure any
-        # time (e.g. to gauge run-to-run / boost-clock variance); each click
-        # submits a fresh srun and overwrites the cached result.
         clicked = st.button("▶  Benchmark this config on a B200 (live)", type="primary",
-                            key="live_bench_btn",
-                            help="Compile + run this kernel + cuBLAS on a real B200 via srun. "
-                                 "Re-clickable — click again to re-measure.")
+                            disabled=bool(warnings),
+                            help="Compile + run this kernel + cuBLAS on a real B200 via srun.")
         auto = st.session_state.pop("run_live", False)
-        if clicked or auto:
-            if warnings:
-                st.warning("Fix the configuration warnings above before benchmarking.")
-            else:
-                with st.spinner(f"Submitting {m0}×{n0}×{k0} to a B200 via srun "
-                                "(queue + compile + run + cuBLAS)…"):
-                    cache[sig] = live_bench.run_live_bench(tier, knobs, m0, n0, k0)
+        if (clicked or auto) and not warnings:
+            with st.spinner(f"Submitting {m0}×{n0}×{k0} to a B200 via srun "
+                            "(queue + compile + run + cuBLAS)…"):
+                cache[sig] = live_bench.run_live_bench(tier, knobs, m0, n0, k0)
         res = cache.get(sig)
         if res and res.get("ok"):
             st.success(
@@ -329,11 +322,12 @@ with tab_bench:
                 f"{m0}×{n0}×{k0} · **{res['vs_cublas']:.0%} of cuBLAS** "
                 f"({res['cublas_tflops']:.0f} TFLOPS) · {res['us']:.1f} µs/call · "
                 f"rel err {res['rel_err']:.2%} · grid {res.get('grid')}")
-            st.caption("Click again to re-measure (numbers vary a couple % run-to-run — fresh B200 per srun).")
         elif res:
             st.error(f"❌ Live benchmark failed: {res.get('error')}")
             if res.get("stderr"):
                 st.code(res["stderr"], language="text")
+        elif warnings:
+            st.info("Fix the configuration warnings above, then re-generate to benchmark live.")
         else:
             st.info("Click **Benchmark this config on a B200 (live)** to measure this exact shape.")
         st.divider()
