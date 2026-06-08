@@ -85,7 +85,19 @@
             const int col  = (flat % CHUNKS_PER_ROW) * CHUNK_BF16;
             const int gr   = out_m_base + row;
             const int gc   = off_n + col;
-            *reinterpret_cast<int4*>(&C_ptr[gr * N + gc]) =
-                *reinterpret_cast<const int4*>(&C_sh[row][col]);
+            if constexpr (EPILOGUE_L1_NO_ALLOCATE) {
+                // C is write-once: hint L1 not to allocate for the store so it
+                // doesn't evict A/B.  Measured ~perf-neutral on B200 (the reuse
+                // that matters is L2, which this L1 hint doesn't touch), kept
+                // as a free, honest knob.
+                const int4 _v = *reinterpret_cast<const int4*>(&C_sh[row][col]);
+                asm volatile(
+                    "st.relaxed.cta.global.L1::no_allocate.v4.b32 [%0], {%1,%2,%3,%4};"
+                    :: "l"(&C_ptr[gr * N + gc]),
+                       "r"(_v.x), "r"(_v.y), "r"(_v.z), "r"(_v.w) : "memory");
+            } else {
+                *reinterpret_cast<int4*>(&C_ptr[gr * N + gc]) =
+                    *reinterpret_cast<const int4*>(&C_sh[row][col]);
+            }
         }
     }

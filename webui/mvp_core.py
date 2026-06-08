@@ -66,6 +66,14 @@ TMA_STORE_OPTS = [0, 1]
 # win).  Tried on the Tier 3 cluster but measured a wash (cluster-barrier
 # overhead cancels the gain), so it stays off there.
 PERSISTENT_OPTS = [0, 1]
+# Output-store L1 cache hint: 1 = `.L1::no_allocate` on the int4 epilogue
+# store (C is write-once, so don't evict A/B from L1).  Measured perf-neutral
+# on B200 (the reuse that matters is L2, which the L1 hint doesn't touch), but
+# correct and never-negative — kept as a free composable knob.  Only affects
+# the int4 store path (TMA_STORE=0); a no-op under the TMA-store epilogue.
+# Perf-neutral, so it is NOT a compat-matrix dimension (a no_allocate=1 config
+# shares the swept no_allocate=0 entry).
+NO_ALLOCATE_OPTS = [0, 1]
 # On/off knobs are presented as dropdowns too, for a uniform UI (and to
 # leave room for an "Auto" value once auto-tuning lands).
 ONOFF_OPTS = ["Off", "On"]
@@ -284,15 +292,17 @@ def substitute_launcher_constants(src: str, **values) -> str:
     return src
 
 
-def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0) -> dict:
+def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0, no_allocate=0) -> dict:
     """Map UI knobs to the constant names used in the source files.
 
     PERSISTENT only appears in the launcher (it's a grid choice, not a
-    kernel constexpr); substitute_kernel_constexprs simply finds no match
-    in kernel.cu and leaves it untouched.
+    kernel constexpr); EPILOGUE_L1_NO_ALLOCATE only appears in the kernel.
+    substitute_* simply finds no match for the irrelevant one and leaves it
+    untouched.
     """
     return {"BM": bm, "BN": bn, "BK": bk, "NS": ns, "GROUP_SIZE_M": gsm,
-            "NUM_WARPS": nw, "TMA_STORE": tma_store, "PERSISTENT": persistent}
+            "NUM_WARPS": nw, "TMA_STORE": tma_store, "PERSISTENT": persistent,
+            "EPILOGUE_L1_NO_ALLOCATE": no_allocate}
 
 
 def _strip_module_docstring(src: str) -> str:
@@ -329,14 +339,15 @@ def _splice_fragments(src: str) -> str:
     return "".join(out)
 
 
-def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0) -> str:
+def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, no_allocate=0) -> str:
     """Return the substituted, fragment-stitched kernel.cu for a tier."""
     src = (KERNELS_DIR / tier["dir"] / "kernel.cu").read_text()
     src = _splice_fragments(src)
-    return substitute_kernel_constexprs(src, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store))
+    return substitute_kernel_constexprs(
+        src, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store, no_allocate=no_allocate))
 
 
-def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0) -> str:
+def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0, no_allocate=0) -> str:
     """Return a *self-contained* host script: runtime preamble + launcher.
 
     The result has no ``cuda_utils`` import and no ``sys.path`` hack — it
@@ -351,7 +362,7 @@ def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0) 
         "\n"
         f"Tier: {tier['label']}\n"
         f"Config: BM={bm} BN={bn} BK={bk} NS={ns} GROUP_SIZE_M={gsm} NUM_WARPS={nw} "
-        f"TMA_STORE={tma_store} PERSISTENT={persistent}\n"
+        f"TMA_STORE={tma_store} PERSISTENT={persistent} EPILOGUE_L1_NO_ALLOCATE={no_allocate}\n"
         "\n"
         "Run with:  python <this file>.py   (kernel.cu must sit alongside it)\n"
         "Requires:  torch, numpy, cuda-python (cuda.bindings), and nvcc on PATH.\n"
