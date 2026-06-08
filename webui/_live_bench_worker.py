@@ -5,7 +5,7 @@ one (M,N,K), and writes {us, tflops, cublas_tflops, vs_cublas, rel_err} JSON.
 Decoupled from mvp_core on purpose: the app (jump node, no GPU) renders the
 kernel; this worker only needs torch + cuda-python + nvcc.
 """
-import os, sys, json, argparse, ctypes
+import os, sys, json, argparse, ctypes, statistics
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "kernels"))
@@ -76,9 +76,14 @@ def main():
         ref = (A.float() @ B.float()).to(torch.bfloat16)
         rel = (C.float() - ref.float()).abs().max().item() / ref.float().abs().max().item()
 
-        us = rt.time_kernel_us(lambda: rt.launch(kernel, grid=grid, block=block,
-                                                 shared=shared, args=args, sync=False))
-        cub_us = rt.time_kernel_us(lambda: torch.mm(A, B))
+        # Median over several do_bench calls — kernel timing is stable, but
+        # cuBLAS varies several % even within one allocation; the median keeps
+        # the per-click ratio honest.  (Inter-allocation clock draw still
+        # applies — each srun lands on a B200 at whatever boost state it's in.)
+        us = statistics.median(rt.time_kernel_us(lambda: rt.launch(
+            kernel, grid=grid, block=block, shared=shared, args=args, sync=False))
+            for _ in range(5))
+        cub_us = statistics.median(rt.time_kernel_us(lambda: torch.mm(A, B)) for _ in range(5))
         flops = 2.0 * M * N * K
         res.update(ok=(rel < 5e-2), rel_err=rel, us=us, tflops=flops / (us * 1e-6) / 1e12,
                    cublas_us=cub_us, cublas_tflops=flops / (cub_us * 1e-6) / 1e12,
