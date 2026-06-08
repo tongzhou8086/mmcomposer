@@ -18,6 +18,7 @@ Run locally:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -205,18 +206,42 @@ else:
 kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
 host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
 
-def ssh_snippet(name, content, label):
-    """A copy-paste block that recreates the file on a remote/SSH host.
+def ssh_copy_button(name, content, label):
+    """One-click 'copy the heredoc to clipboard' for SSH use.
 
-    Streamlit Cloud gates every URL (static files included) behind a browser
-    session, so curl/wget can't fetch a link.  A heredoc you paste into the
-    SSH terminal sidesteps that entirely — no URL, no auth.  The quoted
-    delimiter prevents the shell from expanding anything in the source."""
-    body = content if content.endswith("\n") else content + "\n"   # delimiter on its own line, no extra blank
-    with st.expander("📋 Copy-paste for SSH"):
-        st.caption(f"Recreate {label} on a remote host — click the copy icon, "
-                   "paste into your terminal, press Enter.")
-        st.code(f"cat > {name} <<'MMCOMPOSER_EOF'\n{body}MMCOMPOSER_EOF", language="bash")
+    Streamlit Cloud gates every URL behind a browser session, so curl/wget
+    can't fetch a link — instead we copy a `cat > file <<'EOF' ... EOF` block
+    to the clipboard; paste it into the SSH terminal to recreate the file.
+    The clipboard API is usually blocked inside the component iframe, so we
+    use document.execCommand('copy') on a hidden textarea (works in-iframe),
+    with a visible confirmation so a failure is never silent."""
+    body = content if content.endswith("\n") else content + "\n"
+    cmd = f"cat > {name} <<'MMCOMPOSER_EOF'\n{body}MMCOMPOSER_EOF\n"
+    payload = json.dumps(cmd)   # safe-escape the full source into a JS string
+    components.html(f"""
+      <style>
+        .mmc-btn {{ font: 600 14px sans-serif; width: 100%; padding: .5rem .8rem;
+                    border: 1px solid rgba(128,128,128,.4); border-radius: .5rem;
+                    background: transparent; color: inherit; cursor: pointer; }}
+        .mmc-btn:hover {{ border-color: #ff4b4b; color: #ff4b4b; }}
+        .mmc-msg {{ font: 13px sans-serif; color: #09ab3b; margin-top: 4px; }}
+      </style>
+      <button class="mmc-btn" id="b">📋 Copy {label} command for SSH</button>
+      <div class="mmc-msg" id="m"></div>
+      <script>
+        const cmd = {payload};
+        document.getElementById('b').onclick = () => {{
+          const ta = document.createElement('textarea');
+          ta.value = cmd; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.focus(); ta.select();
+          let ok = false; try {{ ok = document.execCommand('copy'); }} catch (e) {{}}
+          document.body.removeChild(ta);
+          document.getElementById('m').textContent = ok
+            ? '✅ Copied — paste into your SSH terminal'
+            : '⚠️ Copy blocked by browser — use the source block below';
+        }};
+      </script>
+    """, height=64)
 
 
 tab_kernel, tab_host, tab_bench = st.tabs(["Kernel code", "Host code (self-contained)", "Benchmark (measured on B200)"])
@@ -227,7 +252,7 @@ with tab_kernel:
         st.download_button("⬇ Download kernel.cu", data=kernel_src, file_name="kernel.cu",
                            mime="text/x-c", width="stretch")
     with sc:
-        ssh_snippet("kernel.cu", kernel_src, "kernel.cu")
+        ssh_copy_button("kernel.cu", kernel_src, "kernel.cu")
     st.code(kernel_src, language="cpp", line_numbers=True)
 
 with tab_host:
@@ -236,7 +261,7 @@ with tab_host:
         st.download_button("⬇ Download host.py", data=host_src, file_name="host.py",
                            mime="text/x-python", width="stretch")
     with sc:
-        ssh_snippet("host.py", host_src, "host.py")
+        ssh_copy_button("host.py", host_src, "host.py")
     st.code(host_src, language="python", line_numbers=True)
 
 with tab_bench:
