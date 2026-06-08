@@ -29,6 +29,7 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit.components.v1 as components
 import mvp_core as mc
+import live_bench
 
 
 # ── Page setup ────────────────────────────────────────────────────────
@@ -133,6 +134,7 @@ if generate:
     st.session_state.applied = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                                     ms_ws=ms_ws, two_cta=two_cta, tma_store=int(tma_store),
                                     persistent=int(persistent), shapes_text=shapes_text)
+    st.session_state.run_live = True   # fire the on-the-fly B200 bench (if live mode)
 
 if "applied" not in st.session_state:
     st.info("Configure parameters in the sidebar, then click **🛠  Generate kernel**.")
@@ -296,6 +298,40 @@ with tab_host:
     st.code(host_src, language="python", line_numbers=True)
 
 with tab_bench:
+    # ── On-the-fly B200 benchmark (jump-node / live mode) ────────────
+    # Renders this exact config and submits compile+run+cuBLAS to a B200 via
+    # srun — real measured numbers for the *entered* shape, not a matrix lookup.
+    if live_bench.live_available() and shapes:
+        m0, n0, k0 = shapes[0]
+        knobs = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
+                     tma_store=tma_store, persistent=persistent)
+        sig = (tier["dir"], tuple(sorted(knobs.items())), m0, n0, k0)
+        cache = st.session_state.setdefault("live_cache", {})
+        clicked = st.button("▶  Benchmark this config on a B200 (live)", type="primary",
+                            disabled=bool(warnings),
+                            help="Compile + run this kernel + cuBLAS on a real B200 via srun.")
+        auto = st.session_state.pop("run_live", False)
+        if (clicked or auto) and not warnings:
+            with st.spinner(f"Submitting {m0}×{n0}×{k0} to a B200 via srun "
+                            "(queue + compile + run + cuBLAS)…"):
+                cache[sig] = live_bench.run_live_bench(tier, knobs, m0, n0, k0)
+        res = cache.get(sig)
+        if res and res.get("ok"):
+            st.success(
+                f"✅ **Measured live on B200** — {res['tflops']:.0f} TFLOPS at "
+                f"{m0}×{n0}×{k0} · **{res['vs_cublas']:.0%} of cuBLAS** "
+                f"({res['cublas_tflops']:.0f} TFLOPS) · {res['us']:.1f} µs/call · "
+                f"rel err {res['rel_err']:.2%} · grid {res.get('grid')}")
+        elif res:
+            st.error(f"❌ Live benchmark failed: {res.get('error')}")
+            if res.get("stderr"):
+                st.code(res["stderr"], language="text")
+        elif warnings:
+            st.info("Fix the configuration warnings above, then re-generate to benchmark live.")
+        else:
+            st.info("Click **Benchmark this config on a B200 (live)** to measure this exact shape.")
+        st.divider()
+
     try:
         pshapes = mc.perf_shapes()
     except Exception:
