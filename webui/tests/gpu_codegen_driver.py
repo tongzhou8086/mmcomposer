@@ -65,6 +65,34 @@ def all_combos(tier_dirs):
                              tma_store=ts, persistent=pers)
 
 
+def parse_perf_shapes(spec):
+    """Parse --perf-shapes: 'S' -> square (S,S,S); 'MxNxK' -> rectangular."""
+    out = []
+    for tok in spec.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "x" in tok.lower():
+            M, N, K = (int(v) for v in tok.lower().split("x"))
+        else:
+            M = N = K = int(tok)
+        out.append((M, N, K))
+    return out
+
+
+def shape_compatible(tier, k, M, N, K):
+    """Can this combo's tile geometry tile (M, N, K) exactly?  The cluster
+    tier needs M divisible by CTA_GROUP*BM (2 row-blocks per cluster); all
+    tiers need M%BM, N%BN, K%BK == 0.  Incompatible (tier, shape) pairs are
+    skipped at sweep time, not recorded as failures."""
+    bm, bn, bk = k["bm"], k["bn"], k["bk"]
+    if M % bm or N % bn or K % bk:
+        return False
+    if tier["cluster"] and (M % (2 * bm)):
+        return False
+    return True
+
+
 def launch_spec(tier, k, M, N, K, num_sms=None):
     """Compute (grid, block, shared_bytes) for a config at shape (M,N,K)."""
     cta_group = 2 if tier["cluster"] else 1
@@ -135,6 +163,8 @@ def launch_from_cubin(tier, k, arch, shapes, do_bench=True, num_sms=None):
         overall = True
         for sh in shapes:
             M, N, K = sh["M"], sh["N"], sh["K"]
+            if not shape_compatible(tier, k, M, N, K):
+                continue   # tile geometry can't tile this shape (e.g. cluster, M%256!=0)
             grid, block, shared = launch_spec(tier, k, M, N, K, num_sms)
             rt.cu(driver.cuFuncSetAttribute(
                 kernel, driver.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared))
@@ -168,7 +198,7 @@ def launch_from_cubin(tier, k, arch, shapes, do_bench=True, num_sms=None):
                     kernel, grid=grid, block=block, shared=shared, args=args, sync=False))
                 entry["us"] = us
                 entry["tflops"] = (2.0 * M * N * K) / (us * 1e-6) / 1e12
-            res["perf"][str(M)] = entry
+            res["perf"][mc.shape_key(M, N, K)] = entry
         res["correct"] = overall
     except Exception as e:  # noqa: BLE001 — record any failure, keep going
         res["error"] = f"{type(e).__name__}: {e}"
@@ -250,7 +280,7 @@ def main():
     ap.add_argument("--jsonl", default=None, help="internal: worker append path")
     args = ap.parse_args()
 
-    shape_list = [(int(s), int(s), int(s)) for s in args.perf_shapes.split(",")]
+    shape_list = parse_perf_shapes(args.perf_shapes)
     tier_dirs = args.tiers.split(",")
     SCRATCH.mkdir(parents=True, exist_ok=True)
     to_run, n_valid, n_invalid, n_sample = build_to_run(tier_dirs, args.invalid_sample)
@@ -275,8 +305,9 @@ def main():
         A = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")
         B = torch.randn(K, N, dtype=torch.bfloat16, device="cuda")
         us = rt.time_kernel_us(lambda: torch.mm(A, B))   # A:(M,K) @ B:(K,N)
-        cublas_tflops[str(M)] = (2.0 * M * N * K) / (us * 1e-6) / 1e12
-        print(f"# cuBLAS {M}^3: {cublas_tflops[str(M)]:.0f} TFLOPS", flush=True)
+        key = mc.shape_key(M, N, K)
+        cublas_tflops[key] = (2.0 * M * N * K) / (us * 1e-6) / 1e12
+        print(f"# cuBLAS {key}: {cublas_tflops[key]:.0f} TFLOPS", flush=True)
         del A, B
     torch.cuda.empty_cache()
 
@@ -353,26 +384,27 @@ def main():
     for r in surprises:
         print(f"INVALID-but-WORKS  {r['tier']} bn{r['bn']} ns{r['ns']} gsm{r['gsm']} nw{r['nw']} ts{r.get('tma_store',0)}")
 
-    # Best (max-TFLOPS) valid combo per tier at the largest shape.
-    big = str(shape_list[-1][0])
     print("\n=== SUMMARY ===")
     print(f"valid combos run:        {n_valid}   (worker spawns: {n_spawns})")
     print(f"  compiled OK:           {n_comp_ok}/{len(jobs)} (incl. invalid sample)")
     print(f"  validator-valid BAD:   {len(bad)}   (must be 0)")
     print(f"invalid combos sampled:  {n_sample}")
     print(f"  invalid-but-correct:   {len(surprises)}   (investigate if > 0)")
+    # Best (max-TFLOPS) valid combo per tier, at each swept shape.  A tier that
+    # can't tile a shape (e.g. cluster, M%256!=0) simply has no entry there.
     for (M, N, K) in shape_list:
-        print(f"cuBLAS {M}^3: {cublas_tflops[str(M)]:.0f} TFLOPS")
-    for tdir in tier_dirs:
-        cand = [r for r in ordered if r["tier"] == tdir and r["validator"] == "valid"
-                and r.get("perf", {}).get(big, {}).get("tflops")]
-        if cand:
-            best = max(cand, key=lambda r: r["perf"][big]["tflops"])
-            tf = best["perf"][big]["tflops"]
-            ratio = tf / cublas_tflops[big]
-            print(f"best {tdir:24} @ {big}^3: {tf:.0f} TFLOPS ({ratio:.0%} cuBLAS)  "
-                  f"bn{best['bn']} ns{best['ns']} gsm{best['gsm']} nw{best['nw']} "
-                  f"ts{best.get('tma_store',0)} pers{best.get('persistent',0)}")
+        key = mc.shape_key(M, N, K)
+        print(f"cuBLAS {key}: {cublas_tflops[key]:.0f} TFLOPS")
+        for tdir in tier_dirs:
+            cand = [r for r in ordered if r["tier"] == tdir and r["validator"] == "valid"
+                    and r.get("perf", {}).get(key, {}).get("tflops")]
+            if cand:
+                best = max(cand, key=lambda r: r["perf"][key]["tflops"])
+                tf = best["perf"][key]["tflops"]
+                ratio = tf / cublas_tflops[key]
+                print(f"  best {tdir:24}: {tf:.0f} TFLOPS ({ratio:.0%} cuBLAS)  "
+                      f"bn{best['bn']} ns{best['ns']} gsm{best['gsm']} nw{best['nw']} "
+                      f"ts{best.get('tma_store',0)} pers{best.get('persistent',0)}")
 
     if args.json:
         pathlib.Path(args.json).write_text(json.dumps(ordered, indent=2))
@@ -398,7 +430,7 @@ def main():
     matrix = {
         "generated_by": "webui/tests/gpu_codegen_driver.py",
         "arch": arch,
-        "perf_shapes": [s[0] for s in shape_list],
+        "perf_shapes": [list(s) for s in shape_list],
         "cublas_tflops": {s: round(v, 1) for s, v in cublas_tflops.items()},
         "tolerance_rel_err": 5e-2,
         "n_entries": len(entries),

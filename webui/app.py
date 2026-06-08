@@ -181,7 +181,8 @@ except Exception:
 
 warnings = mc.validate_config(bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
                               tma_store=tma_store, persistent=persistent,
-                              persistent_ok=tier.get("persistent_ok", False))
+                              persistent_ok=tier.get("persistent_ok", False),
+                              shape=shapes[0] if shapes else None)
 if warnings:
     st.error(f"⚠️  **{len(warnings)} configuration warning(s)** — this combination won't run.  "
              "Fix in the sidebar and re-generate.")
@@ -193,14 +194,22 @@ else:
     try:
         status, entry = mc.compat_status(tier["dir"], bm, bn, bk, ns, gsm, nw,
                                           tma_store=tma_store, persistent=persistent)
-        pshapes = mc.perf_shapes()
         if status == "verified":
-            biggest = max(pshapes) if pshapes else None
-            p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, biggest,
-                               tma_store=tma_store, persistent=persistent) if biggest else None
+            # Prefer perf at the shape the user is tuning; else the largest swept square.
+            em, en, ek = shapes[0]
+            p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, em, en, ek,
+                               tma_store=tma_store, persistent=persistent)
+            ref = (em, en, ek)
+            if not (p and p.get("tflops")):
+                squares = [t for t in mc.perf_shapes() if t[0] == t[1] == t[2]]
+                if squares:
+                    ref = max(squares)
+                    p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, *ref,
+                                       tma_store=tma_store, persistent=persistent)
             msg = f"✅ Empirically verified on B200 ({cm.get('arch', 'sm_100a')}): compiles, runs, correct."
             if p and p.get("tflops"):
-                msg += f"  {p['tflops']:.0f} TFLOPS at {biggest}³ ({p['vs_cublas']:.0%} of cuBLAS)."
+                lbl = f"{ref[0]}³" if ref[0] == ref[1] == ref[2] else f"{ref[0]}×{ref[1]}×{ref[2]}"
+                msg += f"  {p['tflops']:.0f} TFLOPS at {lbl} ({p['vs_cublas']:.0%} of cuBLAS)."
             st.success(msg)
         elif status == "failed":
             st.error("❌ This combination is in the B200 compatibility matrix as **failing** "
@@ -291,16 +300,17 @@ with tab_bench:
         pshapes = mc.perf_shapes()
     except Exception:
         pshapes = []
-    swept = ", ".join(f"{s}³" for s in pshapes) if pshapes else "the swept shapes"
+    swept = ", ".join(f"{s[0]}³" if s[0] == s[1] == s[2] else f"{s[0]}×{s[1]}×{s[2]}"
+                      for s in pshapes) if pshapes else "the swept shapes"
     st.caption(f"Numbers are **measured on a real B200** ({cm.get('arch', 'sm_100a')}) for this exact "
                f"config, recorded at {swept} via `do_bench`.  Download the kernel + host to reproduce.")
     rows = []
     for (m, n, k) in shapes:
         square = (m == n == k)
         try:
-            p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, m,
-                               tma_store=tma_store, persistent=persistent) if square else None
-            cub = mc.cublas_tflops(m) if square else None
+            p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, m, n, k,
+                               tma_store=tma_store, persistent=persistent)
+            cub = mc.cublas_tflops(m, n, k)
         except Exception:
             p, cub = None, None
         rows.append({

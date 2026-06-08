@@ -126,7 +126,7 @@ def tier_for(ms_ws: bool, two_cta: bool):
 # ── Validation ────────────────────────────────────────────────────────
 
 def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
-                    persistent=0, persistent_ok=True) -> list[str]:
+                    persistent=0, persistent_ok=True, shape=None) -> list[str]:
     """Return a list of human-readable warnings; empty list = valid.
 
     ``cluster`` selects the 2-CTA geometry: each CTA owns BN/2 columns of
@@ -138,6 +138,23 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
     """
     out: list[str] = []
     cta_group = 2 if cluster else 1
+
+    # Shape-tiling: does this config's tile geometry tile (M, N, K) exactly?
+    # Pure divisibility, known statically — mirrors the sweep's skip rule.
+    if shape is not None:
+        M, N, K = shape
+        if M % bm:
+            out.append(f"**M = {M}** must be a multiple of BM = {bm}.")
+        if N % bn:
+            out.append(f"**N = {N}** must be a multiple of BN = {bn}.")
+        if K % bk:
+            out.append(f"**K = {K}** must be a multiple of BK = {bk}.")
+        if cluster and (M % (cta_group * bm)):
+            out.append(
+                f"**M = {M}**: the 2-CTA cluster tiles {cta_group}×BM = {cta_group * bm} "
+                f"rows per cluster, so M must be a multiple of {cta_group * bm} "
+                f"(M % {cta_group * bm} = {M % (cta_group * bm)}).  Use the single-CTA tier for this M."
+            )
 
     # Persistent is a launch-side knob, but only tiers with the CTA tile
     # loop can be launched with grid < num_tiles without dropping output.
@@ -393,18 +410,24 @@ def compat_status(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0):
     return ("verified" if e["correct"] else "failed"), e
 
 
-def compat_perf(tier_dir, bm, bn, bk, ns, gsm, nw, shape_m, tma_store=0, persistent=0):
-    """Return the measured {rel_err, tflops, vs_cublas} for this combo at a
-    square shape (M=N=K=shape_m), or None if not in the matrix."""
+def shape_key(M, N, K):
+    """Canonical perf-matrix key for a shape: ``'S'`` for a square SxSxS
+    (back-compatible with the old int-string keys), else ``'MxNxK'``."""
+    return str(M) if (M == N == K) else f"{M}x{N}x{K}"
+
+
+def compat_perf(tier_dir, bm, bn, bk, ns, gsm, nw, M, N, K, tma_store=0, persistent=0):
+    """Return the measured {rel_err, tflops, vs_cublas} for this combo at
+    shape (M, N, K), or None if not in the matrix."""
     e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent))
     if e is None:
         return None
-    return (e.get("perf") or {}).get(str(shape_m))
+    return (e.get("perf") or {}).get(shape_key(M, N, K))
 
 
-def cublas_tflops(shape_m):
-    """Measured cuBLAS TFLOPS at a square shape, or None."""
-    return load_compat().get("cublas_tflops", {}).get(str(shape_m))
+def cublas_tflops(M, N, K):
+    """Measured cuBLAS TFLOPS at shape (M, N, K), or None."""
+    return load_compat().get("cublas_tflops", {}).get(shape_key(M, N, K))
 
 
 def toggles_for_dir(tier_dir):
@@ -415,28 +438,29 @@ def toggles_for_dir(tier_dir):
     return False, False
 
 
-def recommended_config(shape_m=None):
-    """The highest-measured-TFLOPS *correct* config at a square shape, from
-    the empirical matrix — the 'recommended' defaults shown on page load.
-    Returns a dict with tier_dir, knobs, tma_store, ms_ws, two_cta, tflops;
+def recommended_config(shape=None):
+    """The highest-measured-TFLOPS *correct* config from the empirical matrix
+    — the 'recommended' defaults.  ``shape`` is an (M, N, K) tuple (or an int
+    for a square shape); None / unswept falls back to the largest swept square
+    (its optimum is the stable page-load default).  Returns a dict with
+    tier_dir, knobs, tma_store, persistent, ms_ws, two_cta, tflops, shape;
     or None if the matrix is empty."""
     entries = [e for e in load_compat().get("entries", []) if e.get("correct")]
-    if not entries:
+    shapes = perf_shapes()
+    if not entries or not shapes:
         return None
-    ps = perf_shapes()
-    if not ps:
-        return None
-    # Recommend for the requested shape if we swept it; otherwise fall back to
-    # the nearest swept shape (a heuristic — there's no measurement for an
-    # unswept shape, and large shapes' optima are reasonably stable).
-    if shape_m is None or shape_m not in ps:
-        ref = max(ps) if shape_m is None else min(ps, key=lambda s: abs(s - shape_m))
+    if isinstance(shape, int):
+        shape = (shape, shape, shape)
+    keys = {shape_key(*t) for t in shapes}
+    if shape is not None and shape_key(*shape) in keys:
+        ref = shape_key(*shape)
     else:
-        ref = shape_m
-    shape_m = ref
+        # default / unswept: largest swept *square* shape (stable optimum).
+        squares = [t for t in shapes if t[0] == t[1] == t[2]]
+        ref = shape_key(*max(squares or shapes))
     best, best_tf = None, -1.0
     for e in entries:
-        tf = ((e.get("perf") or {}).get(str(shape_m)) or {}).get("tflops")
+        tf = ((e.get("perf") or {}).get(ref) or {}).get("tflops")
         if tf is not None and tf > best_tf:
             best, best_tf = e, tf
     if best is None:
@@ -445,9 +469,13 @@ def recommended_config(shape_m=None):
     knobs = {k: best[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw", "tma_store")}
     knobs["persistent"] = best.get("persistent", 0)
     return {**knobs, "ms_ws": ms_ws, "two_cta": two_cta,
-            "tflops": best_tf, "shape": shape_m}
+            "tflops": best_tf, "shape": ref}
 
 
 def perf_shapes():
-    """Square shapes (ints) the compat matrix recorded performance at."""
-    return load_compat().get("perf_shapes", [])
+    """List of (M, N, K) shapes the compat matrix recorded performance at.
+    Legacy square int entries are normalized to (S, S, S)."""
+    out = []
+    for s in load_compat().get("perf_shapes", []):
+        out.append(tuple(s) if isinstance(s, (list, tuple)) else (s, s, s))
+    return out
