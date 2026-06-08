@@ -238,16 +238,16 @@ def publish_and_curl(name, content, label):
 tab_kernel, tab_host, tab_bench = st.tabs(["Kernel code", "Host code (self-contained)", "Benchmark (measured on B200)"])
 
 with tab_kernel:
-    st.code(kernel_src, language="cpp", line_numbers=True)
     kname = f"mm_{_cfg_tag}.cu"
     st.download_button("⬇ Download kernel.cu", data=kernel_src, file_name=kname, mime="text/x-c")
     publish_and_curl(kname, kernel_src, "kernel.cu")
+    st.code(kernel_src, language="cpp", line_numbers=True)
 
 with tab_host:
-    st.code(host_src, language="python", line_numbers=True)
     hname = f"host_{_cfg_tag}.py"
     st.download_button("⬇ Download host.py", data=host_src, file_name=hname, mime="text/x-python")
     publish_and_curl(hname, host_src, "host.py")
+    st.code(host_src, language="python", line_numbers=True)
 
 with tab_bench:
     try:
