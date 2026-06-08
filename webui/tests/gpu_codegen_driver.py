@@ -54,14 +54,18 @@ def all_combos(tier_dirs):
     for tdir in tier_dirs:
         key = dir_to_key[tdir]
         tier = mc.TIER_MAP[key]
-        for bm, bn, bk, ns, gsm, nw, ts in itertools.product(
+        # PERSISTENT is a launch knob (same cubin) — only the persistent-
+        # capable tiers get the grid=#SMs variant; others stay at [0].
+        pers_opts = mc.PERSISTENT_OPTS if tier.get("persistent_ok") else [0]
+        for bm, bn, bk, ns, gsm, nw, ts, pers in itertools.product(
             mc.BM_OPTS, mc.BN_OPTS, mc.BK_OPTS, mc.NS_OPTS, mc.GSM_OPTS, mc.NW_OPTS,
-            mc.TMA_STORE_OPTS
+            mc.TMA_STORE_OPTS, pers_opts
         ):
-            yield tier, dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw, tma_store=ts)
+            yield tier, dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
+                             tma_store=ts, persistent=pers)
 
 
-def launch_spec(tier, k, M, N, K):
+def launch_spec(tier, k, M, N, K, num_sms=None):
     """Compute (grid, block, shared_bytes) for a config at shape (M,N,K)."""
     cta_group = 2 if tier["cluster"] else 1
     bn_local  = k["bn"] // cta_group
@@ -71,7 +75,11 @@ def launch_spec(tier, k, M, N, K):
     epi    = k["bm"] * (k["bn"] if k["tma_store"] else k["bn"] + 8) * 2
     shared = max(k["ns"] * slot, epi) + 1024
     block  = (k["nw"] * 32, 1, 1)
-    if tier["cluster"]:
+    if k.get("persistent") and num_sms:
+        # Persistent grid: one CTA per SM; the kernel's tile loop walks the rest.
+        # For the cluster tier the grid must stay a multiple of CTA_GROUP.
+        grid = (num_sms - num_sms % cta_group, 1, 1)
+    elif tier["cluster"]:
         grid_m_clusters = M // (cta_group * k["bm"])
         grid_n          = N // k["bn"]
         grid = (grid_m_clusters * grid_n * cta_group, 1, 1)
@@ -106,7 +114,7 @@ def _compile_worker(job):
     return src_path, r.returncode, (r.stderr[-600:] if r.returncode else "")
 
 
-def launch_from_cubin(tier, k, arch, shapes, do_bench=True):
+def launch_from_cubin(tier, k, arch, shapes, do_bench=True, num_sms=None):
     """Load the (already compiled) cubin; per shape check correctness and
     (optionally) benchmark with do_bench.
 
@@ -127,7 +135,7 @@ def launch_from_cubin(tier, k, arch, shapes, do_bench=True):
         overall = True
         for sh in shapes:
             M, N, K = sh["M"], sh["N"], sh["K"]
-            grid, block, shared = launch_spec(tier, k, M, N, K)
+            grid, block, shared = launch_spec(tier, k, M, N, K, num_sms)
             rt.cu(driver.cuFuncSetAttribute(
                 kernel, driver.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared))
             A_tmap = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=sh["A"].data_ptr(),
@@ -183,7 +191,9 @@ def build_to_run(tier_dirs, invalid_sample):
     valid, invalid = [], []
     for tier, k in all_combos(tier_dirs):
         warnings = mc.validate_config(k["bm"], k["bn"], k["bk"], k["ns"], k["gsm"], k["nw"],
-                                      cluster=tier["cluster"], tma_store=k["tma_store"])
+                                      cluster=tier["cluster"], tma_store=k["tma_store"],
+                                      persistent=k.get("persistent", 0),
+                                      persistent_ok=tier.get("persistent_ok", False))
         (valid if not warnings else invalid).append((tier, k))
     stepi = max(1, len(invalid) // max(1, invalid_sample))
     inv_sample = invalid[::stepi][:invalid_sample]
@@ -204,7 +214,7 @@ def make_shapes(shape_list):
     return shapes
 
 
-def worker_loop(to_run, start, arch, shape_list, jsonl_path):
+def worker_loop(to_run, start, arch, shape_list, jsonl_path, num_sms=None):
     """Launch combos [start:] in one CUDA context, appending one JSON
     line per combo (with per-shape correctness + perf).  On any CUDA
     fault the context is poisoned, so we record the offending combo and
@@ -213,7 +223,7 @@ def worker_loop(to_run, start, arch, shape_list, jsonl_path):
     f = open(jsonl_path, "a")
     for idx in range(start, len(to_run)):
         tier, k, label = to_run[idx]
-        r = launch_from_cubin(tier, k, arch, shapes, do_bench=(label == "valid"))
+        r = launch_from_cubin(tier, k, arch, shapes, do_bench=(label == "valid"), num_sms=num_sms)
         r["validator"] = label
         r["idx"] = idx
         f.write(json.dumps(r) + "\n")
@@ -247,10 +257,12 @@ def main():
 
     device, _ = rt.init_cuda()
     arch = rt.compute_arch(device)
+    num_sms = rt.cu(driver.cuDeviceGetAttribute(
+        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device))
 
     # ── Worker mode: just launch from `start`, stream results, exit ──
     if args.launch_worker is not None:
-        worker_loop(to_run, args.launch_worker, arch, shape_list, args.jsonl)
+        worker_loop(to_run, args.launch_worker, arch, shape_list, args.jsonl, num_sms)
         return  # unreachable (worker_loop exits)
 
     print(f"# perf shapes {[s[0] for s in shape_list]} | arch={arch} | tiers={tier_dirs}")
@@ -271,7 +283,9 @@ def main():
     # ── Phase 1: render + parallel nvcc compile (CPU-bound) ──────────
     for (t, k, _) in to_run:
         render_to_dir(t, k)
-    jobs = [(str(SCRATCH / tag_for(t, k) / "kernel.cu"), arch) for (t, k, _) in to_run]
+    # PERSISTENT isn't in tag_for (same cubin both ways), so dedup the
+    # compile jobs — persistent on/off variants share one kernel.cu.
+    jobs = sorted({(str(SCRATCH / tag_for(t, k) / "kernel.cu"), arch) for (t, k, _) in to_run})
     workers = min(32, (os.cpu_count() or 8))
     print(f"# compiling {len(jobs)} kernels with {workers} workers ...", flush=True)
     n_comp_ok = 0
@@ -357,7 +371,8 @@ def main():
             tf = best["perf"][big]["tflops"]
             ratio = tf / cublas_tflops[big]
             print(f"best {tdir:24} @ {big}^3: {tf:.0f} TFLOPS ({ratio:.0%} cuBLAS)  "
-                  f"bn{best['bn']} ns{best['ns']} gsm{best['gsm']} nw{best['nw']}")
+                  f"bn{best['bn']} ns{best['ns']} gsm{best['gsm']} nw{best['nw']} "
+                  f"ts{best.get('tma_store',0)} pers{best.get('persistent',0)}")
 
     if args.json:
         pathlib.Path(args.json).write_text(json.dumps(ordered, indent=2))
@@ -377,7 +392,8 @@ def main():
                 "tflops": round(tf, 1) if tf is not None else None,
                 "vs_cublas": round(tf / cublas_tflops[s], 4) if (tf and cublas_tflops.get(s)) else None,
             }
-        entries.append({k: r[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw", "tma_store")}
+        entries.append({k: r[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw",
+                                           "tma_store", "persistent")}
                        | {"correct": bool(r["correct"]), "perf": perf})
     matrix = {
         "generated_by": "webui/tests/gpu_codegen_driver.py",

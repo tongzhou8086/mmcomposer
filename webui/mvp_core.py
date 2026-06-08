@@ -60,6 +60,12 @@ NW_OPTS  = [4, 8, 16]
 # Epilogue Phase-2 store path: 0 = all-thread int4 stores; 1 = one async
 # TMA store per CTA (swizzled SMEM staging).  A universal toggle.
 TMA_STORE_OPTS = [0, 1]
+# Persistent grid: 0 = one CTA per output tile (grid = num_tiles); 1 = one
+# CTA per SM, each walking a strided run of tiles (grid = #SMs).  A host/
+# launch knob — same cubin both ways — wired on Tier 2 (a small reproducible
+# win).  Tried on the Tier 3 cluster but measured a wash (cluster-barrier
+# overhead cancels the gain), so it stays off there.
+PERSISTENT_OPTS = [0, 1]
 # On/off knobs are presented as dropdowns too, for a uniform UI (and to
 # leave room for an "Auto" value once auto-tuning lands).
 ONOFF_OPTS = ["Off", "On"]
@@ -85,6 +91,7 @@ TIER_MAP = {
         "dir":     "tier1_baseline",
         "symbol":  "matmul_dbuf",
         "cluster": False,
+        "persistent_ok": False,   # no tile loop yet (synchronous MMA tier)
     },
     (True, False): {
         "label":   "Tier 2 — Multi-stage + warp specialization",
@@ -93,6 +100,7 @@ TIER_MAP = {
         "dir":     "tier2_multistage_ws",
         "symbol":  "matmul_coalesced_epilogue",
         "cluster": False,
+        "persistent_ok": True,    # persistent-capable tile loop (Step A)
     },
     (True, True): {
         "label":   "Tier 3 — + 2-CTA cluster MMA",
@@ -101,6 +109,10 @@ TIER_MAP = {
         "dir":     "tier3_cluster_swizzle",
         "symbol":  "matmul_cluster",
         "cluster": True,
+        # Persistent tried on the cluster tier (Step A) but measured a wash-
+        # to-loss: the extra cross-CTA cluster barrier per tile cancels the
+        # scheduling gain.  Kept non-persistent (the fast proven kernel).
+        "persistent_ok": False,
     },
     (False, True): None,   # invalid: 2-CTA cluster requires warp specialization
 }
@@ -113,16 +125,28 @@ def tier_for(ms_ws: bool, two_cta: bool):
 
 # ── Validation ────────────────────────────────────────────────────────
 
-def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0) -> list[str]:
+def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
+                    persistent=0, persistent_ok=True) -> list[str]:
     """Return a list of human-readable warnings; empty list = valid.
 
     ``cluster`` selects the 2-CTA geometry: each CTA owns BN/2 columns of
     B but still BM rows, so the per-CTA B SMEM slot is halved.
     ``tma_store`` selects the epilogue Phase-2 store path (0 int4 / 1 TMA);
     it changes the epilogue staging width (TMA needs a dense BM×BN buffer).
+    ``persistent`` launches grid = #SMs with a CTA-level tile loop; it is
+    only valid on tiers whose kernel actually has that loop (``persistent_ok``).
     """
     out: list[str] = []
     cta_group = 2 if cluster else 1
+
+    # Persistent is a launch-side knob, but only tiers with the CTA tile
+    # loop can be launched with grid < num_tiles without dropping output.
+    if persistent and not persistent_ok:
+        out.append(
+            "**Persistent grid** is only implemented on the warp-specialized "
+            "single-CTA tier (Tier 2); other tiers have no CTA tile loop, so "
+            "grid = #SMs would leave most output tiles uncomputed."
+        )
 
     if ns < 2:
         out.append(
@@ -232,7 +256,7 @@ def substitute_launcher_constants(src: str, **values) -> str:
             f"BM, BN, BK = {values['BM']}, {values['BN']}, {values['BK']}",
             src,
         )
-    for name in ("NS", "GROUP_SIZE_M", "NUM_WARPS", "TMA_STORE"):
+    for name in ("NS", "GROUP_SIZE_M", "NUM_WARPS", "TMA_STORE", "PERSISTENT"):
         if name in values:
             src = re.sub(
                 rf"^({name}\s*=\s*)\d+",
@@ -243,10 +267,15 @@ def substitute_launcher_constants(src: str, **values) -> str:
     return src
 
 
-def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0) -> dict:
-    """Map UI knobs to the constant names used in the source files."""
+def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0) -> dict:
+    """Map UI knobs to the constant names used in the source files.
+
+    PERSISTENT only appears in the launcher (it's a grid choice, not a
+    kernel constexpr); substitute_kernel_constexprs simply finds no match
+    in kernel.cu and leaves it untouched.
+    """
     return {"BM": bm, "BN": bn, "BK": bk, "NS": ns, "GROUP_SIZE_M": gsm,
-            "NUM_WARPS": nw, "TMA_STORE": tma_store}
+            "NUM_WARPS": nw, "TMA_STORE": tma_store, "PERSISTENT": persistent}
 
 
 def _strip_module_docstring(src: str) -> str:
@@ -290,7 +319,7 @@ def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0) -> str:
     return substitute_kernel_constexprs(src, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store))
 
 
-def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0) -> str:
+def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0) -> str:
     """Return a *self-contained* host script: runtime preamble + launcher.
 
     The result has no ``cuda_utils`` import and no ``sys.path`` hack — it
@@ -298,12 +327,14 @@ def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0) -> str:
     """
     runtime  = _strip_module_docstring(RUNTIME_PY.read_text())
     launcher = (KERNELS_DIR / tier["dir"] / "launcher.py").read_text()
-    launcher = substitute_launcher_constants(launcher, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store))
+    launcher = substitute_launcher_constants(
+        launcher, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store, persistent))
     header = (
         '"""Self-contained matmul kernel launcher generated by mmcomposer.\n'
         "\n"
         f"Tier: {tier['label']}\n"
-        f"Config: BM={bm} BN={bn} BK={bk} NS={ns} GROUP_SIZE_M={gsm} NUM_WARPS={nw} TMA_STORE={tma_store}\n"
+        f"Config: BM={bm} BN={bn} BK={bk} NS={ns} GROUP_SIZE_M={gsm} NUM_WARPS={nw} "
+        f"TMA_STORE={tma_store} PERSISTENT={persistent}\n"
         "\n"
         "Run with:  python <this file>.py   (kernel.cu must sit alongside it)\n"
         "Requires:  torch, numpy, cuda-python (cuda.bindings), and nvcc on PATH.\n"
@@ -343,29 +374,29 @@ def load_compat() -> dict:
 
 @functools.lru_cache(maxsize=1)
 def _compat_index() -> dict:
-    """(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store) -> entry dict."""
+    """(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent) -> entry."""
     idx = {}
     for e in load_compat().get("entries", []):
         idx[(e["tier"], e["bm"], e["bn"], e["bk"], e["ns"], e["gsm"], e["nw"],
-             e.get("tma_store", 0))] = e
+             e.get("tma_store", 0), e.get("persistent", 0))] = e
     return idx
 
 
-def compat_status(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store=0):
+def compat_status(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0):
     """Return ('verified'|'failed'|'unknown', entry|None) for a combo.
 
     'verified'/'failed' come from the empirical B200 sweep; 'unknown'
     means the combo wasn't in the swept grid (fall back to static)."""
-    e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store))
+    e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent))
     if e is None:
         return "unknown", None
     return ("verified" if e["correct"] else "failed"), e
 
 
-def compat_perf(tier_dir, bm, bn, bk, ns, gsm, nw, shape_m, tma_store=0):
+def compat_perf(tier_dir, bm, bn, bk, ns, gsm, nw, shape_m, tma_store=0, persistent=0):
     """Return the measured {rel_err, tflops, vs_cublas} for this combo at a
     square shape (M=N=K=shape_m), or None if not in the matrix."""
-    e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store))
+    e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent))
     if e is None:
         return None
     return (e.get("perf") or {}).get(str(shape_m))
@@ -411,8 +442,10 @@ def recommended_config(shape_m=None):
     if best is None:
         return None
     ms_ws, two_cta = toggles_for_dir(best["tier"])
-    return {**{k: best[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw", "tma_store")},
-            "ms_ws": ms_ws, "two_cta": two_cta, "tflops": best_tf, "shape": shape_m}
+    knobs = {k: best[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw", "tma_store")}
+    knobs["persistent"] = best.get("persistent", 0)
+    return {**knobs, "ms_ws": ms_ws, "two_cta": two_cta,
+            "tflops": best_tf, "shape": shape_m}
 
 
 def perf_shapes():

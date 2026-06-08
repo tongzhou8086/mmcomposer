@@ -111,6 +111,12 @@ with st.sidebar:
              "per CTA (swizzled SMEM staging) instead of all-thread int4 stores.  "
              "A universal knob — often *not* a win (see the measured "
              "TFLOPS), kept as an honest mechanism comparison.") == "On"
+    persistent = st.selectbox(
+        "Persistent grid", mc.ONOFF_OPTS, index=_onoff("persistent"),
+        help="Launch one CTA per SM and loop over output tiles inside the "
+             "kernel (grid = #SMs) instead of one CTA per tile.  Trims "
+             "launch/tail overhead — a small, config-dependent win on Tier 2.  "
+             "Wired on the warp-specialized single-CTA tier only.") == "On"
 
     st.subheader("Problem shape")
     shapes_text = st.text_area(
@@ -126,7 +132,7 @@ with st.sidebar:
 if generate:
     st.session_state.applied = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                                     ms_ws=ms_ws, two_cta=two_cta, tma_store=int(tma_store),
-                                    shapes_text=shapes_text)
+                                    persistent=int(persistent), shapes_text=shapes_text)
 
 if "applied" not in st.session_state:
     st.info("Configure parameters in the sidebar, then click **🛠  Generate kernel**.")
@@ -137,6 +143,7 @@ bm, bn, bk = cfg["bm"], cfg["bn"], cfg["bk"]
 ns, gsm, nw = cfg["ns"], cfg["gsm"], cfg["nw"]
 ms_ws, two_cta = cfg["ms_ws"], cfg["two_cta"]
 tma_store = cfg["tma_store"]
+persistent = cfg.get("persistent", 0)
 shapes_text = cfg["shapes_text"]
 
 # One shape at a time: different shapes have different optimal configs.
@@ -172,7 +179,9 @@ except Exception:
 
 # ── Validate (static checker) ─────────────────────────────────────────
 
-warnings = mc.validate_config(bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"], tma_store=tma_store)
+warnings = mc.validate_config(bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
+                              tma_store=tma_store, persistent=persistent,
+                              persistent_ok=tier.get("persistent_ok", False))
 if warnings:
     st.error(f"⚠️  **{len(warnings)} configuration warning(s)** — this combination won't run.  "
              "Fix in the sidebar and re-generate.")
@@ -182,11 +191,13 @@ else:
     st.success("✅ Configuration passes all static constraint checks.")
     # Empirical ground truth from the committed B200 compatibility matrix.
     try:
-        status, entry = mc.compat_status(tier["dir"], bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
+        status, entry = mc.compat_status(tier["dir"], bm, bn, bk, ns, gsm, nw,
+                                          tma_store=tma_store, persistent=persistent)
         pshapes = mc.perf_shapes()
         if status == "verified":
             biggest = max(pshapes) if pshapes else None
-            p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, biggest, tma_store=tma_store) if biggest else None
+            p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, biggest,
+                               tma_store=tma_store, persistent=persistent) if biggest else None
             msg = f"✅ Empirically verified on B200 ({cm.get('arch', 'sm_100a')}): compiles, runs, correct."
             if p and p.get("tflops"):
                 msg += f"  {p['tflops']:.0f} TFLOPS at {biggest}³ ({p['vs_cublas']:.0%} of cuBLAS)."
@@ -204,7 +215,7 @@ else:
 # ── Render kernel + self-contained host ──────────────────────────────
 
 kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
-host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
+host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, persistent=persistent)
 
 def ssh_copy_button(name, content, label):
     """One-click 'copy the heredoc to clipboard' for SSH use.
@@ -287,7 +298,8 @@ with tab_bench:
     for (m, n, k) in shapes:
         square = (m == n == k)
         try:
-            p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, m, tma_store=tma_store) if square else None
+            p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, m,
+                               tma_store=tma_store, persistent=persistent) if square else None
             cub = mc.cublas_tflops(m) if square else None
         except Exception:
             p, cub = None, None
