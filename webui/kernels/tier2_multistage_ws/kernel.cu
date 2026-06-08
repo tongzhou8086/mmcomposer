@@ -10,7 +10,6 @@ constexpr int NS           = 2;       // multi-stage SMEM ring depth
 constexpr int GROUP_SIZE_M = 8;       // CTA-swizzle chunk (1 = no swizzle)
 constexpr int NUM_WARPS    = 4;       // total warps per CTA
 constexpr int TMA_STORE    = 0;       // epilogue Phase 2: 0 = int4 stores, 1 = async TMA store
-constexpr int EPILOGUE_L1_NO_ALLOCATE = 0;  // 1 = .L1::no_allocate hint on the int4 output store
 
 // ── Derived constants (do not edit) ─────────────────────────────────
 constexpr int MMA_K   = 16;

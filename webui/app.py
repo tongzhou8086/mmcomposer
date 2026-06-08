@@ -117,13 +117,6 @@ with st.sidebar:
              "kernel (grid = #SMs) instead of one CTA per tile.  Trims "
              "launch/tail overhead — a small, config-dependent win on Tier 2.  "
              "Wired on the warp-specialized single-CTA tier only.") == "On"
-    no_allocate = st.selectbox(
-        "Streaming output store (.L1::no_allocate)", mc.ONOFF_OPTS, index=_onoff("no_allocate"),
-        help="Tag the epilogue's global store with `.L1::no_allocate` — C is "
-             "write-once, so don't evict A/B from L1 for it.  Measured "
-             "perf-neutral on B200 (the reuse that matters is L2), but correct "
-             "and never-negative; a free composable knob.  Affects the int4 "
-             "store path only (no-op under the TMA-store epilogue).") == "On"
 
     st.subheader("Problem shape")
     shapes_text = st.text_area(
@@ -139,8 +132,7 @@ with st.sidebar:
 if generate:
     st.session_state.applied = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                                     ms_ws=ms_ws, two_cta=two_cta, tma_store=int(tma_store),
-                                    persistent=int(persistent), no_allocate=int(no_allocate),
-                                    shapes_text=shapes_text)
+                                    persistent=int(persistent), shapes_text=shapes_text)
 
 if "applied" not in st.session_state:
     st.info("Configure parameters in the sidebar, then click **🛠  Generate kernel**.")
@@ -152,7 +144,6 @@ ns, gsm, nw = cfg["ns"], cfg["gsm"], cfg["nw"]
 ms_ws, two_cta = cfg["ms_ws"], cfg["two_cta"]
 tma_store = cfg["tma_store"]
 persistent = cfg.get("persistent", 0)
-no_allocate = cfg.get("no_allocate", 0)
 shapes_text = cfg["shapes_text"]
 
 # One shape at a time: different shapes have different optimal configs.
@@ -232,9 +223,8 @@ else:
 
 # ── Render kernel + self-contained host ──────────────────────────────
 
-kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, no_allocate=no_allocate)
-host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store,
-                            persistent=persistent, no_allocate=no_allocate)
+kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
+host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, persistent=persistent)
 
 def ssh_copy_button(name, content, label):
     """One-click 'copy the heredoc to clipboard' for SSH use.
