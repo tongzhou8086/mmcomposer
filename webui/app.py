@@ -205,34 +205,20 @@ else:
 kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
 host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
 
-# Publish rendered files to webui/static/ so they're fetchable by URL.
-# Streamlit serves webui/static/<f> at <app-url>/app/static/<f> (enabled in
-# .streamlit/config.toml) — so a remote/SSH host can curl/wget the code.
-STATIC_DIR = mc.WEBUI_DIR / "static"
 _cfg_tag = f"{tier['dir']}_bm{bm}_bn{bn}_bk{bk}_ns{ns}_gsm{gsm}_nw{nw}_ts{tma_store}"
 
 
-def _app_base_url():
-    try:
-        host = st.context.headers.get("Host", "")
-    except Exception:
-        host = ""
-    if not host:
-        return None
-    scheme = "http" if host.split(":")[0] in ("localhost", "127.0.0.1") else "https"
-    return f"{scheme}://{host}"
+def ssh_snippet(name, content, label):
+    """A copy-paste block that recreates the file on a remote/SSH host.
 
-
-def publish_and_curl(name, content, label):
-    """Write `content` to the static dir and show a curl command for it."""
-    try:
-        STATIC_DIR.mkdir(exist_ok=True)
-        (STATIC_DIR / name).write_text(content)
-    except Exception:
-        return
-    base = _app_base_url() or "<your-app-url>"
-    st.caption(f"…or fetch {label} from a remote/SSH host (curl/wget):")
-    st.code(f"curl -O {base}/app/static/{name}", language="bash")
+    Streamlit Cloud gates every URL (static files included) behind a browser
+    session, so curl/wget can't fetch a link.  A heredoc you paste into the
+    SSH terminal sidesteps that entirely — no URL, no auth.  The quoted
+    delimiter prevents the shell from expanding anything in the source."""
+    body = content if content.endswith("\n") else content + "\n"   # delimiter on its own line, no extra blank
+    with st.expander(f"📋 On a remote/SSH host: copy-paste to recreate {label}"):
+        st.caption("Click the copy icon, paste into your terminal, press Enter.")
+        st.code(f"cat > {name} <<'MMCOMPOSER_EOF'\n{body}MMCOMPOSER_EOF", language="bash")
 
 
 tab_kernel, tab_host, tab_bench = st.tabs(["Kernel code", "Host code (self-contained)", "Benchmark (measured on B200)"])
@@ -240,13 +226,13 @@ tab_kernel, tab_host, tab_bench = st.tabs(["Kernel code", "Host code (self-conta
 with tab_kernel:
     kname = f"mm_{_cfg_tag}.cu"
     st.download_button("⬇ Download kernel.cu", data=kernel_src, file_name=kname, mime="text/x-c")
-    publish_and_curl(kname, kernel_src, "kernel.cu")
+    ssh_snippet(kname, kernel_src, "kernel.cu")
     st.code(kernel_src, language="cpp", line_numbers=True)
 
 with tab_host:
     hname = f"host_{_cfg_tag}.py"
     st.download_button("⬇ Download host.py", data=host_src, file_name=hname, mime="text/x-python")
-    publish_and_curl(hname, host_src, "host.py")
+    ssh_snippet(hname, host_src, "host.py")
     st.code(host_src, language="python", line_numbers=True)
 
 with tab_bench:

@@ -18,6 +18,3 @@ docs/_build/
 tutorial/code/**/*.cubin
 webui/tests/_scratch/
 
-# Runtime-generated downloadable artifacts (served at /app/static/)
-webui/static/*
-!webui/static/.gitkeep
