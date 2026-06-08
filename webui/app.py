@@ -220,11 +220,22 @@ def ssh_copy_button(name, content, label):
     payload = json.dumps(cmd)   # safe-escape the full source into a JS string
     components.html(f"""
       <style>
-        .mmc-btn {{ font: 600 14px sans-serif; width: 100%; padding: .5rem .8rem;
-                    border: 1px solid rgba(128,128,128,.4); border-radius: .5rem;
-                    background: transparent; color: inherit; cursor: pointer; }}
+        * {{ box-sizing: border-box; }}
+        body {{ margin: 0; }}
+        /* Mimic Streamlit's secondary button (the Download button's style). */
+        .mmc-btn {{ font-family: "Source Sans Pro", sans-serif; font-size: 0.875rem;
+                    font-weight: 400; width: 100%; min-height: 2.5rem;
+                    padding: 0.25rem 0.75rem; border: 1px solid rgba(49,51,63,0.2);
+                    border-radius: 0.5rem; background-color: #ffffff;
+                    color: rgb(49,51,63); cursor: pointer; transition: all .1s; }}
         .mmc-btn:hover {{ border-color: #ff4b4b; color: #ff4b4b; }}
-        .mmc-msg {{ font: 13px sans-serif; color: #09ab3b; margin-top: 4px; }}
+        .mmc-btn:active {{ background-color: #ff4b4b; color: #ffffff; border-color: #ff4b4b; }}
+        .mmc-msg {{ font-family: "Source Sans Pro", sans-serif; font-size: 0.8rem;
+                    color: #09ab3b; margin-top: 0.35rem; }}
+        @media (prefers-color-scheme: dark) {{
+          .mmc-btn {{ background-color: rgb(19,23,32); color: rgb(250,250,250);
+                      border-color: rgba(250,250,250,0.2); }}
+        }}
       </style>
       <button class="mmc-btn" id="b">📋 Copy {label} command for SSH</button>
       <div class="mmc-msg" id="m"></div>
