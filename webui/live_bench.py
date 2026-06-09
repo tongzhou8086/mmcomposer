@@ -138,6 +138,7 @@ def run_autotune(tier_dirs, M: int, N: int, K: int, bn_opts=None, timeout: int =
         if p and p.get("tflops"):
             results.append({**{k: e[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm",
                                                  "nw", "tma_store", "persistent")},
+                            "ld_width": e.get("ld_width", 8),
                             "tflops": p["tflops"], "vs_cublas": p.get("vs_cublas"),
                             "rel_err": p.get("rel_err")})
     results.sort(key=lambda r: r["tflops"], reverse=True)
