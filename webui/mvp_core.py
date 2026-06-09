@@ -57,6 +57,10 @@ BK_OPTS  = [64]
 NS_OPTS  = [2, 3, 4, 5, 6, 7]
 GSM_OPTS = [1, 2, 4, 8, 16, 32]
 NW_OPTS  = [4, 8, 16]
+# Epilogue TMEM->register load width: 32-bit elements per lane per tcgen05.ld
+# (.32x32b.xN).  Wider = fewer loads + fewer wait_ld syncs, more registers.
+# 8 = current behaviour.  Must divide COLS_PER_WARP (= BN / (NW/(BM/32))).
+EPILOGUE_LD_WIDTH_OPTS = [8, 16, 32, 64]
 # Epilogue Phase-2 store path: 0 = all-thread int4 stores; 1 = one async
 # TMA store per CTA (swizzled SMEM staging).  A universal toggle.
 TMA_STORE_OPTS = [0, 1]
@@ -126,7 +130,7 @@ def tier_for(ms_ws: bool, two_cta: bool):
 # ── Validation ────────────────────────────────────────────────────────
 
 def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
-                    persistent=0, persistent_ok=True, shape=None) -> list[str]:
+                    persistent=0, persistent_ok=True, shape=None, ld_width=8) -> list[str]:
     """Return a list of human-readable warnings; empty list = valid.
 
     ``cluster`` selects the 2-CTA geometry: each CTA owns BN/2 columns of
@@ -214,6 +218,16 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
                     f"**BN = {bn}** doesn't divide into {col_groups} column groups of a "
                     f"multiple of 8 (got {bn // col_groups} cols/group; 8-col tcgen05.ld atoms)."
                 )
+            else:
+                cols_per_warp = bn // col_groups
+                if ld_width not in (8, 16, 32, 64):
+                    out.append(f"**Epilogue ld width = {ld_width}** must be one of 8/16/32/64.")
+                elif cols_per_warp % ld_width != 0:
+                    out.append(
+                        f"**Epilogue ld width = {ld_width}** must divide the per-warp column "
+                        f"span COLS_PER_WARP = BN/(NW/(BM/32)) = {cols_per_warp} "
+                        f"(at BN={bn}, NW={nw}).  Use a smaller ld width or fewer warps."
+                    )
     # NW < 4 triggers a separate tcgen05 quirk (wrong output); options
     # start at 4 so this is informational only.
     if nw < 4:
@@ -284,7 +298,7 @@ def substitute_launcher_constants(src: str, **values) -> str:
     return src
 
 
-def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0) -> dict:
+def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0, ld_width=8) -> dict:
     """Map UI knobs to the constant names used in the source files.
 
     PERSISTENT only appears in the launcher (it's a grid choice, not a
@@ -292,7 +306,8 @@ def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0) -> dict:
     in kernel.cu and leaves it untouched.
     """
     return {"BM": bm, "BN": bn, "BK": bk, "NS": ns, "GROUP_SIZE_M": gsm,
-            "NUM_WARPS": nw, "TMA_STORE": tma_store, "PERSISTENT": persistent}
+            "NUM_WARPS": nw, "TMA_STORE": tma_store, "PERSISTENT": persistent,
+            "EPILOGUE_LD_WIDTH": ld_width}
 
 
 def _strip_module_docstring(src: str) -> str:
@@ -313,6 +328,7 @@ def _strip_module_docstring(src: str) -> str:
 FRAGMENTS = {
     "// @@EPILOGUE@@":  "_epilogue.cu.frag",
     "// @@MMA_CHAIN@@": "_mma_chain.cu.frag",
+    "// @@TCGEN05_LD@@": "_tcgen05_ld.cu.frag",
 }
 
 
@@ -329,11 +345,12 @@ def _splice_fragments(src: str) -> str:
     return "".join(out)
 
 
-def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0) -> str:
+def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, ld_width=8) -> str:
     """Return the substituted, fragment-stitched kernel.cu for a tier."""
     src = (KERNELS_DIR / tier["dir"] / "kernel.cu").read_text()
     src = _splice_fragments(src)
-    return substitute_kernel_constexprs(src, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store))
+    return substitute_kernel_constexprs(
+        src, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store, ld_width=ld_width))
 
 
 def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0) -> str:

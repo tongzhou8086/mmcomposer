@@ -59,7 +59,8 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
 
     kernel_path.write_text(mc.render_kernel(
         tier, knobs["bm"], knobs["bn"], knobs["bk"], knobs["ns"], knobs["gsm"],
-        knobs["nw"], tma_store=knobs.get("tma_store", 0)))
+        knobs["nw"], tma_store=knobs.get("tma_store", 0),
+        ld_width=knobs.get("ld_width", 8)))
 
     py = os.environ.get("MMCOMPOSER_PY", sys.executable)
     srun_args = shlex.split(os.environ.get("MMCOMPOSER_SRUN_ARGS", DEFAULT_SRUN_ARGS))
