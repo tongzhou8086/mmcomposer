@@ -59,11 +59,11 @@ GSM_OPTS = [1, 2, 4, 8, 16, 32]
 NW_OPTS  = [4, 8, 16]
 # Epilogue TMEM->register load width: 32-bit elements per lane per tcgen05.ld
 # (.32x32b.xN).  Wider = fewer loads + fewer wait_ld syncs, more registers.
-# Must divide COLS_PER_WARP (= BN / (NW/(BM/32))).  A first-class swept
-# dimension (like NW/NS).  x32/x64 dropped: the B200 sweep showed they don't
-# raise the autotuned ceiling (it's reached with x8/x16), so they'd only bloat
-# the grid; x16 is kept as the one width with a measured per-config win.
-TCGEN05_LD_WIDTH_OPTS = [8, 16]
+# Must divide COLS_PER_WARP (= BN / (NW/(BM/32))).  Pinned to [8]: the B200
+# sweeps showed wider widths (16/32/64) don't raise the autotuned ceiling, so
+# they only bloat the grid.  The x16 code path is kept (validator allows 8/16,
+# epilogue dispatch handles it) — re-add 16 here to sweep it again.
+TCGEN05_LD_WIDTH_OPTS = [8]
 # Epilogue Phase-2 store path: 0 = all-thread int4 stores; 1 = one async
 # TMA store per CTA (swizzled SMEM staging).  A universal toggle.
 TMA_STORE_OPTS = [0, 1]

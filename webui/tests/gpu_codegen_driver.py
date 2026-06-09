@@ -63,12 +63,15 @@ def all_combos(tier_dirs, bn_opts=None):
         # PERSISTENT is a launch knob (same cubin) — only the persistent-
         # capable tiers get the grid=#SMs variant; others stay at [0].
         pers_opts = mc.PERSISTENT_OPTS if tier.get("persistent_ok") else [0]
-        for bm, bn, bk, ns, gsm, nw, ts, pers, ldw in itertools.product(
+        # EPILOGUE_OVERLAP only applies on the persistent-capable path; most
+        # overlap=1 combos are filtered by the validator (persistent/NW/SMEM).
+        ov_opts = mc.EPILOGUE_OVERLAP_OPTS if tier.get("persistent_ok") else [0]
+        for bm, bn, bk, ns, gsm, nw, ts, pers, ldw, ov in itertools.product(
             mc.BM_OPTS, bn_list, mc.BK_OPTS, mc.NS_OPTS, mc.GSM_OPTS, mc.NW_OPTS,
-            mc.TMA_STORE_OPTS, pers_opts, ld_list
+            mc.TMA_STORE_OPTS, pers_opts, ld_list, ov_opts
         ):
             yield tier, dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
-                             tma_store=ts, persistent=pers, ld_width=ldw)
+                             tma_store=ts, persistent=pers, ld_width=ldw, overlap=ov)
 
 
 def parse_perf_shapes(spec):
@@ -107,7 +110,8 @@ def launch_spec(tier, k, M, N, K, num_sms=None):
     b_slot = bn_local * k["bk"] * 2
     slot   = a_slot + b_slot
     epi    = k["bm"] * (k["bn"] if k["tma_store"] else k["bn"] + 8) * 2
-    shared = max(k["ns"] * slot, epi) + 1024
+    # Overlap runs ring + epilogue staging concurrently -> disjoint (ring+epi).
+    shared = ((k["ns"] * slot + epi) if k.get("overlap", 0) else max(k["ns"] * slot, epi)) + 1024
     block  = (k["nw"] * 32, 1, 1)
     if k.get("persistent") and num_sms:
         # Persistent grid: one CTA per SM; the kernel's tile loop walks the rest.
@@ -127,7 +131,7 @@ def tag_for(tier, k):
     # persistent does NOT (launch-only, same cubin) so it stays out.
     return (f"{tier['dir']}_bm{k['bm']}_bn{k['bn']}_bk{k['bk']}"
             f"_ns{k['ns']}_gsm{k['gsm']}_nw{k['nw']}_ts{k['tma_store']}"
-            f"_ld{k.get('ld_width', 8)}")
+            f"_ld{k.get('ld_width', 8)}_ov{k.get('overlap', 0)}")
 
 
 def render_to_dir(tier, k):
@@ -135,7 +139,8 @@ def render_to_dir(tier, k):
     d = SCRATCH / tag_for(tier, k)
     d.mkdir(parents=True, exist_ok=True)
     src = mc.render_kernel(tier, k["bm"], k["bn"], k["bk"], k["ns"], k["gsm"], k["nw"],
-                           tma_store=k["tma_store"], ld_width=k.get("ld_width", 8))
+                           tma_store=k["tma_store"], ld_width=k.get("ld_width", 8),
+                           overlap=k.get("overlap", 0))
     p = d / "kernel.cu"
     p.write_text(src)
     return p
@@ -234,7 +239,8 @@ def build_to_run(tier_dirs, invalid_sample, bn_opts=None):
                                       cluster=tier["cluster"], tma_store=k["tma_store"],
                                       persistent=k.get("persistent", 0),
                                       persistent_ok=tier.get("persistent_ok", False),
-                                      ld_width=k.get("ld_width", 8))
+                                      ld_width=k.get("ld_width", 8),
+                                      overlap=k.get("overlap", 0))
         (valid if not warnings else invalid).append((tier, k))
     stepi = max(1, len(invalid) // max(1, invalid_sample))
     inv_sample = invalid[::stepi][:invalid_sample]
@@ -299,6 +305,16 @@ def main():
     SCRATCH.mkdir(parents=True, exist_ok=True)
     bn_opts = [int(x) for x in args.bn.split(",")] if args.bn else None
     to_run, n_valid, n_invalid, n_sample = build_to_run(tier_dirs, args.invalid_sample, bn_opts)
+    # Publish the valid-combo count next to the results jsonl so a UI can show
+    # a progress bar (done = lines in jsonl, total = this).  Per-run path (not a
+    # shared file) so concurrent sweeps don't clobber each other.  Orchestrator only.
+    if args.launch_worker is None:
+        try:
+            nvp = (args.jsonl + ".nvalid") if args.jsonl else str(SCRATCH / "n_valid.txt")
+            with open(nvp, "w") as _f:
+                _f.write(str(n_valid))
+        except Exception:
+            pass
 
     device, _ = rt.init_cuda()
     arch = rt.compute_arch(device)
@@ -443,7 +459,7 @@ def main():
             }
         entries.append({k: r[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw",
                                            "tma_store", "persistent")}
-                       | {"ld_width": r.get("ld_width", 8),
+                       | {"ld_width": r.get("ld_width", 8), "overlap": r.get("overlap", 0),
                           "correct": bool(r["correct"]), "perf": perf})
     matrix = {
         "generated_by": "webui/tests/gpu_codegen_driver.py",

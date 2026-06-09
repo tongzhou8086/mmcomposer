@@ -91,44 +91,31 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
             "stderr": (proc.stderr or proc.stdout)[-800:]}
 
 
-def run_autotune(tier_dirs, M: int, N: int, K: int, bn_opts=None, timeout: int = 3000) -> dict:
-    """Live sweep: srun the gpu_codegen_driver over every valid combo for the
-    given tiers at one (M,N,K), then return the ranked results.
-
-    Reuses the offline driver (parallel compile + fault-isolated run + cuBLAS),
-    but writes to a TEMP matrix so the committed one is never touched.  Returns
-    {ok, cublas_tflops, results:[{tier,bm..,tflops,vs_cublas,rel_err} sorted],
-    n_combos, error}.
-    """
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    bn_csv = ",".join(str(b) for b in bn_opts) if bn_opts else ""
-    tag = hashlib.sha1((",".join(tier_dirs) + f"|{M}x{N}x{K}|bn{bn_csv}").encode()).hexdigest()[:16]
-    out_matrix = SCRATCH / f"autotune_{tag}.json"
-    if out_matrix.exists():
-        out_matrix.unlink()
-
+def _autotune_cmd(tier_dirs, M, N, K, out_matrix, bn_opts):
     py = os.environ.get("MMCOMPOSER_PY", sys.executable)
     srun_args = shlex.split(os.environ.get("MMCOMPOSER_AUTOTUNE_SRUN_ARGS", DEFAULT_AUTOTUNE_SRUN_ARGS))
-    cmd = ["srun", *srun_args, py, str(DRIVER),
-           "--perf-shapes", f"{M}x{N}x{K}",
-           "--tiers", ",".join(tier_dirs),
-           "--invalid-sample", "0",          # autotune wants valid combos only
-           "--compat-out", str(out_matrix)]
-    if bn_csv:
-        cmd += ["--bn", bn_csv]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"autotune sweep timed out after {timeout}s"}
+    cmd = ["srun", *srun_args, py, str(DRIVER), "--perf-shapes", f"{M}x{N}x{K}",
+           "--tiers", ",".join(tier_dirs), "--invalid-sample", "0", "--compat-out", str(out_matrix)]
+    if bn_opts:
+        cmd += ["--bn", ",".join(str(b) for b in bn_opts)]
+    return cmd
 
+
+def _out_matrix(tier_dirs, M, N, K, bn_opts):
+    bn_csv = ",".join(str(b) for b in bn_opts) if bn_opts else ""
+    tag = hashlib.sha1((",".join(tier_dirs) + f"|{M}x{N}x{K}|bn{bn_csv}").encode()).hexdigest()[:16]
+    return SCRATCH / f"autotune_{tag}.json"
+
+
+def _rank_matrix(out_matrix, M, N, K) -> dict:
+    """Parse a driver matrix file into ranked results for shape (M,N,K)."""
+    out_matrix = pathlib.Path(out_matrix)
     if not out_matrix.exists():
-        return {"ok": False, "error": "sweep produced no matrix (driver failed?)",
-                "stderr": (proc.stderr or proc.stdout)[-1200:]}
+        return {"ok": False, "error": "sweep produced no matrix (driver failed?)"}
     try:
         matrix = json.loads(out_matrix.read_text())
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"could not parse sweep output: {e}"}
-
     key = mc.shape_key(M, N, K)
     cub = (matrix.get("cublas_tflops") or {}).get(key)
     results = []
@@ -139,10 +126,76 @@ def run_autotune(tier_dirs, M: int, N: int, K: int, bn_opts=None, timeout: int =
         if p and p.get("tflops"):
             results.append({**{k: e[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm",
                                                  "nw", "tma_store", "persistent")},
-                            "ld_width": e.get("ld_width", 8),
+                            "ld_width": e.get("ld_width", 8), "overlap": e.get("overlap", 0),
                             "tflops": p["tflops"], "vs_cublas": p.get("vs_cublas"),
                             "rel_err": p.get("rel_err")})
     results.sort(key=lambda r: r["tflops"], reverse=True)
     return {"ok": bool(results), "cublas_tflops": cub, "results": results,
             "n_combos": len(results),
             "error": None if results else "no correct combos measured for this shape"}
+
+
+def run_autotune(tier_dirs, M: int, N: int, K: int, bn_opts=None, timeout: int = 3000) -> dict:
+    """Blocking sweep (for CLI/tests): srun the driver over every valid combo,
+    then return ranked results.  Writes a TEMP matrix (committed one untouched)."""
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    out_matrix = _out_matrix(tier_dirs, M, N, K, bn_opts)
+    if out_matrix.exists():
+        out_matrix.unlink()
+    try:
+        proc = subprocess.run(_autotune_cmd(tier_dirs, M, N, K, out_matrix, bn_opts),
+                              capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"autotune sweep timed out after {timeout}s"}
+    res = _rank_matrix(out_matrix, M, N, K)
+    if not res.get("ok") and not res.get("stderr"):
+        res["stderr"] = (proc.stderr or proc.stdout)[-1200:]
+    return res
+
+
+def autotune_start(tier_dirs, M, N, K, bn_opts=None) -> dict:
+    """Launch the sweep in the BACKGROUND (non-blocking) for a UI progress bar.
+    Uses a per-run jsonl (+ .nvalid sibling) so concurrent sweeps don't clobber
+    each other's progress.  Returns a job dict for autotune_poll/collect."""
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    out_matrix = _out_matrix(tier_dirs, M, N, K, bn_opts)
+    jsonl = pathlib.Path(str(out_matrix)[:-5] + ".jsonl")   # autotune_<tag>.jsonl
+    n_valid = pathlib.Path(str(jsonl) + ".nvalid")
+    for f in (out_matrix, jsonl, n_valid):                   # clean slate for fresh progress
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            pass
+    cmd = _autotune_cmd(tier_dirs, M, N, K, out_matrix, bn_opts) + ["--jsonl", str(jsonl)]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    return {"proc": proc, "out_matrix": str(out_matrix),
+            "jsonl": str(jsonl), "n_valid": str(n_valid), "M": M, "N": N, "K": K}
+
+
+def autotune_poll(job) -> tuple:
+    """Return (done, total, finished).  total is None until the driver has
+    enumerated combos; done counts result lines (0 during the compile phase)."""
+    finished = job["proc"].poll() is not None
+    total = None
+    try:
+        total = int(pathlib.Path(job["n_valid"]).read_text().strip())
+    except Exception:
+        pass
+    done = 0
+    try:
+        with open(job["jsonl"]) as f:
+            done = sum(1 for _ in f)
+    except FileNotFoundError:
+        pass
+    return done, total, finished
+
+
+def autotune_collect(job) -> dict:
+    """Parse the finished sweep's matrix into ranked results."""
+    res = _rank_matrix(job["out_matrix"], job["M"], job["N"], job["K"])
+    if not res.get("ok") and not res.get("stderr"):
+        try:
+            res["stderr"] = (job["proc"].stderr.read() or "")[-1200:] if job["proc"].stderr else ""
+        except Exception:
+            pass
+    return res

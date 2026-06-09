@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 import streamlit as st
 
@@ -377,10 +378,35 @@ with tab_bench:
             ws, cta = mc.toggles_for_dir(tier_dir)
             return ("On" if ws else "Off", "On" if cta else "Off")
 
-        if st.button("🔧  Autotune: sweep combos on a B200", key="autotune_btn"):
-            with st.spinner(f"Sweeping valid knob combinations for {m0}×{n0}×{k0} on a B200 "
-                            "(compiles + runs each + cuBLAS — this takes minutes)…"):
-                at_cache[at_sig] = live_bench.run_autotune(at_dirs, m0, n0, k0, bn_opts=at_bn)
+        # Stateful: a background sweep (job) + a polled progress bar.
+        job = st.session_state.get("autotune_job")
+        if job is not None:
+            done, total, finished = live_bench.autotune_poll(job)
+            if finished:
+                at_cache[job["sig"]] = live_bench.autotune_collect(job)
+                st.session_state.pop("autotune_job", None)
+                st.rerun()
+            else:
+                if total:
+                    pct = min(done / total, 0.99)
+                    st.progress(pct, text=f"Sweeping on a B200 — {done}/{total} combos ({pct:.0%})")
+                else:
+                    st.progress(0.0, text="Compiling kernels on a B200 (combo count pending)…")
+                if st.button("✖  Cancel sweep", key="autotune_cancel"):
+                    try:
+                        job["proc"].terminate()
+                    except Exception:
+                        pass
+                    st.session_state.pop("autotune_job", None)
+                    st.rerun()
+                time.sleep(2.0)
+                st.rerun()
+        elif st.button("🔧  Autotune: sweep combos on a B200", key="autotune_btn"):
+            j = live_bench.autotune_start(at_dirs, m0, n0, k0, bn_opts=at_bn)
+            j["sig"] = at_sig
+            st.session_state.autotune_job = j
+            st.rerun()
+
         at = at_cache.get(at_sig)
         if at and at.get("ok"):
             b = at["results"][0]
@@ -391,7 +417,7 @@ with tab_bench:
                 f"{at['cublas_tflops']:.0f}) — Warp-spec={bws} · 2-CTA cluster={bcta} · "
                 f"BN={b['bn']} NS={b['ns']} GSM={b['gsm']} NW={b['nw']} "
                 f"TMA_STORE={b['tma_store']} PERSISTENT={b['persistent']} "
-                f"LD_WIDTH={b.get('ld_width', 8)}")
+                f"LD_WIDTH={b.get('ld_width', 8)} OVERLAP={b.get('overlap', 0)}")
             n_res = len(at["results"])
             top_n = st.slider("Show top", min_value=3, max_value=min(50, n_res),
                               value=min(10, n_res), key="autotune_topn") if n_res > 3 else n_res
@@ -401,7 +427,7 @@ with tab_bench:
                 rows.append({"#": i + 1, "Warp-spec": ws, "2-CTA": cta,
                              "BN": r["bn"], "NS": r["ns"], "GSM": r["gsm"], "NW": r["nw"],
                              "TMA": r["tma_store"], "PERS": r["persistent"],
-                             "LD": r.get("ld_width", 8),
+                             "LD": r.get("ld_width", 8), "OV": r.get("overlap", 0),
                              "TFLOPS": f"{r['tflops']:.0f}",
                              "vs cuBLAS": f"{r['vs_cublas']:.0%}" if r.get("vs_cublas") else "—"})
             st.dataframe(rows, width="stretch", hide_index=True)
@@ -410,10 +436,10 @@ with tab_bench:
             st.error(f"Autotune failed: {at.get('error')}")
             if at.get("stderr"):
                 st.code(at["stderr"], language="text")
-        else:
+        elif st.session_state.get("autotune_job") is None:
             st.caption("Autotune submits one srun that compiles + benchmarks every valid combo "
-                       "(tens to hundreds of kernels). Production (warp-spec on) is faster; "
-                       "Full is the complete search.")
+                       "(tens to hundreds of kernels), with a live progress bar.  Production "
+                       "(warp-spec on) is faster; Full is the complete search.")
         st.divider()
 
     try:
