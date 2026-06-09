@@ -100,7 +100,7 @@ with st.sidebar:
     ms_ws = st.selectbox(
         "Multi-staging + warp specialization", mc.ONOFF_OPTS, index=_onoff("ms_ws"),
         help="Dedicated TMA + MMA warps (async producer/consumer) on top of the "
-             "multi-stage ring.  Off = synchronous-MMA baseline (Tier 1).") == "On"
+             "multi-stage ring.  Off = synchronous MMA (no producer/consumer split).") == "On"
     two_cta = st.selectbox(
         "2-CTA cluster MMA", mc.ONOFF_OPTS, index=_onoff("two_cta"),
         help="`__cluster_dims__(2,1,1)` + `cta_group::2`: two CTAs cooperate in one "
@@ -116,8 +116,9 @@ with st.sidebar:
         "Persistent grid", mc.ONOFF_OPTS, index=_onoff("persistent"),
         help="Launch one CTA per SM and loop over output tiles inside the "
              "kernel (grid = #SMs) instead of one CTA per tile.  Trims "
-             "launch/tail overhead — a small, config-dependent win on Tier 2.  "
-             "Wired on the warp-specialized single-CTA tier only.") == "On"
+             "launch/tail overhead — config-dependent (a clear win on low-K / "
+             "many-tile shapes).  Available with warp specialization on and the "
+             "2-CTA cluster off.") == "On"
 
     st.subheader("Problem shape")
     shapes_text = st.text_area(
@@ -332,48 +333,64 @@ with tab_bench:
             st.info("Click **Benchmark this config on a B200 (live)** to measure this exact shape.")
         st.divider()
 
-        # ── Autotune: live sweep of every valid combo, ranked ────────────
-        DIR_LABEL = {t["dir"]: t["label"] for t in mc.TIER_MAP.values() if t}
-        ALL_TIER_DIRS = list(DIR_LABEL.keys())
-        st.markdown("**🔧 Autotune** — sweep *every valid combo* on a B200 for this shape and rank by TFLOPS.")
-        scope = st.radio("Sweep scope", ["Selected approach only", "All tiers (full, slower)"],
-                         horizontal=True, key="autotune_scope",
-                         help="Selected = sweep knobs for your current tier; All = also sweep the other tiers.")
-        at_dirs = [tier["dir"]] if scope.startswith("Selected") else ALL_TIER_DIRS
+        # ── Autotune: live sweep of valid knob combinations, ranked ──────
+        # No "tier" in the UI — that's just our internal skeleton split; users
+        # see knobs.  Warp-spec-on = the knob combos with warp specialization
+        # enabled (the practical production set); full also sweeps the
+        # warp-spec-off combos kept for education.
+        WS_DIRS  = [t["dir"] for k, t in mc.TIER_MAP.items() if t and k[0]]  # k = (ms_ws, two_cta)
+        ALL_DIRS = [t["dir"] for t in mc.TIER_MAP.values() if t]
+        st.markdown("**🔧 Autotune** — sweep valid knob combinations on a B200 for this shape and rank by TFLOPS.")
+        scope = st.radio(
+            "Sweep scope",
+            ["Warp specialization on (production)", "Full sweep (incl. warp-spec off)"],
+            horizontal=True, key="autotune_scope",
+            help="In production warp specialization essentially always helps, so the production "
+                 "sweep skips the warp-spec-off combos (about half the search). Full sweeps "
+                 "everything, including the warp-spec-off combos kept for educational comparison.")
+        at_dirs = WS_DIRS if scope.startswith("Warp") else ALL_DIRS
         at_sig = (tuple(at_dirs), m0, n0, k0)
         at_cache = st.session_state.setdefault("autotune_cache", {})
-        if st.button("🔧  Autotune: sweep valid combos on a B200", key="autotune_btn"):
-            with st.spinner(f"Sweeping all valid combos for {m0}×{n0}×{k0} on a B200 "
+
+        def _knob_cols(tier_dir):
+            ws, cta = mc.toggles_for_dir(tier_dir)
+            return ("On" if ws else "Off", "On" if cta else "Off")
+
+        if st.button("🔧  Autotune: sweep combos on a B200", key="autotune_btn"):
+            with st.spinner(f"Sweeping valid knob combinations for {m0}×{n0}×{k0} on a B200 "
                             "(compiles + runs each + cuBLAS — this takes minutes)…"):
                 at_cache[at_sig] = live_bench.run_autotune(at_dirs, m0, n0, k0)
         at = at_cache.get(at_sig)
         if at and at.get("ok"):
             b = at["results"][0]
+            bws, bcta = _knob_cols(b["tier"])
             st.success(
-                f"🏆 **Best of {at['n_combos']} valid combos** at {m0}×{n0}×{k0}: "
+                f"🏆 **Best of {at['n_combos']} combos** at {m0}×{n0}×{k0}: "
                 f"**{b['tflops']:.0f} TFLOPS** ({b['vs_cublas']:.0%} of cuBLAS "
-                f"{at['cublas_tflops']:.0f}) — {DIR_LABEL.get(b['tier'], b['tier']).split('—')[0].strip()} · "
+                f"{at['cublas_tflops']:.0f}) — Warp-spec={bws} · 2-CTA cluster={bcta} · "
                 f"BN={b['bn']} NS={b['ns']} GSM={b['gsm']} NW={b['nw']} "
                 f"TMA_STORE={b['tma_store']} PERSISTENT={b['persistent']}")
             n_res = len(at["results"])
             top_n = st.slider("Show top", min_value=3, max_value=min(50, n_res),
                               value=min(10, n_res), key="autotune_topn") if n_res > 3 else n_res
-            st.dataframe([{
-                "#": i + 1,
-                "Tier": DIR_LABEL.get(r["tier"], r["tier"]).split("—")[0].replace("Tier", "T").strip(),
-                "BN": r["bn"], "NS": r["ns"], "GSM": r["gsm"], "NW": r["nw"],
-                "TMA": r["tma_store"], "PERS": r["persistent"],
-                "TFLOPS": f"{r['tflops']:.0f}",
-                "vs cuBLAS": f"{r['vs_cublas']:.0%}" if r.get("vs_cublas") else "—",
-            } for i, r in enumerate(at["results"][:top_n])], width="stretch", hide_index=True)
+            rows = []
+            for i, r in enumerate(at["results"][:top_n]):
+                ws, cta = _knob_cols(r["tier"])
+                rows.append({"#": i + 1, "Warp-spec": ws, "2-CTA": cta,
+                             "BN": r["bn"], "NS": r["ns"], "GSM": r["gsm"], "NW": r["nw"],
+                             "TMA": r["tma_store"], "PERS": r["persistent"],
+                             "TFLOPS": f"{r['tflops']:.0f}",
+                             "vs cuBLAS": f"{r['vs_cublas']:.0%}" if r.get("vs_cublas") else "—"})
+            st.dataframe(rows, width="stretch", hide_index=True)
             st.caption("Set the sidebar to the winning knobs (and re-generate) to download that kernel.")
         elif at:
             st.error(f"Autotune failed: {at.get('error')}")
             if at.get("stderr"):
                 st.code(at["stderr"], language="text")
         else:
-            st.caption("Autotune submits one srun that compiles + benchmarks every valid combo — "
-                       "tens to hundreds of kernels. Selected-approach is faster; All-tiers is the full search.")
+            st.caption("Autotune submits one srun that compiles + benchmarks every valid combo "
+                       "(tens to hundreds of kernels). Production (warp-spec on) is faster; "
+                       "Full is the complete search.")
         st.divider()
 
     try:
