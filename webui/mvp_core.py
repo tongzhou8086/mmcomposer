@@ -59,9 +59,11 @@ GSM_OPTS = [1, 2, 4, 8, 16, 32]
 NW_OPTS  = [4, 8, 16]
 # Epilogue TMEM->register load width: 32-bit elements per lane per tcgen05.ld
 # (.32x32b.xN).  Wider = fewer loads + fewer wait_ld syncs, more registers.
-# 8 = current behaviour.  Must divide COLS_PER_WARP (= BN / (NW/(BM/32))).
-# (x64 dropped — measured no better than x16/x32, just more registers.)
-TCGEN05_LD_WIDTH_OPTS = [8, 16, 32]
+# Must divide COLS_PER_WARP (= BN / (NW/(BM/32))).  A first-class swept
+# dimension (like NW/NS).  x32/x64 dropped: the B200 sweep showed they don't
+# raise the autotuned ceiling (it's reached with x8/x16), so they'd only bloat
+# the grid; x16 is kept as the one width with a measured per-config win.
+TCGEN05_LD_WIDTH_OPTS = [8, 16]
 # Epilogue Phase-2 store path: 0 = all-thread int4 stores; 1 = one async
 # TMA store per CTA (swizzled SMEM staging).  A universal toggle.
 TMA_STORE_OPTS = [0, 1]
@@ -221,8 +223,8 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
                 )
             else:
                 cols_per_warp = bn // col_groups
-                if ld_width not in (8, 16, 32):
-                    out.append(f"**Epilogue tcgen05.ld width = {ld_width}** must be one of 8/16/32.")
+                if ld_width not in (8, 16):
+                    out.append(f"**Epilogue tcgen05.ld width = {ld_width}** must be one of 8/16.")
                 elif cols_per_warp % ld_width != 0:
                     out.append(
                         f"**Epilogue tcgen05.ld width = {ld_width}** must divide the per-warp column "
@@ -409,20 +411,20 @@ def load_compat() -> dict:
 
 @functools.lru_cache(maxsize=1)
 def _compat_index() -> dict:
-    """(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent) -> entry."""
+    """(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent, ld_width) -> entry."""
     idx = {}
     for e in load_compat().get("entries", []):
         idx[(e["tier"], e["bm"], e["bn"], e["bk"], e["ns"], e["gsm"], e["nw"],
-             e.get("tma_store", 0), e.get("persistent", 0))] = e
+             e.get("tma_store", 0), e.get("persistent", 0), e.get("ld_width", 8))] = e
     return idx
 
 
-def compat_status(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0):
+def compat_status(tier_dir, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0, ld_width=8):
     """Return ('verified'|'failed'|'unknown', entry|None) for a combo.
 
     'verified'/'failed' come from the empirical B200 sweep; 'unknown'
     means the combo wasn't in the swept grid (fall back to static)."""
-    e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent))
+    e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent, ld_width))
     if e is None:
         return "unknown", None
     return ("verified" if e["correct"] else "failed"), e
@@ -434,10 +436,10 @@ def shape_key(M, N, K):
     return str(M) if (M == N == K) else f"{M}x{N}x{K}"
 
 
-def compat_perf(tier_dir, bm, bn, bk, ns, gsm, nw, M, N, K, tma_store=0, persistent=0):
+def compat_perf(tier_dir, bm, bn, bk, ns, gsm, nw, M, N, K, tma_store=0, persistent=0, ld_width=8):
     """Return the measured {rel_err, tflops, vs_cublas} for this combo at
     shape (M, N, K), or None if not in the matrix."""
-    e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent))
+    e = _compat_index().get((tier_dir, bm, bn, bk, ns, gsm, nw, tma_store, persistent, ld_width))
     if e is None:
         return None
     return (e.get("perf") or {}).get(shape_key(M, N, K))
@@ -486,6 +488,7 @@ def recommended_config(shape=None):
     ms_ws, two_cta = toggles_for_dir(best["tier"])
     knobs = {k: best[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw", "tma_store")}
     knobs["persistent"] = best.get("persistent", 0)
+    knobs["ld_width"] = best.get("ld_width", 8)
     return {**knobs, "ms_ws": ms_ws, "two_cta": two_cta,
             "tflops": best_tf, "shape": ref}
 

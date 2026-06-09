@@ -51,10 +51,11 @@ SCRATCH = WEBUI / "tests" / "_scratch" / "gpu_driver"
 def all_combos(tier_dirs, bn_opts=None):
     """Yield (tier_key, tier, knobs-dict) over the dropdown grid.
 
-    bn_opts restricts the BN values swept (default: all of mc.BN_OPTS) — e.g.
-    the production sweep passes [128, 256] to skip BN=64.
+    bn_opts restricts BN for the production scope (default: all of mc.BN_OPTS).
+    TCGEN05_LD_WIDTH is a first-class swept dimension like NW/NS/etc.
     """
     bn_list = bn_opts if bn_opts else mc.BN_OPTS
+    ld_list = mc.TCGEN05_LD_WIDTH_OPTS
     dir_to_key = {t["dir"]: k for k, t in mc.TIER_MAP.items() if t}
     for tdir in tier_dirs:
         key = dir_to_key[tdir]
@@ -62,12 +63,12 @@ def all_combos(tier_dirs, bn_opts=None):
         # PERSISTENT is a launch knob (same cubin) — only the persistent-
         # capable tiers get the grid=#SMs variant; others stay at [0].
         pers_opts = mc.PERSISTENT_OPTS if tier.get("persistent_ok") else [0]
-        for bm, bn, bk, ns, gsm, nw, ts, pers in itertools.product(
+        for bm, bn, bk, ns, gsm, nw, ts, pers, ldw in itertools.product(
             mc.BM_OPTS, bn_list, mc.BK_OPTS, mc.NS_OPTS, mc.GSM_OPTS, mc.NW_OPTS,
-            mc.TMA_STORE_OPTS, pers_opts
+            mc.TMA_STORE_OPTS, pers_opts, ld_list
         ):
             yield tier, dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
-                             tma_store=ts, persistent=pers)
+                             tma_store=ts, persistent=pers, ld_width=ldw)
 
 
 def parse_perf_shapes(spec):
@@ -122,8 +123,11 @@ def launch_spec(tier, k, M, N, K, num_sms=None):
 
 
 def tag_for(tier, k):
+    # ld_width changes the cubin (epilogue constexpr), so it's in the tag;
+    # persistent does NOT (launch-only, same cubin) so it stays out.
     return (f"{tier['dir']}_bm{k['bm']}_bn{k['bn']}_bk{k['bk']}"
-            f"_ns{k['ns']}_gsm{k['gsm']}_nw{k['nw']}_ts{k['tma_store']}")
+            f"_ns{k['ns']}_gsm{k['gsm']}_nw{k['nw']}_ts{k['tma_store']}"
+            f"_ld{k.get('ld_width', 8)}")
 
 
 def render_to_dir(tier, k):
@@ -131,7 +135,7 @@ def render_to_dir(tier, k):
     d = SCRATCH / tag_for(tier, k)
     d.mkdir(parents=True, exist_ok=True)
     src = mc.render_kernel(tier, k["bm"], k["bn"], k["bk"], k["ns"], k["gsm"], k["nw"],
-                           tma_store=k["tma_store"])
+                           tma_store=k["tma_store"], ld_width=k.get("ld_width", 8))
     p = d / "kernel.cu"
     p.write_text(src)
     return p
@@ -229,7 +233,8 @@ def build_to_run(tier_dirs, invalid_sample, bn_opts=None):
         warnings = mc.validate_config(k["bm"], k["bn"], k["bk"], k["ns"], k["gsm"], k["nw"],
                                       cluster=tier["cluster"], tma_store=k["tma_store"],
                                       persistent=k.get("persistent", 0),
-                                      persistent_ok=tier.get("persistent_ok", False))
+                                      persistent_ok=tier.get("persistent_ok", False),
+                                      ld_width=k.get("ld_width", 8))
         (valid if not warnings else invalid).append((tier, k))
     stepi = max(1, len(invalid) // max(1, invalid_sample))
     inv_sample = invalid[::stepi][:invalid_sample]
@@ -438,7 +443,8 @@ def main():
             }
         entries.append({k: r[k] for k in ("tier", "bm", "bn", "bk", "ns", "gsm", "nw",
                                            "tma_store", "persistent")}
-                       | {"correct": bool(r["correct"]), "perf": perf})
+                       | {"ld_width": r.get("ld_width", 8),
+                          "correct": bool(r["correct"]), "perf": perf})
     matrix = {
         "generated_by": "webui/tests/gpu_codegen_driver.py",
         "arch": arch,

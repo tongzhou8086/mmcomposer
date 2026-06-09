@@ -31,16 +31,15 @@
         taddr + ((uint32_t)(cta_rank * BM + row_warp * 32) << 16);
     const int col_base = col_warp * COLS_PER_WARP;
 
-    // TCGEN05_LD_WIDTH (8/16/32/64) = 32-bit elems/lane per tcgen05.ld.
+    // TCGEN05_LD_WIDTH (8/16) = 32-bit elems/lane per tcgen05.ld.
     // Wider = fewer loads + fewer wait_ld syncs (more registers, free while
     // we're SMEM-occupancy-bound).
     constexpr int LDW = TCGEN05_LD_WIDTH;
     #pragma unroll
     for (int n = col_base; n < col_base + COLS_PER_WARP; n += LDW) {
         float tmp[LDW];
-        if constexpr (LDW == 8)       tcgen05_ld_32x32b_x8 (taddr_row + (uint32_t)n, tmp);
-        else if constexpr (LDW == 16) tcgen05_ld_32x32b_x16(taddr_row + (uint32_t)n, tmp);
-        else                          tcgen05_ld_32x32b_x32(taddr_row + (uint32_t)n, tmp);
+        if constexpr (LDW == 8) tcgen05_ld_32x32b_x8 (taddr_row + (uint32_t)n, tmp);
+        else                    tcgen05_ld_32x32b_x16(taddr_row + (uint32_t)n, tmp);
         tcgen05_wait_ld();
 
         __nv_bfloat162 packed[LDW / 2];

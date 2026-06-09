@@ -205,19 +205,19 @@ else:
     # Empirical ground truth from the committed B200 compatibility matrix.
     try:
         status, entry = mc.compat_status(tier["dir"], bm, bn, bk, ns, gsm, nw,
-                                          tma_store=tma_store, persistent=persistent)
+                                          tma_store=tma_store, persistent=persistent, ld_width=ld_width)
         if status == "verified":
             # Prefer perf at the shape the user is tuning; else the largest swept square.
             em, en, ek = shapes[0]
             p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, em, en, ek,
-                               tma_store=tma_store, persistent=persistent)
+                               tma_store=tma_store, persistent=persistent, ld_width=ld_width)
             ref = (em, en, ek)
             if not (p and p.get("tflops")):
                 squares = [t for t in mc.perf_shapes() if t[0] == t[1] == t[2]]
                 if squares:
                     ref = max(squares)
                     p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, *ref,
-                                       tma_store=tma_store, persistent=persistent)
+                                       tma_store=tma_store, persistent=persistent, ld_width=ld_width)
             msg = f"✅ Empirically verified on B200 ({cm.get('arch', 'sm_100a')}): compiles, runs, correct."
             if p and p.get("tflops"):
                 lbl = f"{ref[0]}³" if ref[0] == ref[1] == ref[2] else f"{ref[0]}×{ref[1]}×{ref[2]}"
@@ -381,7 +381,8 @@ with tab_bench:
                 f"**{b['tflops']:.0f} TFLOPS** ({b['vs_cublas']:.0%} of cuBLAS "
                 f"{at['cublas_tflops']:.0f}) — Warp-spec={bws} · 2-CTA cluster={bcta} · "
                 f"BN={b['bn']} NS={b['ns']} GSM={b['gsm']} NW={b['nw']} "
-                f"TMA_STORE={b['tma_store']} PERSISTENT={b['persistent']}")
+                f"TMA_STORE={b['tma_store']} PERSISTENT={b['persistent']} "
+                f"LD_WIDTH={b.get('ld_width', 8)}")
             n_res = len(at["results"])
             top_n = st.slider("Show top", min_value=3, max_value=min(50, n_res),
                               value=min(10, n_res), key="autotune_topn") if n_res > 3 else n_res
@@ -391,6 +392,7 @@ with tab_bench:
                 rows.append({"#": i + 1, "Warp-spec": ws, "2-CTA": cta,
                              "BN": r["bn"], "NS": r["ns"], "GSM": r["gsm"], "NW": r["nw"],
                              "TMA": r["tma_store"], "PERS": r["persistent"],
+                             "LD": r.get("ld_width", 8),
                              "TFLOPS": f"{r['tflops']:.0f}",
                              "vs cuBLAS": f"{r['vs_cublas']:.0%}" if r.get("vs_cublas") else "—"})
             st.dataframe(rows, width="stretch", hide_index=True)
@@ -418,7 +420,7 @@ with tab_bench:
         square = (m == n == k)
         try:
             p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, m, n, k,
-                               tma_store=tma_store, persistent=persistent)
+                               tma_store=tma_store, persistent=persistent, ld_width=ld_width)
             cub = mc.cublas_tflops(m, n, k)
         except Exception:
             p, cub = None, None
