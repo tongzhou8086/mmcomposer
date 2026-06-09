@@ -60,7 +60,7 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
     kernel_path.write_text(mc.render_kernel(
         tier, knobs["bm"], knobs["bn"], knobs["bk"], knobs["ns"], knobs["gsm"],
         knobs["nw"], tma_store=knobs.get("tma_store", 0),
-        ld_width=knobs.get("ld_width", 8)))
+        ld_width=knobs.get("ld_width", 8), overlap=knobs.get("overlap", 0)))
 
     py = os.environ.get("MMCOMPOSER_PY", sys.executable)
     srun_args = shlex.split(os.environ.get("MMCOMPOSER_SRUN_ARGS", DEFAULT_SRUN_ARGS))
@@ -70,6 +70,7 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
            "--bm", str(knobs["bm"]), "--bn", str(knobs["bn"]), "--bk", str(knobs["bk"]),
            "--ns", str(knobs["ns"]), "--nw", str(knobs["nw"]),
            "--tma_store", str(knobs.get("tma_store", 0)),
+           "--overlap", str(knobs.get("overlap", 0)),
            "-M", str(M), "-N", str(N), "-K", str(K)]
 
     try:

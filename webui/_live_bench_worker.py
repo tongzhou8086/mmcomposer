@@ -18,6 +18,7 @@ def main():
     ap.add_argument("--out", required=True)          # result json path
     ap.add_argument("--cluster", type=int, default=0)
     ap.add_argument("--persistent", type=int, default=0)
+    ap.add_argument("--overlap", type=int, default=0)
     for k in ("bm", "bn", "bk", "ns", "nw", "tma_store"):
         ap.add_argument(f"--{k}", type=int, required=True)
     ap.add_argument("-M", type=int, required=True)
@@ -43,7 +44,7 @@ def main():
         bn_local = a.bn // cta_group
         slot = a.bm * a.bk * 2 + bn_local * a.bk * 2
         epi = a.bm * (a.bn if a.tma_store else a.bn + 8) * 2
-        shared = max(a.ns * slot, epi) + 1024
+        shared = (a.ns * slot + epi if a.overlap else max(a.ns * slot, epi)) + 1024
         block = (a.nw * 32, 1, 1)
         if a.persistent:
             grid = (num_sms - num_sms % cta_group, 1, 1)

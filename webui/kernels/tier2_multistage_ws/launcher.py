@@ -23,12 +23,17 @@ GROUP_SIZE_M = 8
 NUM_WARPS    = 4
 TMA_STORE    = 0
 PERSISTENT   = 0    # 1 → launch grid = #SMs; each CTA walks many tiles
+TCGEN05_LD_WIDTH  = 8
+EPILOGUE_OVERLAP  = 0    # 1 → epilogue overlaps next tile's K-loop (needs PERSISTENT, NW=8)
 
 ELEM_BYTES   = 2
 THREADS      = NUM_WARPS * 32
 SLOT_BYTES   = BM * BK * ELEM_BYTES + BN * BK * ELEM_BYTES
 EPI_BYTES    = BM * (BN if TMA_STORE else BN + 8) * ELEM_BYTES
-SHARED_BYTES = max(NS * SLOT_BYTES, EPI_BYTES) + 1024
+# Overlap runs the ring and the epilogue staging concurrently → disjoint
+# (ring + epi); otherwise they're time-disjoint and share the region (max).
+SHARED_BYTES = ((NS * SLOT_BYTES + EPI_BYTES) if EPILOGUE_OVERLAP
+                else max(NS * SLOT_BYTES, EPI_BYTES)) + 1024
 HERE         = os.path.dirname(os.path.abspath(__file__))
 
 

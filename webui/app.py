@@ -126,6 +126,12 @@ with st.sidebar:
              "(.32x32b.xN).  Wider = fewer loads + fewer wait_ld syncs (more "
              "registers — essentially free while SMEM-occupancy-bound).  Must "
              "divide the per-warp column span; may help the epilogue.")
+    overlap = st.selectbox(
+        "Epilogue overlap (persistent)", mc.ONOFF_OPTS, index=_onoff("overlap"),
+        help="Run each tile's epilogue concurrently with the next tile's K-loop "
+             "(TMEM double-buffer + 4 dedicated epilogue warps).  A clear win on "
+             "epilogue-bound low-K shapes.  Requires Persistent grid on, num_warps=8, "
+             "and the int4 store (TMA store off).") == "On"
 
     st.subheader("Problem shape")
     shapes_text = st.text_area(
@@ -142,7 +148,7 @@ if generate:
     st.session_state.applied = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                                     ms_ws=ms_ws, two_cta=two_cta, tma_store=int(tma_store),
                                     persistent=int(persistent), ld_width=int(ld_width),
-                                    shapes_text=shapes_text)
+                                    overlap=int(overlap), shapes_text=shapes_text)
     st.session_state.run_live = True   # fire the on-the-fly B200 bench (if live mode)
 
 if "applied" not in st.session_state:
@@ -156,6 +162,7 @@ ms_ws, two_cta = cfg["ms_ws"], cfg["two_cta"]
 tma_store = cfg["tma_store"]
 persistent = cfg.get("persistent", 0)
 ld_width = cfg.get("ld_width", 8)
+overlap = cfg.get("overlap", 0)
 shapes_text = cfg["shapes_text"]
 
 # One shape at a time: different shapes have different optimal configs.
@@ -194,7 +201,8 @@ except Exception:
 warnings = mc.validate_config(bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
                               tma_store=tma_store, persistent=persistent,
                               persistent_ok=tier.get("persistent_ok", False),
-                              shape=shapes[0] if shapes else None, ld_width=ld_width)
+                              shape=shapes[0] if shapes else None, ld_width=ld_width,
+                              overlap=overlap)
 if warnings:
     st.error(f"⚠️  **{len(warnings)} configuration warning(s)** — this combination won't run.  "
              "Fix in the sidebar and re-generate.")
@@ -205,19 +213,20 @@ else:
     # Empirical ground truth from the committed B200 compatibility matrix.
     try:
         status, entry = mc.compat_status(tier["dir"], bm, bn, bk, ns, gsm, nw,
-                                          tma_store=tma_store, persistent=persistent, ld_width=ld_width)
+                                          tma_store=tma_store, persistent=persistent,
+                                          ld_width=ld_width, overlap=overlap)
         if status == "verified":
             # Prefer perf at the shape the user is tuning; else the largest swept square.
             em, en, ek = shapes[0]
             p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, em, en, ek,
-                               tma_store=tma_store, persistent=persistent, ld_width=ld_width)
+                               tma_store=tma_store, persistent=persistent, ld_width=ld_width, overlap=overlap)
             ref = (em, en, ek)
             if not (p and p.get("tflops")):
                 squares = [t for t in mc.perf_shapes() if t[0] == t[1] == t[2]]
                 if squares:
                     ref = max(squares)
                     p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, *ref,
-                                       tma_store=tma_store, persistent=persistent, ld_width=ld_width)
+                                       tma_store=tma_store, persistent=persistent, ld_width=ld_width, overlap=overlap)
             msg = f"✅ Empirically verified on B200 ({cm.get('arch', 'sm_100a')}): compiles, runs, correct."
             if p and p.get("tflops"):
                 lbl = f"{ref[0]}³" if ref[0] == ref[1] == ref[2] else f"{ref[0]}×{ref[1]}×{ref[2]}"
@@ -235,8 +244,8 @@ else:
 
 # ── Render kernel + self-contained host ──────────────────────────────
 
-kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, ld_width=ld_width)
-host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, persistent=persistent)
+kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, ld_width=ld_width, overlap=overlap)
+host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, persistent=persistent, overlap=overlap)
 
 def ssh_copy_button(name, content, label):
     """One-click 'copy the heredoc to clipboard' for SSH use.
@@ -314,7 +323,7 @@ with tab_bench:
     if live_bench.live_available() and shapes:
         m0, n0, k0 = shapes[0]
         knobs = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
-                     tma_store=tma_store, persistent=persistent, ld_width=ld_width)
+                     tma_store=tma_store, persistent=persistent, ld_width=ld_width, overlap=overlap)
         sig = (tier["dir"], tuple(sorted(knobs.items())), m0, n0, k0)
         cache = st.session_state.setdefault("live_cache", {})
         clicked = st.button("▶  Benchmark this config on a B200 (live)", type="primary",
@@ -420,7 +429,7 @@ with tab_bench:
         square = (m == n == k)
         try:
             p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, m, n, k,
-                               tma_store=tma_store, persistent=persistent, ld_width=ld_width)
+                               tma_store=tma_store, persistent=persistent, ld_width=ld_width, overlap=overlap)
             cub = mc.cublas_tflops(m, n, k)
         except Exception:
             p, cub = None, None
