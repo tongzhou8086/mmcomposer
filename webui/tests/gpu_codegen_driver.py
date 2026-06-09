@@ -48,8 +48,13 @@ from cuda.bindings import driver
 SCRATCH = WEBUI / "tests" / "_scratch" / "gpu_driver"
 
 
-def all_combos(tier_dirs):
-    """Yield (tier_key, tier, knobs-dict) over the full dropdown grid."""
+def all_combos(tier_dirs, bn_opts=None):
+    """Yield (tier_key, tier, knobs-dict) over the dropdown grid.
+
+    bn_opts restricts the BN values swept (default: all of mc.BN_OPTS) — e.g.
+    the production sweep passes [128, 256] to skip BN=64.
+    """
+    bn_list = bn_opts if bn_opts else mc.BN_OPTS
     dir_to_key = {t["dir"]: k for k, t in mc.TIER_MAP.items() if t}
     for tdir in tier_dirs:
         key = dir_to_key[tdir]
@@ -58,7 +63,7 @@ def all_combos(tier_dirs):
         # capable tiers get the grid=#SMs variant; others stay at [0].
         pers_opts = mc.PERSISTENT_OPTS if tier.get("persistent_ok") else [0]
         for bm, bn, bk, ns, gsm, nw, ts, pers in itertools.product(
-            mc.BM_OPTS, mc.BN_OPTS, mc.BK_OPTS, mc.NS_OPTS, mc.GSM_OPTS, mc.NW_OPTS,
+            mc.BM_OPTS, bn_list, mc.BK_OPTS, mc.NS_OPTS, mc.GSM_OPTS, mc.NW_OPTS,
             mc.TMA_STORE_OPTS, pers_opts
         ):
             yield tier, dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
@@ -215,11 +220,12 @@ def launch_from_cubin(tier, k, arch, shapes, do_bench=True, num_sms=None):
     return res
 
 
-def build_to_run(tier_dirs, invalid_sample):
+def build_to_run(tier_dirs, invalid_sample, bn_opts=None):
     """Deterministic ordered list of (tier, knobs, label).  Both the
-    orchestrator and the isolated worker call this so indices line up."""
+    orchestrator and the isolated worker call this so indices line up
+    (so bn_opts must be passed identically in both)."""
     valid, invalid = [], []
-    for tier, k in all_combos(tier_dirs):
+    for tier, k in all_combos(tier_dirs, bn_opts):
         warnings = mc.validate_config(k["bm"], k["bn"], k["bk"], k["ns"], k["gsm"], k["nw"],
                                       cluster=tier["cluster"], tma_store=k["tma_store"],
                                       persistent=k.get("persistent", 0),
@@ -272,6 +278,9 @@ def main():
                     help="comma-separated square shapes (M=N=K) to check + benchmark")
     ap.add_argument("--tiers", default="tier1_baseline,tier2_multistage_ws,tier3_cluster_swizzle")
     ap.add_argument("--invalid-sample", type=int, default=12)
+    ap.add_argument("--bn", default=None,
+                    help="comma-separated BN values to sweep (default: all BN_OPTS). "
+                         "e.g. 128,256 for the production sweep (skip BN=64).")
     ap.add_argument("--json", default=None)
     ap.add_argument("--compat-out", default=None,
                     help="path for the committed compatibility matrix (default webui/kernels/compat_matrix.json)")
@@ -283,7 +292,8 @@ def main():
     shape_list = parse_perf_shapes(args.perf_shapes)
     tier_dirs = args.tiers.split(",")
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    to_run, n_valid, n_invalid, n_sample = build_to_run(tier_dirs, args.invalid_sample)
+    bn_opts = [int(x) for x in args.bn.split(",")] if args.bn else None
+    to_run, n_valid, n_invalid, n_sample = build_to_run(tier_dirs, args.invalid_sample, bn_opts)
 
     device, _ = rt.init_cuda()
     arch = rt.compute_arch(device)
@@ -339,6 +349,8 @@ def main():
                "--launch-worker", str(next_idx), "--jsonl", jsonl,
                "--perf-shapes", args.perf_shapes, "--tiers", args.tiers,
                "--invalid-sample", str(args.invalid_sample)]
+        if args.bn:                       # must match orchestrator so to_run indices align
+            cmd += ["--bn", args.bn]
         subprocess.run(cmd)
         done = set()
         if os.path.exists(jsonl):

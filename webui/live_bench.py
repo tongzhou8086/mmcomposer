@@ -89,7 +89,7 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
             "stderr": (proc.stderr or proc.stdout)[-800:]}
 
 
-def run_autotune(tier_dirs, M: int, N: int, K: int, timeout: int = 3000) -> dict:
+def run_autotune(tier_dirs, M: int, N: int, K: int, bn_opts=None, timeout: int = 3000) -> dict:
     """Live sweep: srun the gpu_codegen_driver over every valid combo for the
     given tiers at one (M,N,K), then return the ranked results.
 
@@ -99,7 +99,8 @@ def run_autotune(tier_dirs, M: int, N: int, K: int, timeout: int = 3000) -> dict
     n_combos, error}.
     """
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    tag = hashlib.sha1((",".join(tier_dirs) + f"|{M}x{N}x{K}").encode()).hexdigest()[:16]
+    bn_csv = ",".join(str(b) for b in bn_opts) if bn_opts else ""
+    tag = hashlib.sha1((",".join(tier_dirs) + f"|{M}x{N}x{K}|bn{bn_csv}").encode()).hexdigest()[:16]
     out_matrix = SCRATCH / f"autotune_{tag}.json"
     if out_matrix.exists():
         out_matrix.unlink()
@@ -111,6 +112,8 @@ def run_autotune(tier_dirs, M: int, N: int, K: int, timeout: int = 3000) -> dict
            "--tiers", ",".join(tier_dirs),
            "--invalid-sample", "0",          # autotune wants valid combos only
            "--compat-out", str(out_matrix)]
+    if bn_csv:
+        cmd += ["--bn", bn_csv]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

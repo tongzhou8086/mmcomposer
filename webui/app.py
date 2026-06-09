@@ -345,11 +345,14 @@ with tab_bench:
             "Sweep scope",
             ["Warp specialization on (production)", "Full sweep (incl. warp-spec off)"],
             horizontal=True, key="autotune_scope",
-            help="In production warp specialization essentially always helps, so the production "
-                 "sweep skips the warp-spec-off combos (about half the search). Full sweeps "
-                 "everything, including the warp-spec-off combos kept for educational comparison.")
-        at_dirs = WS_DIRS if scope.startswith("Warp") else ALL_DIRS
-        at_sig = (tuple(at_dirs), m0, n0, k0)
+            help="Production: warp specialization essentially always helps and (assuming N is "
+                 "reasonably large) BN<128 doesn't, so it sweeps only warp-spec-on combos with "
+                 "BN≥128 — a much smaller, practical search. Full sweeps everything, including "
+                 "the warp-spec-off and BN=64 combos kept for educational comparison.")
+        production = scope.startswith("Warp")
+        at_dirs = WS_DIRS if production else ALL_DIRS
+        at_bn = [128, 256] if production else None     # production assumes large N → BN ≥ 128
+        at_sig = (tuple(at_dirs), tuple(at_bn or []), m0, n0, k0)
         at_cache = st.session_state.setdefault("autotune_cache", {})
 
         def _knob_cols(tier_dir):
@@ -359,7 +362,7 @@ with tab_bench:
         if st.button("🔧  Autotune: sweep combos on a B200", key="autotune_btn"):
             with st.spinner(f"Sweeping valid knob combinations for {m0}×{n0}×{k0} on a B200 "
                             "(compiles + runs each + cuBLAS — this takes minutes)…"):
-                at_cache[at_sig] = live_bench.run_autotune(at_dirs, m0, n0, k0)
+                at_cache[at_sig] = live_bench.run_autotune(at_dirs, m0, n0, k0, bn_opts=at_bn)
         at = at_cache.get(at_sig)
         if at and at.get("ok"):
             b = at["results"][0]
