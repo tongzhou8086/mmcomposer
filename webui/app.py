@@ -119,6 +119,13 @@ with st.sidebar:
              "launch/tail overhead — config-dependent (a clear win on low-K / "
              "many-tile shapes).  Available with warp specialization on and the "
              "2-CTA cluster off.") == "On"
+    ld_width = st.selectbox(
+        "Epilogue tcgen05.ld width", mc.EPILOGUE_LD_WIDTH_OPTS,
+        index=_idx(mc.EPILOGUE_LD_WIDTH_OPTS, "ld_width", 0),
+        help="32-bit elements per lane per TMEM→register load in the epilogue "
+             "(.32x32b.xN).  Wider = fewer loads + fewer wait_ld syncs (more "
+             "registers — essentially free while SMEM-occupancy-bound).  Must "
+             "divide the per-warp column span; may help the epilogue.")
 
     st.subheader("Problem shape")
     shapes_text = st.text_area(
@@ -134,7 +141,8 @@ with st.sidebar:
 if generate:
     st.session_state.applied = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                                     ms_ws=ms_ws, two_cta=two_cta, tma_store=int(tma_store),
-                                    persistent=int(persistent), shapes_text=shapes_text)
+                                    persistent=int(persistent), ld_width=int(ld_width),
+                                    shapes_text=shapes_text)
     st.session_state.run_live = True   # fire the on-the-fly B200 bench (if live mode)
 
 if "applied" not in st.session_state:
@@ -147,6 +155,7 @@ ns, gsm, nw = cfg["ns"], cfg["gsm"], cfg["nw"]
 ms_ws, two_cta = cfg["ms_ws"], cfg["two_cta"]
 tma_store = cfg["tma_store"]
 persistent = cfg.get("persistent", 0)
+ld_width = cfg.get("ld_width", 8)
 shapes_text = cfg["shapes_text"]
 
 # One shape at a time: different shapes have different optimal configs.
@@ -185,7 +194,7 @@ except Exception:
 warnings = mc.validate_config(bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
                               tma_store=tma_store, persistent=persistent,
                               persistent_ok=tier.get("persistent_ok", False),
-                              shape=shapes[0] if shapes else None)
+                              shape=shapes[0] if shapes else None, ld_width=ld_width)
 if warnings:
     st.error(f"⚠️  **{len(warnings)} configuration warning(s)** — this combination won't run.  "
              "Fix in the sidebar and re-generate.")
@@ -226,7 +235,7 @@ else:
 
 # ── Render kernel + self-contained host ──────────────────────────────
 
-kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store)
+kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, ld_width=ld_width)
 host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw, tma_store=tma_store, persistent=persistent)
 
 def ssh_copy_button(name, content, label):
@@ -305,7 +314,7 @@ with tab_bench:
     if live_bench.live_available() and shapes:
         m0, n0, k0 = shapes[0]
         knobs = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
-                     tma_store=tma_store, persistent=persistent)
+                     tma_store=tma_store, persistent=persistent, ld_width=ld_width)
         sig = (tier["dir"], tuple(sorted(knobs.items())), m0, n0, k0)
         cache = st.session_state.setdefault("live_cache", {})
         clicked = st.button("▶  Benchmark this config on a B200 (live)", type="primary",

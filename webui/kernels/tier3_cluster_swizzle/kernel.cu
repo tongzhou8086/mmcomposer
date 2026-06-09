@@ -10,6 +10,7 @@ constexpr int NS           = 5;       // multi-stage SMEM ring depth
 constexpr int GROUP_SIZE_M = 8;       // CTA-swizzle chunk (1 = no swizzle)
 constexpr int NUM_WARPS    = 4;       // total warps per CTA
 constexpr int TMA_STORE    = 0;       // epilogue Phase 2: 0 = int4 stores, 1 = async TMA store
+constexpr int EPILOGUE_LD_WIDTH = 8;  // TMEM->reg epilogue load: 8/16/32/64 32-bit elems per lane
 
 // ── Derived constants (do not edit) ─────────────────────────────────
 constexpr int MMA_K     = 16;
@@ -152,14 +153,7 @@ __device__ __forceinline__ void tcgen05_fence_after_thread_sync() {
 __device__ __forceinline__ void tcgen05_wait_ld() {
     asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
 }
-__device__ __forceinline__ void tcgen05_ld_32x32b_x8(uint32_t taddr, float* out) {
-    asm volatile(
-        "tcgen05.ld.sync.aligned.32x32b.x8.b32 "
-        "{%0,%1,%2,%3,%4,%5,%6,%7}, [%8];"
-        : "=f"(out[0]), "=f"(out[1]), "=f"(out[2]), "=f"(out[3]),
-          "=f"(out[4]), "=f"(out[5]), "=f"(out[6]), "=f"(out[7])
-        : "r"(taddr));
-}
+// @@TCGEN05_LD@@
 
 
 // ── mbarrier helpers ────────────────────────────────────────────────
