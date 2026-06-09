@@ -112,7 +112,9 @@ def launch_spec(tier, k, M, N, K, num_sms=None):
     epi    = k["bm"] * (k["bn"] if k["tma_store"] else k["bn"] + 8) * 2
     # Overlap runs ring + epilogue staging concurrently -> disjoint (ring+epi).
     shared = ((k["ns"] * slot + epi) if k.get("overlap", 0) else max(k["ns"] * slot, epi)) + 1024
-    block  = (k["nw"] * 32, 1, 1)
+    # Overlap: 2 stream warps (TMA+MMA) in warpgroup 0 + nw epilogue warps from
+    # warp 4 (warps 2,3 idle for the warpgroup boundary) -> (nw+4) warps.
+    block  = (((k["nw"] + 4) * 32 if k.get("overlap", 0) else k["nw"] * 32), 1, 1)
     if k.get("persistent") and num_sms:
         # Persistent grid: one CTA per SM; the kernel's tile loop walks the rest.
         # For the cluster tier the grid must stay a multiple of CTA_GROUP.

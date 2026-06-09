@@ -276,17 +276,29 @@ extern "C" __global__ void matmul_coalesced_epilogue(
                 }
                 tcgen05_commit((uint32_t)__cvta_generic_to_shared(&tmem_full[buf]));
             }
-        } else if (warp_id >= 4 && warp_id < 8) {           // 4 epilogue warps (drain prev buffer)
-            const int ew = warp_id - 4, my_row = ew * 32 + lane, etid = ew * 32 + lane;
+        } else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // NUM_WARPS epilogue warps (drain prev buffer)
+            // Epilogue runs in its OWN warpgroup(s): the 2 stream warps (TMA=0,
+            // MMA=1) sit in warpgroup 0, so the epilogue starts at warp 4 (warps
+            // 2,3 idle).  Sharing warpgroup 0 between the MMA warp and the
+            // tcgen05.ld epilogue warps corrupts the TMEM reads.  Block =
+            // (NUM_WARPS + 4) warps; NUM_WARPS still scales the epilogue.
+            constexpr int ROW_STRIPS    = BM / 32;                 // 4
+            constexpr int COL_GROUPS    = NUM_WARPS / ROW_STRIPS;  // warps per row-strip
+            constexpr int COLS_PER_WARP = BN / COL_GROUPS;
+            constexpr int EPI_THREADS   = NUM_WARPS * 32;
+            const int ew = warp_id - 4;                            // 0..NUM_WARPS-1
+            const int row_warp = ew % ROW_STRIPS, col_warp = ew / ROW_STRIPS;
+            const int my_row = row_warp * 32 + lane, col_base = col_warp * COLS_PER_WARP;
+            const int etid = ew * 32 + lane;
             uint32_t full[2] = {};
             for (int ti = 0; ti < num_my; ti++) {
                 int buf = ti & 1, off_m, off_n; map_off(ti, off_m, off_n);
                 mbarrier_wait_phase((uint32_t)__cvta_generic_to_shared(&tmem_full[buf]), full[buf]); full[buf] ^= 1;
                 tcgen05_fence_after_thread_sync();
-                uint32_t trow = (taddr + buf * BN) + ((uint32_t)(ew * 32) << 16);
+                uint32_t trow = (taddr + buf * BN) + ((uint32_t)(row_warp * 32) << 16);
                 constexpr int LDW = TCGEN05_LD_WIDTH;
                 #pragma unroll
-                for (int n = 0; n < BN; n += LDW) {
+                for (int n = col_base; n < col_base + COLS_PER_WARP; n += LDW) {
                     float t[LDW];
                     if constexpr (LDW == 8) tcgen05_ld_32x32b_x8 (trow + (uint32_t)n, t);
                     else                    tcgen05_ld_32x32b_x16(trow + (uint32_t)n, t);
@@ -298,17 +310,17 @@ extern "C" __global__ void matmul_coalesced_epilogue(
                     for (int c = 0; c < LDW; c += 8)
                         *reinterpret_cast<int4*>(&C_sh[my_row][n + c]) = *reinterpret_cast<int4*>(&pk[c / 2]);
                 }
-                asm volatile("bar.sync 1, 128;");           // 4 epi warps: Phase-1 done
+                asm volatile("bar.sync 1, %0;" :: "n"(NUM_WARPS * 32));  // epi warps: Phase-1 done
                 if (ew == 0 && elect_sync())
                     mbarrier_arrive_no_tx((uint32_t)__cvta_generic_to_shared(&tmem_empty[buf]));  // TMEM free
-                constexpr int CHUNKS = BN / 8, STORES = BM * BN / (128 * 8);
+                constexpr int CHUNKS = BN / 8, STORES = BM * BN / (EPI_THREADS * 8);
                 #pragma unroll
                 for (int s = 0; s < STORES; s++) {
-                    int flat = etid + s * 128, row = flat / CHUNKS, col = (flat % CHUNKS) * 8;
+                    int flat = etid + s * EPI_THREADS, row = flat / CHUNKS, col = (flat % CHUNKS) * 8;
                     *reinterpret_cast<int4*>(&C_ptr[(off_m + row) * N + off_n + col]) =
                         *reinterpret_cast<const int4*>(&C_sh[row][col]);
                 }
-                asm volatile("bar.sync 1, 128;");           // staging free before next Phase-1
+                asm volatile("bar.sync 1, %0;" :: "n"(NUM_WARPS * 32));  // staging free before next Phase-1
             }
         }
         __syncthreads();

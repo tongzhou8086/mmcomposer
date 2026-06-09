@@ -45,7 +45,7 @@ def main():
         slot = a.bm * a.bk * 2 + bn_local * a.bk * 2
         epi = a.bm * (a.bn if a.tma_store else a.bn + 8) * 2
         shared = (a.ns * slot + epi if a.overlap else max(a.ns * slot, epi)) + 1024
-        block = (a.nw * 32, 1, 1)
+        block = ((a.nw + 4) * 32 if a.overlap else a.nw * 32, 1, 1)
         if a.persistent:
             grid = (num_sms - num_sms % cta_group, 1, 1)
         elif a.cluster:

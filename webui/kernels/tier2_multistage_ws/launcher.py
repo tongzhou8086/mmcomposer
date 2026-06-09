@@ -24,10 +24,14 @@ NUM_WARPS    = 4
 TMA_STORE    = 0
 PERSISTENT   = 0    # 1 → launch grid = #SMs; each CTA walks many tiles
 TCGEN05_LD_WIDTH  = 8
-EPILOGUE_OVERLAP  = 0    # 1 → epilogue overlaps next tile's K-loop (needs PERSISTENT, NW=8)
+EPILOGUE_OVERLAP  = 0    # 1 → epilogue overlaps next tile's K-loop (needs PERSISTENT)
 
 ELEM_BYTES   = 2
-THREADS      = NUM_WARPS * 32
+# Overlap puts the 2 stream warps (TMA + MMA) in warpgroup 0 and runs NUM_WARPS
+# epilogue warps in their OWN warpgroup(s) starting at warp 4 (warps 2,3 idle —
+# tcgen05.ld epilogue warps must not share a warpgroup with the MMA warp).  So
+# the block is (NUM_WARPS + 4) warps; otherwise it's NUM_WARPS.
+THREADS      = (NUM_WARPS + 4) * 32 if EPILOGUE_OVERLAP else NUM_WARPS * 32
 SLOT_BYTES   = BM * BK * ELEM_BYTES + BN * BK * ELEM_BYTES
 EPI_BYTES    = BM * (BN if TMA_STORE else BN + 8) * ELEM_BYTES
 # Overlap runs the ring and the epilogue staging concurrently → disjoint

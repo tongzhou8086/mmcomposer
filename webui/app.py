@@ -130,9 +130,10 @@ with st.sidebar:
     overlap = st.selectbox(
         "Epilogue overlap (persistent)", mc.ONOFF_OPTS, index=_onoff("overlap"),
         help="Run each tile's epilogue concurrently with the next tile's K-loop "
-             "(TMEM double-buffer + 4 dedicated epilogue warps).  A clear win on "
-             "epilogue-bound low-K shapes.  Requires Persistent grid on, num_warps=8, "
-             "and the int4 store (TMA store off).") == "On"
+             "(TMEM double-buffer).  Launches 2 stream warps (TMA + MMA) on top of "
+             "num_warps epilogue warps, so num_warps scales the epilogue.  A win on "
+             "epilogue-bound low-K shapes.  Requires Persistent grid on and the int4 "
+             "store (TMA store off).") == "On"
 
     st.subheader("Problem shape")
     shapes_text = st.text_area(

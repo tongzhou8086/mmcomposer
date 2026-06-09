@@ -75,9 +75,12 @@ TMA_STORE_OPTS = [0, 1]
 PERSISTENT_OPTS = [0, 1]
 # Epilogue/K-loop overlap (Step B): 1 = persistent pipeline that runs each
 # tile's epilogue concurrently with the next tile's K-loop (TMEM double-buffer
-# + 4 dedicated epilogue warps + disjoint epilogue SMEM).  Requires persistent
-# on, NW=8, int4 store (tma_store=0), and the disjoint-SMEM budget (NS small).
-# A clear win on epilogue-bound low-K shapes.  Tier 2 only for now.
+# + disjoint epilogue SMEM).  The 2 stream warps (TMA + MMA) take warpgroup 0;
+# num_warps epilogue warps run in their own warpgroup(s) from warp 4 (warps 2,3
+# idle — tcgen05.ld epilogue warps must not share warpgroup 0 with the MMA warp),
+# so the block is (NW+4) warps and the epilogue scales with NW.  Requires
+# persistent on, int4 store (tma_store=0), and the disjoint-SMEM budget (NS
+# small).  A win on epilogue-bound low-K shapes.  Tier 2.
 EPILOGUE_OVERLAP_OPTS = [0, 1]
 # On/off knobs are presented as dropdowns too, for a uniform UI (and to
 # leave room for an "Auto" value once auto-tuning lands).
@@ -179,8 +182,10 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
             "so grid = #SMs would leave most output tiles uncomputed."
         )
 
-    # Epilogue overlap (Step B): a persistent pipeline with a fixed warp layout
-    # (1 TMA + 1 MMA + 4 epilogue warps) and an int4 store.
+    # Epilogue overlap (Step B): a persistent pipeline with the 2 stream warps
+    # (TMA + MMA) in warpgroup 0 and num_warps epilogue warps from warp 4, with
+    # an int4 store.  num_warps is the EPILOGUE warp count (validated by the grid
+    # rules below); the block is (num_warps + 4) warps (warps 2,3 idle).
     if overlap:
         if not persistent_ok:
             out.append("**Epilogue overlap** is only available on the warp-specialized "
@@ -188,9 +193,6 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
         if not persistent:
             out.append("**Epilogue overlap** requires **Persistent grid** on "
                        "(it's a persistent pipeline launched with grid = #SMs).")
-        if nw != 8:
-            out.append(f"**Epilogue overlap** needs num_warps = 8 (1 TMA + 1 MMA + 4 "
-                       f"epilogue warps); got {nw}.")
         if tma_store:
             out.append("**Epilogue overlap** uses the int4 store path; turn off "
                        "**TMA store epilogue**.")
