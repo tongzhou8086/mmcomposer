@@ -61,7 +61,7 @@ NW_OPTS  = [4, 8, 16]
 # (.32x32b.xN).  Wider = fewer loads + fewer wait_ld syncs, more registers.
 # 8 = current behaviour.  Must divide COLS_PER_WARP (= BN / (NW/(BM/32))).
 # (x64 dropped — measured no better than x16/x32, just more registers.)
-EPILOGUE_LD_WIDTH_OPTS = [8, 16, 32]
+TCGEN05_LD_WIDTH_OPTS = [8, 16, 32]
 # Epilogue Phase-2 store path: 0 = all-thread int4 stores; 1 = one async
 # TMA store per CTA (swizzled SMEM staging).  A universal toggle.
 TMA_STORE_OPTS = [0, 1]
@@ -222,10 +222,10 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
             else:
                 cols_per_warp = bn // col_groups
                 if ld_width not in (8, 16, 32):
-                    out.append(f"**Epilogue ld width = {ld_width}** must be one of 8/16/32.")
+                    out.append(f"**Epilogue tcgen05.ld width = {ld_width}** must be one of 8/16/32.")
                 elif cols_per_warp % ld_width != 0:
                     out.append(
-                        f"**Epilogue ld width = {ld_width}** must divide the per-warp column "
+                        f"**Epilogue tcgen05.ld width = {ld_width}** must divide the per-warp column "
                         f"span COLS_PER_WARP = BN/(NW/(BM/32)) = {cols_per_warp} "
                         f"(at BN={bn}, NW={nw}).  Use a smaller ld width or fewer warps."
                     )
@@ -308,7 +308,7 @@ def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0, ld_width=8) 
     """
     return {"BM": bm, "BN": bn, "BK": bk, "NS": ns, "GROUP_SIZE_M": gsm,
             "NUM_WARPS": nw, "TMA_STORE": tma_store, "PERSISTENT": persistent,
-            "EPILOGUE_LD_WIDTH": ld_width}
+            "TCGEN05_LD_WIDTH": ld_width}
 
 
 def _strip_module_docstring(src: str) -> str:

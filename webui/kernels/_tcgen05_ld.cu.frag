@@ -1,6 +1,6 @@
 // ── tcgen05.ld width helpers (building block) ───────────────────────
 // mvp_core splices these at the TCGEN05_LD marker in every tier, so the
-// TMEM->register load width (EPILOGUE_LD_WIDTH = 8/16/32 32-bit elems per
+// TMEM->register load width (TCGEN05_LD_WIDTH = 8/16/32 32-bit elems per
 // lane) is one knob with the asm in a single place.  Wider = fewer ld + fewer
 // wait_ld syncs (more registers, but we're SMEM-occupancy-bound so it's free).
 // The epilogue picks the variant via `if constexpr`.

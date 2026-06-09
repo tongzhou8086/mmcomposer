@@ -10,7 +10,7 @@ constexpr int NS           = 5;       // multi-stage SMEM ring depth
 constexpr int GROUP_SIZE_M = 8;       // CTA-swizzle chunk (1 = no swizzle)
 constexpr int NUM_WARPS    = 4;       // total warps per CTA
 constexpr int TMA_STORE    = 0;       // epilogue Phase 2: 0 = int4 stores, 1 = async TMA store
-constexpr int EPILOGUE_LD_WIDTH = 8;  // TMEM->reg epilogue load: 8/16/32 32-bit elems per lane
+constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load: 8/16/32 32-bit elems per lane
 
 // ── Derived constants (do not edit) ─────────────────────────────────
 constexpr int MMA_K     = 16;

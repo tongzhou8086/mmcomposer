@@ -120,8 +120,8 @@ with st.sidebar:
              "many-tile shapes).  Available with warp specialization on and the "
              "2-CTA cluster off.") == "On"
     ld_width = st.selectbox(
-        "Epilogue tcgen05.ld width", mc.EPILOGUE_LD_WIDTH_OPTS,
-        index=_idx(mc.EPILOGUE_LD_WIDTH_OPTS, "ld_width", 0),
+        "Epilogue tcgen05.ld width", mc.TCGEN05_LD_WIDTH_OPTS,
+        index=_idx(mc.TCGEN05_LD_WIDTH_OPTS, "ld_width", 0),
         help="32-bit elements per lane per TMEM→register load in the epilogue "
              "(.32x32b.xN).  Wider = fewer loads + fewer wait_ld syncs (more "
              "registers — essentially free while SMEM-occupancy-bound).  Must "
