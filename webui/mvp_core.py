@@ -153,16 +153,16 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
             out.append(
                 f"**M = {M}**: the 2-CTA cluster tiles {cta_group}×BM = {cta_group * bm} "
                 f"rows per cluster, so M must be a multiple of {cta_group * bm} "
-                f"(M % {cta_group * bm} = {M % (cta_group * bm)}).  Use the single-CTA tier for this M."
+                f"(M % {cta_group * bm} = {M % (cta_group * bm)}).  Turn off the 2-CTA cluster for this M."
             )
 
-    # Persistent is a launch-side knob, but only tiers with the CTA tile
-    # loop can be launched with grid < num_tiles without dropping output.
+    # Persistent is a launch-side knob, but only the warp-spec single-CTA path
+    # has the CTA tile loop needed to launch with grid < num_tiles.
     if persistent and not persistent_ok:
         out.append(
-            "**Persistent grid** is only implemented on the warp-specialized "
-            "single-CTA tier (Tier 2); other tiers have no CTA tile loop, so "
-            "grid = #SMs would leave most output tiles uncomputed."
+            "**Persistent grid** is only available with warp specialization on and "
+            "the 2-CTA cluster off; other knob combinations have no CTA tile loop, "
+            "so grid = #SMs would leave most output tiles uncomputed."
         )
 
     if ns < 2:
