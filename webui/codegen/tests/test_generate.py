@@ -35,7 +35,13 @@ CONFIGS = {
         dict(skeleton="tier2_multistage_ws", BM=128, BN=256, BK=64, NS=3,
              GROUP_SIZE_M=8, NUM_WARPS=8, TMA_STORE=0, TCGEN05_LD_WIDTH=8,
              EPILOGUE_OVERLAP=0, EPILOGUE_SPLIT=0, PERSISTENT=0),
-        ["EPILOGUE_OVERLAP"],
+        ["EPILOGUE_OVERLAP", "TMA_STORE", "TCGEN05_LD_WIDTH"],
+    ),
+    "tier2_seq_tmastore": (   # exercises the _epilogue.cu.frag TMA_STORE=1 (Phase 2a) branch
+        dict(skeleton="tier2_multistage_ws", BM=128, BN=256, BK=64, NS=3,
+             GROUP_SIZE_M=8, NUM_WARPS=8, TMA_STORE=1, TCGEN05_LD_WIDTH=8,
+             EPILOGUE_OVERLAP=0, EPILOGUE_SPLIT=0, PERSISTENT=0),
+        ["EPILOGUE_OVERLAP", "TMA_STORE", "TCGEN05_LD_WIDTH"],
     ),
     "tier3_overlap": (
         dict(skeleton="tier3_cluster_swizzle", BM=128, BN=256, BK=64, NS=3,
@@ -53,7 +59,7 @@ CONFIGS = {
         dict(skeleton="tier3_cluster_swizzle", BM=128, BN=256, BK=64, NS=3,
              GROUP_SIZE_M=8, NUM_WARPS=8, TMA_STORE=0, TCGEN05_LD_WIDTH=8,
              EPILOGUE_OVERLAP=0, EPILOGUE_SPLIT=0, PERSISTENT=0),
-        ["EPILOGUE_OVERLAP"],
+        ["EPILOGUE_OVERLAP", "TMA_STORE", "TCGEN05_LD_WIDTH"],
     ),
 }
 

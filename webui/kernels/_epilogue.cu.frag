@@ -11,7 +11,11 @@
     // TMA_STORE (0/1) picks Phase 2: a flat int4 store loop, or one async
     // TMA store per CTA.  The TMA store needs a tightly-packed SMEM source
     // (no +8 bank-pad), so EPI_LD switches accordingly.
-    constexpr int EPI_LD = TMA_STORE ? BN : (BN + 8);
+#if TMA_STORE
+    constexpr int EPI_LD = BN;
+#else
+    constexpr int EPI_LD = BN + 8;
+#endif
     auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_LD]>(smem);
 
     tcgen05_fence_after_thread_sync();
@@ -38,8 +42,11 @@
     #pragma unroll
     for (int n = col_base; n < col_base + COLS_PER_WARP; n += LDW) {
         float tmp[LDW];
-        if constexpr (LDW == 8) tcgen05_ld_32x32b_x8 (taddr_row + (uint32_t)n, tmp);
-        else                    tcgen05_ld_32x32b_x16(taddr_row + (uint32_t)n, tmp);
+#if TCGEN05_LD_WIDTH == 8
+        tcgen05_ld_32x32b_x8 (taddr_row + (uint32_t)n, tmp);
+#else
+        tcgen05_ld_32x32b_x16(taddr_row + (uint32_t)n, tmp);
+#endif
         tcgen05_wait_ld();
 
         __nv_bfloat162 packed[LDW / 2];
@@ -59,7 +66,8 @@
 
     const int out_m_base = off_m_cluster + cta_rank * BM;
 
-    if constexpr (TMA_STORE) {
+#if TMA_STORE
+    {
         // ── Phase 2a: one async TMA store per CTA ───────────────────
         // Phase 1 wrote SMEM via the GENERIC proxy (st.shared); the TMA
         // store engine reads via the ASYNC proxy — fence between them.
@@ -76,7 +84,9 @@
         if (warp_id == 0 && elect_sync()) {
             EPI_DEALLOC(taddr, BN);
         }
-    } else {
+    }
+#else
+    {
         // ── Phase 2b: flat thread-major coalesced int4 stores ───────
         if (warp_id == 0 && elect_sync()) {
             EPI_DEALLOC(taddr, BN);
@@ -97,3 +107,4 @@
                 *reinterpret_cast<const int4*>(&C_sh[row][col]);
         }
     }
+#endif

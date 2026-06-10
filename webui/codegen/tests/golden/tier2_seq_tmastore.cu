@@ -9,7 +9,7 @@ constexpr int BK           = 64;
 constexpr int NS           = 3;       // multi-stage SMEM ring depth
 constexpr int GROUP_SIZE_M = 8;       // CTA-swizzle chunk (1 = no swizzle)
 constexpr int NUM_WARPS    = 8;       // total warps per CTA
-constexpr int TMA_STORE    = 0;       // epilogue Phase 2: 0 = int4 stores, 1 = async TMA store
+constexpr int TMA_STORE    = 1;       // epilogue Phase 2: 0 = int4 stores, 1 = async TMA store
 constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (32-bit elems per lane)
 constexpr int EPILOGUE_OVERLAP = 0;  // 1 = persistent + overlap epilogue with next tile's K-loop (Step B)
 constexpr int EPILOGUE_SPLIT   = 0;  // 1 = split overlapped int4 writeback into two half-BN passes (cluster only today)
@@ -394,7 +394,7 @@ extern "C" __global__ void matmul_coalesced_epilogue(
     // TMA_STORE (0/1) picks Phase 2: a flat int4 store loop, or one async
     // TMA store per CTA.  The TMA store needs a tightly-packed SMEM source
     // (no +8 bank-pad), so EPI_LD switches accordingly.
-    constexpr int EPI_LD = BN + 8;
+    constexpr int EPI_LD = BN;
     auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_LD]>(smem);
 
     tcgen05_fence_after_thread_sync();
@@ -442,24 +442,21 @@ extern "C" __global__ void matmul_coalesced_epilogue(
     const int out_m_base = off_m_cluster + cta_rank * BM;
 
     {
-        // ── Phase 2b: flat thread-major coalesced int4 stores ───────
+        // ── Phase 2a: one async TMA store per CTA ───────────────────
+        // Phase 1 wrote SMEM via the GENERIC proxy (st.shared); the TMA
+        // store engine reads via the ASYNC proxy — fence between them.
+        asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+        if (warp_id == 0 && elect_sync()) {
+            tma_2d_store(C_tmap_ptr,
+                         (uint32_t)__cvta_generic_to_shared(&C_sh[0][0]),
+                         /*x=*/ off_n, /*y=*/ out_m_base);
+            tma_commit_group();
+            tma_wait_group<0>();   // drain before we touch TMEM
+        }
+        // dealloc must come AFTER the store drains — reversing it
+        // deadlocks the bulk-copy engine (bisected in ch13).
         if (warp_id == 0 && elect_sync()) {
             EPI_DEALLOC(taddr, BN);
-        }
-        constexpr int CHUNK_BF16        = 8;
-        constexpr int CHUNKS_PER_ROW    = BN / CHUNK_BF16;
-        constexpr int STORES_PER_THREAD = (BM * BN) / (THREADS * CHUNK_BF16);
-        static_assert(STORES_PER_THREAD * THREADS * CHUNK_BF16 == BM * BN,
-                      "BM*BN must be a multiple of THREADS*8 for the flat tile-walk");
-        #pragma unroll
-        for (int s = 0; s < STORES_PER_THREAD; s++) {
-            const int flat = tid + s * THREADS;
-            const int row  = flat / CHUNKS_PER_ROW;
-            const int col  = (flat % CHUNKS_PER_ROW) * CHUNK_BF16;
-            const int gr   = out_m_base + row;
-            const int gc   = off_n + col;
-            *reinterpret_cast<int4*>(&C_ptr[gr * N + gc]) =
-                *reinterpret_cast<const int4*>(&C_sh[row][col]);
         }
     }
 #undef EPI_DEALLOC

@@ -131,7 +131,7 @@ __device__ __forceinline__ void tcgen05_wait_ld() {
 // TMEM->register load width (TCGEN05_LD_WIDTH = 8/16 32-bit elems per lane)
 // is one knob with the asm in a single place.  Wider = fewer ld + fewer
 // wait_ld syncs (more registers, but we're SMEM-occupancy-bound so it's free).
-// The epilogue picks the variant via `if constexpr`.
+// The epilogue picks the variant via `#if` (resolved at generation time).
 
 __device__ __forceinline__ void tcgen05_ld_32x32b_x8(uint32_t taddr, float* out) {
     asm volatile(
