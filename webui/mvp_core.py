@@ -70,8 +70,8 @@ TMA_STORE_OPTS = [0, 1]
 # Persistent grid: 0 = one CTA per output tile (grid = num_tiles); 1 = one
 # CTA per SM, each walking a strided run of tiles (grid = #SMs).  A host/
 # launch knob — same cubin both ways — wired on Tier 2 (a small reproducible
-# win).  Tried on the Tier 3 cluster but measured a wash (cluster-barrier
-# overhead cancels the gain), so it stays off there.
+# win) and on Tier 3 only when EPILOGUE_OVERLAP supplies the persistent
+# cluster tile loop.
 PERSISTENT_OPTS = [0, 1]
 # Epilogue/K-loop overlap (Step B): 1 = persistent pipeline that runs each
 # tile's epilogue concurrently with the next tile's K-loop (TMEM double-buffer
@@ -80,7 +80,7 @@ PERSISTENT_OPTS = [0, 1]
 # idle — tcgen05.ld epilogue warps must not share warpgroup 0 with the MMA warp),
 # so the block is (NW+4) warps and the epilogue scales with NW.  Requires
 # persistent on, int4 store (tma_store=0), and the disjoint-SMEM budget (NS
-# small).  A win on epilogue-bound low-K shapes.  Tier 2.
+# small).  A win on epilogue-bound low-K shapes.  Tier 2 and Tier 3.
 EPILOGUE_OVERLAP_OPTS = [0, 1]
 # On/off knobs are presented as dropdowns too, for a uniform UI (and to
 # leave room for an "Auto" value once auto-tuning lands).
@@ -125,10 +125,9 @@ TIER_MAP = {
         "dir":     "tier3_cluster_swizzle",
         "symbol":  "matmul_cluster",
         "cluster": True,
-        # Persistent tried on the cluster tier (Step A) but measured a wash-
-        # to-loss: the extra cross-CTA cluster barrier per tile cancels the
-        # scheduling gain.  Kept non-persistent (the fast proven kernel).
-        "persistent_ok": False,
+        # Persistent is valid only through the overlap path; validation rejects
+        # persistent cluster configs with overlap off.
+        "persistent_ok": True,
     },
     (False, True): None,   # invalid: 2-CTA cluster requires warp specialization
 }
@@ -174,12 +173,19 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
             )
 
     # Persistent is a launch-side knob, but only the warp-spec single-CTA path
-    # has the CTA tile loop needed to launch with grid < num_tiles.
+    # and the overlapped cluster path have the tile loop needed to launch with
+    # grid < num_tiles.
     if persistent and not persistent_ok:
         out.append(
-            "**Persistent grid** is only available with warp specialization on and "
-            "the 2-CTA cluster off; other knob combinations have no CTA tile loop, "
+            "**Persistent grid** is only available on warp-specialized paths; "
+            "other knob combinations have no CTA tile loop, "
             "so grid = #SMs would leave most output tiles uncomputed."
+        )
+    if persistent and cluster and not overlap:
+        out.append(
+            "**Persistent grid** on the 2-CTA cluster path currently requires "
+            "**Epilogue overlap**.  The non-overlap cluster skeleton still uses "
+            "one cluster per output tile."
         )
 
     # Epilogue overlap (Step B): a persistent pipeline with the 2 stream warps
@@ -188,8 +194,7 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
     # rules below); the block is (num_warps + 4) warps (warps 2,3 idle).
     if overlap:
         if not persistent_ok:
-            out.append("**Epilogue overlap** is only available on the warp-specialized "
-                       "single-CTA path (warp spec on, 2-CTA off).")
+            out.append("**Epilogue overlap** is only available on warp-specialized paths.")
         if not persistent:
             out.append("**Epilogue overlap** requires **Persistent grid** on "
                        "(it's a persistent pipeline launched with grid = #SMs).")
@@ -273,17 +278,22 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
             f"**BM x BN = {bm * bn}** is not a multiple of THREADS x 8 = {nw * 32 * 8} "
             "(Phase-2 epilogue flat walk would leave positions uncovered)."
         )
-    # SMEM budget (B200 = 228 KB/CTA).  Normally the K-loop ring and epilogue
+    # SMEM budget (B200 = 228 KB/CTA nominal).  Normally the K-loop ring and epilogue
     # staging are time-disjoint (size for max).  With epilogue overlap they run
-    # CONCURRENTLY, so the staging is a *separate* region (size = ring + epi).
+    # concurrently, so the staging is a *separate* region (size = ring + epi).
+    # The kernel also has static shared state (mbarriers, TMEM holder, etc.),
+    # and B200 rejected a 227 KB dynamic request for Tier 3 overlap NS=5.
+    # Keep a small guard band for overlap configs until split writeback reduces
+    # the epilogue staging footprint.
     a_slot   = bm * bk * 2
     b_slot   = (bn // cta_group) * bk * 2
     slot     = a_slot + b_slot
     epi      = bm * (bn if tma_store else (bn + 8)) * 2   # TMA store needs a dense BM×BN buffer
     smem     = (ns * slot + epi if overlap else max(ns * slot, epi)) + 1024
-    if smem > 228 * 1024:
+    smem_cap = (224 if overlap else 228) * 1024
+    if smem > smem_cap:
         out.append(
-            f"**SMEM usage {smem / 1024:.0f} KB > B200 cap (228 KB)** at "
+            f"**SMEM usage {smem / 1024:.0f} KB > B200 usable cap ({smem_cap // 1024} KB)** at "
             f"(BM={bm}, BN={bn}, BK={bk}, NS={ns}, cluster={cluster}"
             f"{', overlap' if overlap else ''}): "
             f"K-loop ring = {ns} x {slot // 1024} KB = {ns * slot // 1024} KB, "

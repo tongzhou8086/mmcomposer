@@ -118,8 +118,8 @@ with st.sidebar:
         help="Launch one CTA per SM and loop over output tiles inside the "
              "kernel (grid = #SMs) instead of one CTA per tile.  Trims "
              "launch/tail overhead — config-dependent (a clear win on low-K / "
-             "many-tile shapes).  Available with warp specialization on and the "
-             "2-CTA cluster off.") == "On"
+             "many-tile shapes).  Available on the warp-specialized single-CTA "
+             "path, and on the 2-CTA cluster path when epilogue overlap is on.") == "On"
     ld_width = st.selectbox(
         "Epilogue tcgen05.ld width", mc.TCGEN05_LD_WIDTH_OPTS,
         index=_idx(mc.TCGEN05_LD_WIDTH_OPTS, "ld_width", 0),

@@ -22,20 +22,28 @@ NS           = 5
 GROUP_SIZE_M = 8
 NUM_WARPS    = 4
 TMA_STORE    = 0
+PERSISTENT   = 0
+TCGEN05_LD_WIDTH = 8
+EPILOGUE_OVERLAP = 0
 
 CTA_GROUP    = 2
 BN_LOCAL     = BN // CTA_GROUP
 ELEM_BYTES   = 2
-THREADS      = NUM_WARPS * 32
+# Overlap uses two stream warps in warpgroup 0 plus NUM_WARPS epilogue
+# warps starting at warp 4, matching the Tier 2 overlap convention.
+THREADS      = (NUM_WARPS + 4) * 32 if EPILOGUE_OVERLAP else NUM_WARPS * 32
 A_SLOT_BYTES = BM       * BK * ELEM_BYTES
 B_SLOT_BYTES = BN_LOCAL * BK * ELEM_BYTES
 SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES
 EPI_BYTES    = BM * (BN if TMA_STORE else BN + 8) * ELEM_BYTES
-SHARED_BYTES = max(NS * SLOT_BYTES, EPI_BYTES) + 1024
+SHARED_BYTES = ((NS * SLOT_BYTES + EPI_BYTES) if EPILOGUE_OVERLAP
+                else max(NS * SLOT_BYTES, EPI_BYTES)) + 1024
 HERE         = os.path.dirname(os.path.abspath(__file__))
 
 
 device, ctx = init_cuda()
+NUM_SMS = cu(driver.cuDeviceGetAttribute(
+    driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device))
 
 mod, fns = compile_kernel(os.path.join(HERE, "kernel.cu"),
                           device, kernels=["matmul_cluster"])
@@ -77,7 +85,10 @@ def setup(M, N, K):
 
     grid_m_clusters = M // (CTA_GROUP * BM)
     grid_n          = N // BN
-    grid = (grid_m_clusters * grid_n * CTA_GROUP, 1, 1)
+    if PERSISTENT:
+        grid = (NUM_SMS - NUM_SMS % CTA_GROUP, 1, 1)
+    else:
+        grid = (grid_m_clusters * grid_n * CTA_GROUP, 1, 1)
     return A, B, C, grid, args
 
 
@@ -98,8 +109,10 @@ for (M, N, K) in [(2048, 2048, 2048), (4096, 4096, 4096), (8192, 8192, 8192)]:
     tf = flops / (us * 1e-6) / 1e12
 
     print(f"{ok}  M=N=K={M:>5}   grid={grid[0]} CTAs ({CTA_GROUP}-CTA clusters)   rel err={rel:.2%}")
-    print(f"     BM={BM} BN={BN} BK={BK} NS={NS} GSM={GROUP_SIZE_M} NW={NUM_WARPS}   "
-          f"{us:7.1f} us/call   {tf:6.1f} TFLOPS")
+    print(f"     BM={BM} BN={BN} BK={BK} NS={NS} GSM={GROUP_SIZE_M} NW={NUM_WARPS} "
+          f"TMA_STORE={TMA_STORE} PERSISTENT={PERSISTENT} "
+          f"EPILOGUE_OVERLAP={EPILOGUE_OVERLAP}   {us:7.1f} us/call   "
+          f"{tf:6.1f} TFLOPS")
     print()
 
 
