@@ -320,6 +320,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
     const int warp_id = tid / WARP_SIZE;
     const int lane    = tid % WARP_SIZE;
 
+    {
 
     // ── One-time setup ──────────────────────────────────────────────
     //
@@ -547,6 +548,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
         }
     }
 #undef EPI_DEALLOC
+    }
 }
 
 

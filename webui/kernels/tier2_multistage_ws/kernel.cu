@@ -199,6 +199,7 @@ extern "C" __global__ void matmul_coalesced_epilogue(
     const int lane    = tid % WARP_SIZE;
 
 #if EPILOGUE_OVERLAP
+    {
         // ── Step B: persistent grid + epilogue/K-loop OVERLAP ───────────
         // Continuous TMA-producer (warp0) + MMA-consumer (warp1) stream into a
         // 2-buffer TMEM accumulator (taddr + buf*BN); 4 dedicated epilogue
@@ -314,7 +315,9 @@ extern "C" __global__ void matmul_coalesced_epilogue(
         __syncthreads();
         if (warp_id == 0 && elect_sync()) tcgen05_dealloc(taddr, 2 * BN);
         return;
+    }
 #else
+    {
 
     // ── Persistent grid (Step A: persistent scheduling, no overlap) ──
     // TMEM is allocated ONCE here and reused across every output tile
@@ -461,6 +464,7 @@ extern "C" __global__ void matmul_coalesced_epilogue(
     // Free the accumulator once, after every tile this CTA owns is done.
     if (warp_id == 0 && elect_sync()) {
         tcgen05_dealloc(taddr, BN);
+    }
     }
 #endif
 }

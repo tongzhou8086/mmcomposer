@@ -274,6 +274,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
     const int lane    = tid % WARP_SIZE;
 
 #if EPILOGUE_OVERLAP
+    {
         // Persistent cluster pipeline: both CTAs stream A/B, CTA 0 issues
         // cta_group::2 MMA into a two-buffer TMEM accumulator, and every CTA
         // drains its own BM x BN output half while the next cluster tile runs.
@@ -419,7 +420,9 @@ __device__ __forceinline__ void matmul_cluster_impl(
         if (warp_id == 0 && elect_sync())
             tcgen05_dealloc_g2(taddr, 2 * BN);
         return;
+    }
 #else
+    {
 
     // ── One-time setup ──────────────────────────────────────────────
     //
@@ -549,6 +552,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
 #define EPI_DEALLOC(t, n) tcgen05_dealloc_g2((t), (n))
     // @@EPILOGUE@@
 #undef EPI_DEALLOC
+    }
 #endif
 }
 

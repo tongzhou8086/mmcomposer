@@ -245,6 +245,7 @@ extern "C" __global__ void matmul_coalesced_epilogue(
     const int warp_id = tid / WARP_SIZE;
     const int lane    = tid % WARP_SIZE;
 
+    {
         // ── Step B: persistent grid + epilogue/K-loop OVERLAP ───────────
         // Continuous TMA-producer (warp0) + MMA-consumer (warp1) stream into a
         // 2-buffer TMEM accumulator (taddr + buf*BN); 4 dedicated epilogue
@@ -449,4 +450,5 @@ extern "C" __global__ void matmul_coalesced_epilogue(
         __syncthreads();
         if (warp_id == 0 && elect_sync()) tcgen05_dealloc(taddr, 2 * BN);
         return;
+    }
 }
