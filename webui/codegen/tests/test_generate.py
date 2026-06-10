@@ -37,6 +37,24 @@ CONFIGS = {
              EPILOGUE_OVERLAP=0, EPILOGUE_SPLIT=0, PERSISTENT=0),
         ["EPILOGUE_OVERLAP"],
     ),
+    "tier3_overlap": (
+        dict(skeleton="tier3_cluster_swizzle", BM=128, BN=256, BK=64, NS=3,
+             GROUP_SIZE_M=4, NUM_WARPS=8, TMA_STORE=0, TCGEN05_LD_WIDTH=8,
+             EPILOGUE_OVERLAP=1, EPILOGUE_SPLIT=0, PERSISTENT=1),
+        ["EPILOGUE_OVERLAP"],
+    ),
+    "tier3_overlap_split": (
+        dict(skeleton="tier3_cluster_swizzle", BM=128, BN=256, BK=64, NS=5,
+             GROUP_SIZE_M=4, NUM_WARPS=8, TMA_STORE=0, TCGEN05_LD_WIDTH=8,
+             EPILOGUE_OVERLAP=1, EPILOGUE_SPLIT=1, PERSISTENT=1),
+        ["EPILOGUE_OVERLAP"],
+    ),
+    "tier3_sequential": (
+        dict(skeleton="tier3_cluster_swizzle", BM=128, BN=256, BK=64, NS=3,
+             GROUP_SIZE_M=8, NUM_WARPS=8, TMA_STORE=0, TCGEN05_LD_WIDTH=8,
+             EPILOGUE_OVERLAP=0, EPILOGUE_SPLIT=0, PERSISTENT=0),
+        ["EPILOGUE_OVERLAP"],
+    ),
 }
 
 

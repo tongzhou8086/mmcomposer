@@ -6,9 +6,9 @@
 constexpr int BM           = 128;
 constexpr int BN           = 256;
 constexpr int BK           = 64;
-constexpr int NS           = 5;       // multi-stage SMEM ring depth
+constexpr int NS           = 3;       // multi-stage SMEM ring depth
 constexpr int GROUP_SIZE_M = 8;       // CTA-swizzle chunk (1 = no swizzle)
-constexpr int NUM_WARPS    = 4;       // total warps per CTA
+constexpr int NUM_WARPS    = 8;       // total warps per CTA
 constexpr int TMA_STORE    = 0;       // epilogue Phase 2: 0 = int4 stores, 1 = async TMA store
 constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (32-bit elems per lane)
 constexpr int EPILOGUE_OVERLAP = 0;  // 1 = persistent 2-CTA cluster + epilogue/K-loop overlap
@@ -156,7 +156,34 @@ __device__ __forceinline__ void tcgen05_fence_after_thread_sync() {
 __device__ __forceinline__ void tcgen05_wait_ld() {
     asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
 }
-// @@TCGEN05_LD@@
+// ── tcgen05.ld width helpers (building block) ───────────────────────
+// mvp_core splices these at the TCGEN05_LD marker in every tier, so the
+// TMEM->register load width (TCGEN05_LD_WIDTH = 8/16 32-bit elems per lane)
+// is one knob with the asm in a single place.  Wider = fewer ld + fewer
+// wait_ld syncs (more registers, but we're SMEM-occupancy-bound so it's free).
+// The epilogue picks the variant via `if constexpr`.
+
+__device__ __forceinline__ void tcgen05_ld_32x32b_x8(uint32_t taddr, float* out) {
+    asm volatile(
+        "tcgen05.ld.sync.aligned.32x32b.x8.b32 "
+        "{%0,%1,%2,%3,%4,%5,%6,%7}, [%8];"
+        :
+          "=f"(out[0]), "=f"(out[1]), "=f"(out[2]), "=f"(out[3]),
+          "=f"(out[4]), "=f"(out[5]), "=f"(out[6]), "=f"(out[7])
+        : "r"(taddr));
+}
+
+__device__ __forceinline__ void tcgen05_ld_32x32b_x16(uint32_t taddr, float* out) {
+    asm volatile(
+        "tcgen05.ld.sync.aligned.32x32b.x16.b32 "
+        "{%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15}, [%16];"
+        :
+          "=f"(out[0]), "=f"(out[1]), "=f"(out[2]), "=f"(out[3]),
+          "=f"(out[4]), "=f"(out[5]), "=f"(out[6]), "=f"(out[7]),
+          "=f"(out[8]), "=f"(out[9]), "=f"(out[10]), "=f"(out[11]),
+          "=f"(out[12]), "=f"(out[13]), "=f"(out[14]), "=f"(out[15])
+        : "r"(taddr));
+}
 
 
 // ── mbarrier helpers ────────────────────────────────────────────────
@@ -204,7 +231,27 @@ __device__ __forceinline__ void tma_wait_group() {
 // MMA-issue building block (shared fragment).  The cluster tier uses the
 // g2 (cta_group::2) MMA instruction.
 #define MMA_ISSUE(t, a, b, i, e) tcgen05_mma_g2((t), (a), (b), (i), (e))
-// @@MMA_CHAIN@@
+// ── MMA-issue chain (building block) ────────────────────────────────
+// Issues the K_MMAS tcgen05 MMAs for one K-tile (slot) into the
+// accumulator at `taddr`.  mvp_core stitches this into every tier at the
+// MMA-chain marker, so the descriptor math + K-step loop live in exactly
+// one place.  The only per-tier variation is the MMA instruction
+// itself, supplied just before the marker as:
+//   MMA_ISSUE(taddr, a_desc, b_desc, idesc, enable_d)
+// → tcgen05_mma (single-CTA) or tcgen05_mma_g2 (2-CTA cluster).
+__device__ __forceinline__ void issue_mma_chain(
+    uint32_t taddr, uint32_t a_base_slot, uint32_t b_base_slot,
+    uint32_t idesc, bool first_k_tile)
+{
+    #pragma unroll
+    for (int kk = 0; kk < K_MMAS; kk++) {
+        const uint64_t a_desc = make_desc(a_base_slot + kk * MMA_K * BF16_BYTES);
+        const uint64_t b_desc = make_desc_K_major(
+            b_base_slot + kk * MMA_K * SWIZZLE_ROW_BYTES, BK * SWIZZLE_ROW_BYTES);
+        const bool first_ever = first_k_tile && (kk == 0);
+        MMA_ISSUE(taddr, a_desc, b_desc, idesc, !first_ever);
+    }
+}
 #undef MMA_ISSUE
 
 __device__ __forceinline__ void matmul_cluster_impl(
@@ -273,153 +320,6 @@ __device__ __forceinline__ void matmul_cluster_impl(
     const int warp_id = tid / WARP_SIZE;
     const int lane    = tid % WARP_SIZE;
 
-#if EPILOGUE_OVERLAP
-        // Persistent cluster pipeline: both CTAs stream A/B, CTA 0 issues
-        // cta_group::2 MMA into a two-buffer TMEM accumulator, and every CTA
-        // drains its own BM x BN output half while the next cluster tile runs.
-        __shared__ uint64_t tmem_full[2];
-        __shared__ uint64_t tmem_empty[2];
-        // Split mode stages one half-BN column panel at a time, reducing
-        // epilogue SMEM enough to make room for one extra K-loop stage.
-        constexpr int EPI_STAGE_COLS = EPILOGUE_SPLIT ? (BN / 2) : BN;
-        auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_STAGE_COLS + 8]>(smem + NS * SLOT_BYTES);
-
-        if (warp_id == 0)
-            tcgen05_alloc_g2((uint32_t)__cvta_generic_to_shared(tmem_addr_holder), 2 * BN);
-        if (warp_id == 0 && elect_sync()) {
-            #pragma unroll
-            for (int s = 0; s < NS; s++) {
-                mbarrier_init((uint32_t)__cvta_generic_to_shared(&tile_ready[s]), CTA_GROUP);
-                mbarrier_init((uint32_t)__cvta_generic_to_shared(&mma_done[s]), 1);
-                mbarrier_arrive_no_tx((uint32_t)__cvta_generic_to_shared(&mma_done[s]));
-            }
-            #pragma unroll
-            for (int b = 0; b < 2; b++) {
-                mbarrier_init((uint32_t)__cvta_generic_to_shared(&tmem_full[b]), 1);
-                mbarrier_init((uint32_t)__cvta_generic_to_shared(&tmem_empty[b]), CTA_GROUP);
-                uint32_t empty_cta0 =
-                    ((uint32_t)__cvta_generic_to_shared(&tmem_empty[b])) & 0xFEFFFFFFu;
-                mbarrier_arrive_no_tx_cluster(empty_cta0);
-            }
-            asm volatile("fence.mbarrier_init.release.cluster;");
-        }
-
-        asm volatile("barrier.cluster.arrive.release.aligned;");
-        asm volatile("barrier.cluster.wait.acquire.aligned;");
-
-        const uint32_t taddr = tmem_addr_holder[0];
-        const uint32_t idesc = make_idesc_bf16_cluster(CTA_GROUP * BM, BN);
-        const int num_k = K / BK;
-        constexpr int16_t cta_mask = (1 << CTA_GROUP) - 1;
-
-        const int grid_m_clusters = M / (CTA_GROUP * BM);
-        const int grid_n          = N / BN;
-        const int num_cluster_in_group = GROUP_SIZE_M * grid_n;
-        const int num_clusters = grid_m_clusters * grid_n;
-        const int cluster_pid = (int)blockIdx.x / CTA_GROUP;
-        const int cluster_stride = (int)gridDim.x / CTA_GROUP;
-        const int num_my = (cluster_pid >= num_clusters) ? 0
-                         : (num_clusters - cluster_pid + cluster_stride - 1) / cluster_stride;
-
-        auto map_off = [&](int ti, int& base_m, int& base_n, int& local_m, int& local_n) {
-            int tile = cluster_pid + ti * cluster_stride;
-            int group = tile / num_cluster_in_group;
-            int first = group * GROUP_SIZE_M;
-            int gsm_i = min(grid_m_clusters - first, GROUP_SIZE_M);
-            int cm = first + (tile % gsm_i);
-            int cn = (tile % num_cluster_in_group) / gsm_i;
-            base_m = cm * (CTA_GROUP * BM);
-            base_n = cn * BN;
-            local_m = base_m + cta_rank * BM;
-            local_n = base_n + cta_rank * BN_LOCAL;
-        };
-
-        if (warp_id == 0 && elect_sync()) {
-            uint32_t ph[NS] = {};
-            long gk = 0;
-            for (int ti = 0; ti < num_my; ti++) {
-                int base_m, base_n, local_m, local_n;
-                map_off(ti, base_m, base_n, local_m, local_n);
-                for (int k = 0; k < num_k; k++) {
-                    int slot = gk % NS;
-                    uint32_t done_mb = (uint32_t)__cvta_generic_to_shared(&mma_done[slot]);
-                    uint32_t ready_mb_cta0 =
-                        ((uint32_t)__cvta_generic_to_shared(&tile_ready[slot])) & 0xFEFFFFFFu;
-                    mbarrier_wait_phase(done_mb, ph[slot]);
-                    tma_2d_load_g2(A_base(slot), A_tmap, k * BK, local_m, ready_mb_cta0);
-                    #pragma unroll
-                    for (int n = 0; n < BN_LOCAL; n += 64) {
-                        tma_2d_load_g2(B_base(slot) + n * BK * BF16_BYTES,
-                                       B_tmap, local_n + n, k * BK, ready_mb_cta0);
-                    }
-                    mbarrier_arrive_expect_tx(ready_mb_cta0, SLOT_BYTES);
-                    ph[slot] ^= 1;
-                    gk++;
-                }
-            }
-        } else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {
-            uint32_t ph[NS] = {};
-            uint32_t emp[2] = {};
-            long gk = 0;
-            for (int ti = 0; ti < num_my; ti++) {
-                int buf = ti & 1;
-                uint32_t d_tmem = taddr + buf * BN;
-                mbarrier_wait_phase((uint32_t)__cvta_generic_to_shared(&tmem_empty[buf]), emp[buf]);
-                emp[buf] ^= 1;
-                for (int k = 0; k < num_k; k++) {
-                    int slot = gk % NS;
-                    uint32_t ready_mb = (uint32_t)__cvta_generic_to_shared(&tile_ready[slot]);
-                    uint32_t done_mb  = (uint32_t)__cvta_generic_to_shared(&mma_done[slot]);
-                    mbarrier_wait_phase(ready_mb, ph[slot]);
-                    tcgen05_fence_after_thread_sync();
-                    issue_mma_chain(d_tmem, A_base(slot), B_base(slot), idesc, /*first_k_tile=*/ k == 0);
-                    tcgen05_commit_mcast_g2(done_mb, cta_mask);
-                    ph[slot] ^= 1;
-                    gk++;
-                }
-                tcgen05_commit_mcast_g2((uint32_t)__cvta_generic_to_shared(&tmem_full[buf]), cta_mask);
-            }
-        } else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {
-            // Contract for the shared overlap-drain fragment: cluster tier writes
-            // this CTA's BM x BN output half (local_m / base_n) and releases the
-            // TMEM buffer with a CTA-0-masked cluster arrive.
-#define EPI_OUT_ROW                 local_m
-#define EPI_OUT_COL_BASE            base_n
-#define EPI_TMEM_EMPTY_ARRIVE(buf)  do { uint32_t _e = ((uint32_t)__cvta_generic_to_shared(&tmem_empty[buf])) & 0xFEFFFFFFu; mbarrier_arrive_no_tx_cluster(_e); } while (0)
-            constexpr int ROW_STRIPS    = BM / 32;
-            constexpr int COL_GROUPS    = NUM_WARPS / ROW_STRIPS;
-            constexpr int COLS_PER_WARP = BN / COL_GROUPS;
-            constexpr int EPI_THREADS   = NUM_WARPS * 32;
-            const int ew = warp_id - 4;
-            const int row_warp = ew % ROW_STRIPS;
-            const int col_warp = ew / ROW_STRIPS;
-            const int my_row = row_warp * 32 + lane;
-            const int col_base = col_warp * COLS_PER_WARP;
-            const int etid = ew * 32 + lane;
-            uint32_t full[2] = {};
-            for (int ti = 0; ti < num_my; ti++) {
-                int base_m, base_n, local_m, local_n;
-                int buf = ti & 1;
-                map_off(ti, base_m, base_n, local_m, local_n);
-                mbarrier_wait_phase((uint32_t)__cvta_generic_to_shared(&tmem_full[buf]), full[buf]);
-                full[buf] ^= 1;
-                tcgen05_fence_after_thread_sync();
-                const uint32_t trow =
-                    (taddr + buf * BN) + ((uint32_t)(cta_rank * BM + row_warp * 32) << 16);
-                constexpr int LDW = TCGEN05_LD_WIDTH;
-
-                // @@OVERLAP_EPILOGUE@@
-            }
-#undef EPI_OUT_ROW
-#undef EPI_OUT_COL_BASE
-#undef EPI_TMEM_EMPTY_ARRIVE
-        }
-
-        __syncthreads();
-        if (warp_id == 0 && elect_sync())
-            tcgen05_dealloc_g2(taddr, 2 * BN);
-        return;
-#else
 
     // ── One-time setup ──────────────────────────────────────────────
     //
@@ -547,9 +447,106 @@ __device__ __forceinline__ void matmul_cluster_impl(
     // ── Epilogue contract (cluster) + shared fragment splice ────────
     // cta_rank, off_m_cluster, off_n already in scope (computed above).
 #define EPI_DEALLOC(t, n) tcgen05_dealloc_g2((t), (n))
-    // @@EPILOGUE@@
+    // ── Shared epilogue (TMEM → SMEM → GMEM) ────────────────────────
+    // mvp_core stitches this fragment into every tier's kernel.cu at the
+    // epilogue marker, so the epilogue lives in exactly one place.  Each
+    // tier supplies a small contract just before the marker:
+    //   cta_rank, off_m_cluster, off_n   — tile-origin primitives
+    //       (single-CTA tiers set cta_rank=0, off_m_cluster=off_m)
+    //   C_tmap_ptr                       — const CUtensorMap* for the store
+    //   EPI_DEALLOC(taddr, n)            — that tier's tcgen05 dealloc
+    //       (single-CTA: tcgen05_dealloc; cluster: tcgen05_dealloc_g2)
+    //
+    // TMA_STORE (0/1) picks Phase 2: a flat int4 store loop, or one async
+    // TMA store per CTA.  The TMA store needs a tightly-packed SMEM source
+    // (no +8 bank-pad), so EPI_LD switches accordingly.
+    constexpr int EPI_LD = TMA_STORE ? BN : (BN + 8);
+    auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_LD]>(smem);
+
+    tcgen05_fence_after_thread_sync();
+
+    // ── Phase 1: TMEM → SMEM, generalized variable-warp 2D grid ──────
+    // Partition NUM_WARPS as ROW_STRIPS (BM/32) row groups × COL_GROUPS
+    // column slices so every warp works even at NW=8/16.  The cluster
+    // adds a cta_rank*BM logical-row offset into this CTA's TMEM.
+    constexpr int ROW_STRIPS    = BM / 32;
+    constexpr int COL_GROUPS    = NUM_WARPS / ROW_STRIPS;
+    constexpr int COLS_PER_WARP = BN / COL_GROUPS;
+
+    const int row_warp = warp_id % ROW_STRIPS;
+    const int col_warp = warp_id / ROW_STRIPS;
+    const int my_row   = row_warp * 32 + lane;
+    const uint32_t taddr_row =
+        taddr + ((uint32_t)(cta_rank * BM + row_warp * 32) << 16);
+    const int col_base = col_warp * COLS_PER_WARP;
+
+    // TCGEN05_LD_WIDTH (8/16) = 32-bit elems/lane per tcgen05.ld.
+    // Wider = fewer loads + fewer wait_ld syncs (more registers, free while
+    // we're SMEM-occupancy-bound).
+    constexpr int LDW = TCGEN05_LD_WIDTH;
+    #pragma unroll
+    for (int n = col_base; n < col_base + COLS_PER_WARP; n += LDW) {
+        float tmp[LDW];
+        if constexpr (LDW == 8) tcgen05_ld_32x32b_x8 (taddr_row + (uint32_t)n, tmp);
+        else                    tcgen05_ld_32x32b_x16(taddr_row + (uint32_t)n, tmp);
+        tcgen05_wait_ld();
+
+        __nv_bfloat162 packed[LDW / 2];
+        #pragma unroll
+        for (int i = 0; i < LDW / 2; i++) {
+            packed[i] = __floats2bfloat162_rn(tmp[2 * i], tmp[2 * i + 1]);
+        }
+        // SMEM stores — int4 = 16 B = 8 BF16 = 4 BF16x2, one per 8 columns.
+        #pragma unroll
+        for (int c = 0; c < LDW; c += 8) {
+            *reinterpret_cast<int4*>(&C_sh[my_row][n + c]) =
+                *reinterpret_cast<int4*>(&packed[c / 2]);
+        }
+    }
+
+    __syncthreads();   // all Phase-1 SMEM writes visible before Phase 2
+
+    const int out_m_base = off_m_cluster + cta_rank * BM;
+
+    if constexpr (TMA_STORE) {
+        // ── Phase 2a: one async TMA store per CTA ───────────────────
+        // Phase 1 wrote SMEM via the GENERIC proxy (st.shared); the TMA
+        // store engine reads via the ASYNC proxy — fence between them.
+        asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+        if (warp_id == 0 && elect_sync()) {
+            tma_2d_store(C_tmap_ptr,
+                         (uint32_t)__cvta_generic_to_shared(&C_sh[0][0]),
+                         /*x=*/ off_n, /*y=*/ out_m_base);
+            tma_commit_group();
+            tma_wait_group<0>();   // drain before we touch TMEM
+        }
+        // dealloc must come AFTER the store drains — reversing it
+        // deadlocks the bulk-copy engine (bisected in ch13).
+        if (warp_id == 0 && elect_sync()) {
+            EPI_DEALLOC(taddr, BN);
+        }
+    } else {
+        // ── Phase 2b: flat thread-major coalesced int4 stores ───────
+        if (warp_id == 0 && elect_sync()) {
+            EPI_DEALLOC(taddr, BN);
+        }
+        constexpr int CHUNK_BF16        = 8;
+        constexpr int CHUNKS_PER_ROW    = BN / CHUNK_BF16;
+        constexpr int STORES_PER_THREAD = (BM * BN) / (THREADS * CHUNK_BF16);
+        static_assert(STORES_PER_THREAD * THREADS * CHUNK_BF16 == BM * BN,
+                      "BM*BN must be a multiple of THREADS*8 for the flat tile-walk");
+        #pragma unroll
+        for (int s = 0; s < STORES_PER_THREAD; s++) {
+            const int flat = tid + s * THREADS;
+            const int row  = flat / CHUNKS_PER_ROW;
+            const int col  = (flat % CHUNKS_PER_ROW) * CHUNK_BF16;
+            const int gr   = out_m_base + row;
+            const int gc   = off_n + col;
+            *reinterpret_cast<int4*>(&C_ptr[gr * N + gc]) =
+                *reinterpret_cast<const int4*>(&C_sh[row][col]);
+        }
+    }
 #undef EPI_DEALLOC
-#endif
 }
 
 
