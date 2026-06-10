@@ -12,6 +12,7 @@ constexpr int NUM_WARPS    = 4;       // total warps per CTA
 constexpr int TMA_STORE    = 0;       // epilogue Phase 2: 0 = int4 stores, 1 = async TMA store
 constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (32-bit elems per lane)
 constexpr int EPILOGUE_OVERLAP = 0;  // 1 = persistent + overlap epilogue with next tile's K-loop (Step B)
+constexpr int EPILOGUE_SPLIT   = 0;  // 1 = split overlapped int4 writeback into two half-BN passes (cluster only today)
 
 // ── Derived constants (do not edit) ─────────────────────────────────
 constexpr int MMA_K   = 16;
@@ -206,7 +207,8 @@ extern "C" __global__ void matmul_coalesced_epilogue(
         // (at NS*SLOT).  Requires the persistent launch grid and NW>=8.
         __shared__ uint64_t tmem_full[2];
         __shared__ uint64_t tmem_empty[2];
-        auto C_sh = reinterpret_cast<__nv_bfloat16(*)[BN + 8]>(smem + NS * SLOT_BYTES);
+        constexpr int EPI_STAGE_COLS = EPILOGUE_SPLIT ? (BN / 2) : BN;
+        auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_STAGE_COLS + 8]>(smem + NS * SLOT_BYTES);
 
         if (warp_id == 0)
             tcgen05_alloc((uint32_t)__cvta_generic_to_shared(tmem_addr_holder), 2 * BN);
@@ -282,6 +284,11 @@ extern "C" __global__ void matmul_coalesced_epilogue(
             // 2,3 idle).  Sharing warpgroup 0 between the MMA warp and the
             // tcgen05.ld epilogue warps corrupts the TMEM reads.  Block =
             // (NUM_WARPS + 4) warps; NUM_WARPS still scales the epilogue.
+            // Contract for the shared overlap-drain fragment: single-CTA tier
+            // writes off_m / off_n and releases TMEM with a plain mbarrier arrive.
+#define EPI_OUT_ROW                 off_m
+#define EPI_OUT_COL_BASE            off_n
+#define EPI_TMEM_EMPTY_ARRIVE(buf)  mbarrier_arrive_no_tx((uint32_t)__cvta_generic_to_shared(&tmem_empty[buf]))
             constexpr int ROW_STRIPS    = BM / 32;                 // 4
             constexpr int COL_GROUPS    = NUM_WARPS / ROW_STRIPS;  // warps per row-strip
             constexpr int COLS_PER_WARP = BN / COL_GROUPS;
@@ -297,31 +304,12 @@ extern "C" __global__ void matmul_coalesced_epilogue(
                 tcgen05_fence_after_thread_sync();
                 uint32_t trow = (taddr + buf * BN) + ((uint32_t)(row_warp * 32) << 16);
                 constexpr int LDW = TCGEN05_LD_WIDTH;
-                #pragma unroll
-                for (int n = col_base; n < col_base + COLS_PER_WARP; n += LDW) {
-                    float t[LDW];
-                    if constexpr (LDW == 8) tcgen05_ld_32x32b_x8 (trow + (uint32_t)n, t);
-                    else                    tcgen05_ld_32x32b_x16(trow + (uint32_t)n, t);
-                    tcgen05_wait_ld();
-                    __nv_bfloat162 pk[LDW / 2];
-                    #pragma unroll
-                    for (int i = 0; i < LDW / 2; i++) pk[i] = __floats2bfloat162_rn(t[2 * i], t[2 * i + 1]);
-                    #pragma unroll
-                    for (int c = 0; c < LDW; c += 8)
-                        *reinterpret_cast<int4*>(&C_sh[my_row][n + c]) = *reinterpret_cast<int4*>(&pk[c / 2]);
-                }
-                asm volatile("bar.sync 1, %0;" :: "n"(NUM_WARPS * 32));  // epi warps: Phase-1 done
-                if (ew == 0 && elect_sync())
-                    mbarrier_arrive_no_tx((uint32_t)__cvta_generic_to_shared(&tmem_empty[buf]));  // TMEM free
-                constexpr int CHUNKS = BN / 8, STORES = BM * BN / (EPI_THREADS * 8);
-                #pragma unroll
-                for (int s = 0; s < STORES; s++) {
-                    int flat = etid + s * EPI_THREADS, row = flat / CHUNKS, col = (flat % CHUNKS) * 8;
-                    *reinterpret_cast<int4*>(&C_ptr[(off_m + row) * N + off_n + col]) =
-                        *reinterpret_cast<const int4*>(&C_sh[row][col]);
-                }
-                asm volatile("bar.sync 1, %0;" :: "n"(NUM_WARPS * 32));  // staging free before next Phase-1
+
+                // @@OVERLAP_EPILOGUE@@
             }
+#undef EPI_OUT_ROW
+#undef EPI_OUT_COL_BASE
+#undef EPI_TMEM_EMPTY_ARRIVE
         }
         __syncthreads();
         if (warp_id == 0 && elect_sync()) tcgen05_dealloc(taddr, 2 * BN);

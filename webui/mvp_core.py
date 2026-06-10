@@ -406,6 +406,7 @@ FRAGMENTS = {
     "// @@EPILOGUE@@":  "_epilogue.cu.frag",
     "// @@MMA_CHAIN@@": "_mma_chain.cu.frag",
     "// @@TCGEN05_LD@@": "_tcgen05_ld.cu.frag",
+    "// @@OVERLAP_EPILOGUE@@": "_overlap_epilogue.cu.frag",
 }
 
 
