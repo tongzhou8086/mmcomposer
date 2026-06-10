@@ -13,14 +13,15 @@ constexpr int TMA_STORE    = 0;       // epilogue Phase 2: 0 = int4 stores, 1 = 
 constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (32-bit elems per lane)
 constexpr int EPILOGUE_OVERLAP = 0;  // 1 = persistent 2-CTA cluster + epilogue/K-loop overlap
 constexpr int EPILOGUE_SPLIT   = 0;  // 1 = split overlapped int4 writeback into two half-BN passes
+constexpr int TWO_CTA          = 1;  // 1 = 2-CTA cluster MMA (cta_group::2); 0 = single-CTA
 
 // ── Derived constants (do not edit) ─────────────────────────────────
 constexpr int MMA_K     = 16;
 constexpr int BF16_BYTES = 2;
 constexpr int K_MMAS    = BK / MMA_K;        // 4
 
-constexpr int CTA_GROUP        = 2;
-constexpr int BN_LOCAL         = BN / CTA_GROUP;     // 128 — per-CTA N width of B
+constexpr int CTA_GROUP        = TWO_CTA ? 2 : 1;    // 2-CTA cluster vs single-CTA
+constexpr int BN_LOCAL         = BN / CTA_GROUP;     // per-CTA N width of B (=BN single-CTA)
 constexpr int SWIZZLE_ROW_BYTES = 128;               // one 128B-swizzle atom row
 
 // Per-stage SMEM per CTA: A = BM*BK*2 = 16 KB; B = BN_LOCAL*BK*2 = 16 KB.
@@ -81,6 +82,7 @@ __device__ __forceinline__ bool elect_sync() {
 // what makes both CTAs' arrivals count toward CTA 0's tile_ready
 // mbar).  Without it, peer-CTA loads silently fail to advance the
 // mbar and the kernel deadlocks.
+#if TWO_CTA
 __device__ __forceinline__ void tma_2d_load_g2(
     uint32_t smem_dst, const void* tmap, int x, int y, uint32_t mbar
 ) {
@@ -89,6 +91,16 @@ __device__ __forceinline__ void tma_2d_load_g2(
         "[%0], [%1, {%2, %3}], [%4];"
         :: "r"(smem_dst), "l"(tmap), "r"(x), "r"(y), "r"(mbar) : "memory");
 }
+#else
+__device__ __forceinline__ void tma_2d_load_g2(
+    uint32_t smem_dst, const void* tmap, int x, int y, uint32_t mbar
+) {
+    asm volatile(
+        "cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes "
+        "[%0], [%1, {%2, %3}], [%4];"
+        :: "r"(smem_dst), "l"(tmap), "r"(x), "r"(y), "r"(mbar) : "memory");
+}
+#endif
 
 
 // A's descriptor — MN-major, unchanged from earlier chapters.
@@ -124,7 +136,11 @@ __device__ __forceinline__ uint32_t make_idesc_bf16_cluster(int m, int n) {
 }
 
 
-// ── tcgen05 cta_group::2 wrappers ───────────────────────────────────
+// ── tcgen05 MMA wrappers (cta_group::2 cluster / cta_group::1 single) ─
+// Same names + signatures under both TWO_CTA arms so the call sites (and the
+// MMA_ISSUE macro) are identical — TWO_CTA=1 renders byte-for-byte as the
+// cluster tier; TWO_CTA=0 swaps in the single-CTA cta_group::1 instructions.
+#if TWO_CTA
 __device__ __forceinline__ void tcgen05_alloc_g2(uint32_t smem_dst, uint32_t n_cols) {
     asm volatile("tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [%0], %1;"
                  :: "r"(smem_dst), "r"(n_cols) : "memory");
@@ -153,6 +169,34 @@ __device__ __forceinline__ void tcgen05_commit_mcast_g2(uint32_t smem_bar, int16
         "[%0], %1;"
         :: "r"(smem_bar), "h"(cta_mask) : "memory");
 }
+#else
+__device__ __forceinline__ void tcgen05_alloc_g2(uint32_t smem_dst, uint32_t n_cols) {
+    asm volatile("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;"
+                 :: "r"(smem_dst), "r"(n_cols) : "memory");
+}
+__device__ __forceinline__ void tcgen05_dealloc_g2(uint32_t taddr, uint32_t n_cols) {
+    asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"
+                 :: "r"(taddr), "r"(n_cols) : "memory");
+}
+__device__ __forceinline__ void tcgen05_mma_g2(
+    uint32_t d_tmem, uint64_t a_desc, uint64_t b_desc,
+    uint32_t idesc, bool enable_d
+) {
+    asm volatile(
+        "{\n\t .reg .pred P;\n\t"
+        "setp.ne.b32 P, %4, 0;\n\t"
+        "tcgen05.mma.cta_group::1.kind::f16 [%0], %1, %2, %3, P;\n\t"
+        "}"
+        :: "r"(d_tmem), "l"(a_desc), "l"(b_desc), "r"(idesc),
+           "r"((uint32_t)enable_d) : "memory");
+}
+// Single-CTA: one arrive, no multicast (cta_mask ignored).
+__device__ __forceinline__ void tcgen05_commit_mcast_g2(uint32_t smem_bar, int16_t cta_mask) {
+    (void)cta_mask;
+    asm volatile("tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [%0];"
+                 :: "r"(smem_bar) : "memory");
+}
+#endif
 
 __device__ __forceinline__ void tcgen05_fence_after_thread_sync() {
     asm volatile("tcgen05.fence::after_thread_sync;");
@@ -227,8 +271,12 @@ __device__ __forceinline__ void matmul_cluster_impl(
     // bid (the cluster id derived from blockIdx.x / CTA_GROUP) is what
     // we'd normally call the grid coordinate; the cluster handles a
     // 2*BM × BN output tile.
+#if TWO_CTA
     int cta_rank;
     asm volatile("mov.b32 %0, %%cluster_ctarank;" : "=r"(cta_rank));
+#else
+    const int cta_rank = 0;   // single-CTA: this CTA is rank 0
+#endif
 
     const int cluster_id      = blockIdx.x / CTA_GROUP;
     const int grid_n          = N / BN;
@@ -313,8 +361,12 @@ __device__ __forceinline__ void matmul_cluster_impl(
             asm volatile("fence.mbarrier_init.release.cluster;");
         }
 
+#if TWO_CTA
         asm volatile("barrier.cluster.arrive.release.aligned;");
         asm volatile("barrier.cluster.wait.acquire.aligned;");
+#else
+        __syncthreads();
+#endif
 
         const uint32_t taddr = tmem_addr_holder[0];
         const uint32_t idesc = make_idesc_bf16_cluster(CTA_GROUP * BM, BN);
@@ -455,8 +507,12 @@ __device__ __forceinline__ void matmul_cluster_impl(
     }
 
     // ── Cluster barrier replaces __syncthreads at init ──────────────
+#if TWO_CTA
     asm volatile("barrier.cluster.arrive.release.aligned;");
     asm volatile("barrier.cluster.wait.acquire.aligned;");
+#else
+    __syncthreads();
+#endif
 
     const uint32_t taddr = tmem_addr_holder[0];
     const uint32_t idesc = make_idesc_bf16_cluster(CTA_GROUP * BM, BN);
@@ -567,7 +623,11 @@ __device__ __forceinline__ void matmul_cluster_impl(
 
 // ── Single entry symbol — NS and GROUP_SIZE_M are baked in from the
 // constexpr knobs at the top of the file (the webui substitutes them).
+#if TWO_CTA
 extern "C" __global__ __cluster_dims__(CTA_GROUP, 1, 1) __launch_bounds__(LAUNCH_THREADS, 1)
+#else
+extern "C" __global__ __launch_bounds__(LAUNCH_THREADS, 1)
+#endif
 void matmul_cluster(
     const __grid_constant__ CUtensorMap A_tmap,
     const __grid_constant__ CUtensorMap B_tmap,

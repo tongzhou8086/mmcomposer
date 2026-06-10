@@ -42,6 +42,7 @@ def all_valid_configs():
             cfg = mc.knob_kwargs(bm, bn, bk, ns, gsm, nw, tma, pers,
                                  ld_width=ld, overlap=ov, split_epilogue=sp)
             cfg["skeleton"] = tier["dir"]
+            cfg["TWO_CTA"] = int(tier["cluster"])
             yield cfg
 
 

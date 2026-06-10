@@ -373,6 +373,7 @@ def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, ld_width=8,
     config = knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store, ld_width=ld_width,
                          overlap=overlap, split_epilogue=split_epilogue)
     config["skeleton"] = tier["dir"]
+    config["TWO_CTA"] = int(tier["cluster"])   # cluster tier -> the cta_group::2 #if arms
     return _generate_kernel(config)
 
 
@@ -383,6 +384,7 @@ def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0,
                          overlap=overlap, split_epilogue=split_epilogue)
     config["skeleton"] = tier["dir"]
     config["label"] = tier["label"]
+    config["TWO_CTA"] = int(tier["cluster"])
     return _generate_host(config)
 
 

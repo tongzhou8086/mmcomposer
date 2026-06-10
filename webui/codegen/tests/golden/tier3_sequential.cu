@@ -13,14 +13,15 @@ constexpr int TMA_STORE    = 0;       // epilogue Phase 2: 0 = int4 stores, 1 = 
 constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (32-bit elems per lane)
 constexpr int EPILOGUE_OVERLAP = 0;  // 1 = persistent 2-CTA cluster + epilogue/K-loop overlap
 constexpr int EPILOGUE_SPLIT   = 0;  // 1 = split overlapped int4 writeback into two half-BN passes
+constexpr int TWO_CTA          = 1;  // 1 = 2-CTA cluster MMA (cta_group::2); 0 = single-CTA
 
 // ── Derived constants (do not edit) ─────────────────────────────────
 constexpr int MMA_K     = 16;
 constexpr int BF16_BYTES = 2;
 constexpr int K_MMAS    = BK / MMA_K;        // 4
 
-constexpr int CTA_GROUP        = 2;
-constexpr int BN_LOCAL         = BN / CTA_GROUP;     // 128 — per-CTA N width of B
+constexpr int CTA_GROUP        = TWO_CTA ? 2 : 1;    // 2-CTA cluster vs single-CTA
+constexpr int BN_LOCAL         = BN / CTA_GROUP;     // per-CTA N width of B (=BN single-CTA)
 constexpr int SWIZZLE_ROW_BYTES = 128;               // one 128B-swizzle atom row
 
 // Per-stage SMEM per CTA: A = BM*BK*2 = 16 KB; B = BN_LOCAL*BK*2 = 16 KB.
@@ -120,7 +121,10 @@ __device__ __forceinline__ uint32_t make_idesc_bf16_cluster(int m, int n) {
 }
 
 
-// ── tcgen05 cta_group::2 wrappers ───────────────────────────────────
+// ── tcgen05 MMA wrappers (cta_group::2 cluster / cta_group::1 single) ─
+// Same names + signatures under both TWO_CTA arms so the call sites (and the
+// MMA_ISSUE macro) are identical — TWO_CTA=1 renders byte-for-byte as the
+// cluster tier; TWO_CTA=0 swaps in the single-CTA cta_group::1 instructions.
 __device__ __forceinline__ void tcgen05_alloc_g2(uint32_t smem_dst, uint32_t n_cols) {
     asm volatile("tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [%0], %1;"
                  :: "r"(smem_dst), "r"(n_cols) : "memory");
