@@ -47,16 +47,19 @@ from cuda.bindings import driver
 
 SCRATCH = WEBUI / "tests" / "_scratch" / "gpu_driver"
 
-# Steady-state benchmark window for the sweep (kernels AND the cuBLAS reference).
-# do_bench's 20ms-warmup default measures partly clock-boosted, so a fresh/idle
-# B200 reports inflated TFLOPS (8192^3 cuBLAS: 1558 at 20/200 vs ~1335 settled).
-# Measured sweep across windows: clocks settle by ~250ms warmup, and 500/500 is
-# statistically identical to 1000/1000 (~1335 +/-<1%) at half the wall-clock
-# (~1s/combo).  100/100 is too noisy (rep too short).  So 500/500 is the sweet
-# spot for a sweep — it agrees with the per-config worker (1000/1000) within
-# <1%.  Override via env for a quicker (less accurate) or stricter sweep.
-BENCH_WARMUP_MS = int(os.environ.get("MMCOMPOSER_BENCH_WARMUP_MS", "500"))
-BENCH_REP_MS    = int(os.environ.get("MMCOMPOSER_BENCH_REP_MS", "500"))
+# Benchmark window for the sweep — same window for the kernels AND the cuBLAS
+# reference, so the ratio is apples-to-apples.  do_bench's 20ms-warmup default
+# measures partly clock-boosted, so a fresh/idle B200 reports inflated TFLOPS
+# (8192^3 cuBLAS: 1558 at 20/200 vs ~1360 settled).  Measured a window sweep on
+# a warm B200: WARMUP is the stabilizer (it rides through the boost spike into
+# sustained clocks), not rep — 500/100 was the noisiest (8.4% spread) while
+# 300/200 was the tightest (3.0%, matching 1000/1000's 3.2%) at ~0.5s/combo.
+# Below ~300ms warmup the first call lands on the boost curve (100/200 -> 5%,
+# 50/200 -> 10%), which would reorder a leaderboard whose top combos differ by
+# ~1%.  So 300/200 is the sweet spot: a ~3% noise floor (thermal drift, window-
+# independent) at half the wall-clock of 500/500.  Override via env.
+BENCH_WARMUP_MS = int(os.environ.get("MMCOMPOSER_BENCH_WARMUP_MS", "300"))
+BENCH_REP_MS    = int(os.environ.get("MMCOMPOSER_BENCH_REP_MS", "200"))
 
 
 def all_combos(tier_dirs, bn_opts=None):
