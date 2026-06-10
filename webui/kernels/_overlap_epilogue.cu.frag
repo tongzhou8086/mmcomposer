@@ -9,7 +9,8 @@
                 // EPILOGUE_SPLIT (constexpr) picks the two-pass half-BN writeback,
                 // which stages one BN/2 column panel at a time (EPI_STAGE_COLS=BN/2)
                 // so the epilogue SMEM shrinks enough for an extra K-loop stage.
-                if constexpr (EPILOGUE_SPLIT) {
+#if EPILOGUE_SPLIT
+                {
                     static_assert((BN / 2) % 8 == 0, "split epilogue needs int4-aligned columns");
                     static_assert((BN / 2) % COL_GROUPS == 0,
                                   "split epilogue panel must divide across column warp groups");
@@ -23,8 +24,11 @@
                         #pragma unroll
                         for (int n = panel_col_base; n < panel_col_base + SPLIT_COLS_PER_WARP; n += LDW) {
                             float t[LDW];
-                            if constexpr (LDW == 8) tcgen05_ld_32x32b_x8 (trow + (uint32_t)n, t);
-                            else                    tcgen05_ld_32x32b_x16(trow + (uint32_t)n, t);
+#if TCGEN05_LD_WIDTH == 8
+                            tcgen05_ld_32x32b_x8 (trow + (uint32_t)n, t);
+#else
+                            tcgen05_ld_32x32b_x16(trow + (uint32_t)n, t);
+#endif
                             tcgen05_wait_ld();
                             __nv_bfloat162 pk[LDW / 2];
                             #pragma unroll
@@ -57,12 +61,17 @@
                         }
                         asm volatile("bar.sync 1, %0;" :: "n"(NUM_WARPS * 32));
                     }
-                } else {
+                }
+#else
+                {
                     #pragma unroll
                     for (int n = col_base; n < col_base + COLS_PER_WARP; n += LDW) {
                         float t[LDW];
-                        if constexpr (LDW == 8) tcgen05_ld_32x32b_x8 (trow + (uint32_t)n, t);
-                        else                    tcgen05_ld_32x32b_x16(trow + (uint32_t)n, t);
+#if TCGEN05_LD_WIDTH == 8
+                        tcgen05_ld_32x32b_x8 (trow + (uint32_t)n, t);
+#else
+                        tcgen05_ld_32x32b_x16(trow + (uint32_t)n, t);
+#endif
                         tcgen05_wait_ld();
                         __nv_bfloat162 pk[LDW / 2];
                         #pragma unroll
@@ -88,3 +97,4 @@
                     }
                     asm volatile("bar.sync 1, %0;" :: "n"(NUM_WARPS * 32));
                 }
+#endif

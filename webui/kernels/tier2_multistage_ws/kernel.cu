@@ -208,7 +208,11 @@ extern "C" __global__ void matmul_coalesced_epilogue(
         // (at NS*SLOT).  Requires the persistent launch grid and NW>=8.
         __shared__ uint64_t tmem_full[2];
         __shared__ uint64_t tmem_empty[2];
-        constexpr int EPI_STAGE_COLS = EPILOGUE_SPLIT ? (BN / 2) : BN;
+#if EPILOGUE_SPLIT
+        constexpr int EPI_STAGE_COLS = BN / 2;
+#else
+        constexpr int EPI_STAGE_COLS = BN;
+#endif
         auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_STAGE_COLS + 8]>(smem + NS * SLOT_BYTES);
 
         if (warp_id == 0)

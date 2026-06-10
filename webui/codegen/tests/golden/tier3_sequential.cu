@@ -57,7 +57,7 @@ constexpr int SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES;      // 32 KB / slot
 // full discussion.
 constexpr int WARP_SIZE = 32;
 constexpr int THREADS   = NUM_WARPS * WARP_SIZE;  // epilogue worker threads
-constexpr int LAUNCH_THREADS = (EPILOGUE_OVERLAP ? (NUM_WARPS + 4) : NUM_WARPS) * WARP_SIZE;
+constexpr int LAUNCH_THREADS = NUM_WARPS * WARP_SIZE;
 
 
 // ── helpers ─────────────────────────────────────────────────────────

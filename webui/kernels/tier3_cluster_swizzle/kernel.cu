@@ -57,7 +57,11 @@ constexpr int SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES;      // 32 KB / slot
 // full discussion.
 constexpr int WARP_SIZE = 32;
 constexpr int THREADS   = NUM_WARPS * WARP_SIZE;  // epilogue worker threads
-constexpr int LAUNCH_THREADS = (EPILOGUE_OVERLAP ? (NUM_WARPS + 4) : NUM_WARPS) * WARP_SIZE;
+#if EPILOGUE_OVERLAP
+constexpr int LAUNCH_THREADS = (NUM_WARPS + 4) * WARP_SIZE;
+#else
+constexpr int LAUNCH_THREADS = NUM_WARPS * WARP_SIZE;
+#endif
 
 
 // ── helpers ─────────────────────────────────────────────────────────
@@ -282,7 +286,11 @@ __device__ __forceinline__ void matmul_cluster_impl(
         __shared__ uint64_t tmem_empty[2];
         // Split mode stages one half-BN column panel at a time, reducing
         // epilogue SMEM enough to make room for one extra K-loop stage.
-        constexpr int EPI_STAGE_COLS = EPILOGUE_SPLIT ? (BN / 2) : BN;
+#if EPILOGUE_SPLIT
+        constexpr int EPI_STAGE_COLS = BN / 2;
+#else
+        constexpr int EPI_STAGE_COLS = BN;
+#endif
         auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_STAGE_COLS + 8]>(smem + NS * SLOT_BYTES);
 
         if (warp_id == 0)
