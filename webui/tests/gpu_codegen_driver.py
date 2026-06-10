@@ -39,6 +39,7 @@ sys.path.insert(0, str(WEBUI / "kernels"))
 
 import mvp_core as mc
 import _runtime as rt
+from codegen import branch_free_issues
 
 import numpy as np
 import torch
@@ -166,6 +167,12 @@ def render_to_dir(tier, k):
                            tma_store=k["tma_store"], ld_width=k.get("ld_width", 8),
                            overlap=k.get("overlap", 0),
                            split_epilogue=k.get("split_epilogue", 0))
+    # Codegen must emit a fully branch-free kernel; a residual #if / knob
+    # if-constexpr means a forgotten conversion — fail clearly here rather than
+    # as an opaque nvcc error during compile.
+    issues = branch_free_issues(src)
+    if issues:
+        raise RuntimeError(f"non-branch-free kernel for {tag_for(tier, k)}: {issues[:3]}")
     p = d / "kernel.cu"
     p.write_text(src)
     return p

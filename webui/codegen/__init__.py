@@ -12,6 +12,7 @@ are resolved is internal (see directives.py)."""
 
 from __future__ import annotations
 
+from .audit import branch_free_issues
 from .directives import DirectiveError, resolve as resolve_directives
 from .fragments import FRAGMENTS, splice
 from .generate import generate_host, generate_kernel
@@ -19,6 +20,7 @@ from .substitute import substitute_kernel_constexprs, substitute_launcher_consta
 
 __all__ = [
     "generate_kernel", "generate_host",
+    "branch_free_issues",
     "resolve_directives", "DirectiveError",
     "splice", "FRAGMENTS",
     "substitute_kernel_constexprs", "substitute_launcher_constants",
