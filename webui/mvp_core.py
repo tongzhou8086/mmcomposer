@@ -24,6 +24,16 @@ import json
 import pathlib
 import re
 
+# Code generation (skeleton + knob config -> specialized kernel/host) lives in
+# the `codegen` package; mvp_core keeps the UI option lists, validation and
+# compat lookup, and delegates rendering.  substitute_* / FRAGMENTS are
+# re-exported here for back-compat with existing callers.
+from codegen import generate_kernel as _generate_kernel
+from codegen import generate_host as _generate_host
+from codegen.fragments import FRAGMENTS  # noqa: F401  (re-export)
+from codegen.substitute import (  # noqa: F401  (re-export)
+    substitute_kernel_constexprs, substitute_launcher_constants)
+
 
 # ── Paths ─────────────────────────────────────────────────────────────
 
@@ -337,41 +347,8 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool, tma_store=0,
 
 
 # ── Substitution ──────────────────────────────────────────────────────
-
-def substitute_kernel_constexprs(src: str, **values) -> str:
-    """Rewrite top-of-file ``constexpr int NAME = <int>;`` lines per kwarg.
-
-    Matches ``NAME`` only when immediately followed by optional whitespace
-    then ``=`` then digits, so neighbours like ``BN_PAD`` are never touched.
-    """
-    for name, val in values.items():
-        src = re.sub(
-            rf"(constexpr\s+int\s+{re.escape(name)}\s*=\s*)\d+",
-            lambda m, v=val: f"{m.group(1)}{v}",
-            src,
-        )
-    return src
-
-
-def substitute_launcher_constants(src: str, **values) -> str:
-    """Rewrite the Python knob constants in a tier launcher fragment."""
-    if all(k in values for k in ("BM", "BN", "BK")):
-        src = re.sub(
-            r"BM,\s*BN,\s*BK\s*=\s*\d+,\s*\d+,\s*\d+",
-            f"BM, BN, BK = {values['BM']}, {values['BN']}, {values['BK']}",
-            src,
-        )
-    for name in ("NS", "GROUP_SIZE_M", "NUM_WARPS", "TMA_STORE", "PERSISTENT",
-                 "TCGEN05_LD_WIDTH", "EPILOGUE_OVERLAP", "EPILOGUE_SPLIT"):
-        if name in values:
-            src = re.sub(
-                rf"^({name}\s*=\s*)\d+",
-                lambda m, v=values[name]: f"{m.group(1)}{v}",
-                src,
-                flags=re.MULTILINE,
-            )
-    return src
-
+# substitute_kernel_constexprs / substitute_launcher_constants now live in the
+# codegen package (imported + re-exported at the top of this module).
 
 def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0, ld_width=8,
                 overlap=0, split_epilogue=0) -> dict:
@@ -387,77 +364,26 @@ def knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0, ld_width=8,
             "EPILOGUE_SPLIT": split_epilogue}
 
 
-def _strip_module_docstring(src: str) -> str:
-    """Drop a leading triple-quoted module docstring, if present."""
-    m = re.match(r'\s*(?:"""|\'\'\')', src)
-    if not m:
-        return src
-    quote = src[m.end() - 3:m.end()]
-    end = src.find(quote, m.end())
-    if end == -1:
-        return src
-    return src[end + 3:].lstrip("\n")
-
-
-# Shared building-block fragments stitched into each kernel at a marker.
-# (The epilogue and the MMA-issue chain live in one place and are spliced
-# into every tier — the start of the composable-fragments architecture.)
-FRAGMENTS = {
-    "// @@EPILOGUE@@":  "_epilogue.cu.frag",
-    "// @@MMA_CHAIN@@": "_mma_chain.cu.frag",
-    "// @@TCGEN05_LD@@": "_tcgen05_ld.cu.frag",
-    "// @@OVERLAP_EPILOGUE@@": "_overlap_epilogue.cu.frag",
-}
-
-
-def _splice_fragments(src: str) -> str:
-    """Replace each building-block marker line with its fragment."""
-    out = []
-    for line in src.splitlines(keepends=True):
-        marker = line.strip()
-        if marker in FRAGMENTS:
-            frag = (KERNELS_DIR / FRAGMENTS[marker]).read_text()
-            out.append(frag if frag.endswith("\n") else frag + "\n")
-        else:
-            out.append(line)
-    return "".join(out)
+# (_strip_module_docstring moved to codegen.generate, used by generate_host.)
 
 
 def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, ld_width=8,
                   overlap=0, split_epilogue=0) -> str:
-    """Return the substituted, fragment-stitched kernel.cu for a tier."""
-    src = (KERNELS_DIR / tier["dir"] / "kernel.cu").read_text()
-    src = _splice_fragments(src)
-    return substitute_kernel_constexprs(
-        src, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store, ld_width=ld_width,
-                           overlap=overlap, split_epilogue=split_epilogue))
+    """Return the kernel.cu specialized to this knob combo (delegates to codegen)."""
+    config = knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store, ld_width=ld_width,
+                         overlap=overlap, split_epilogue=split_epilogue)
+    config["skeleton"] = tier["dir"]
+    return _generate_kernel(config)
 
 
 def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, tma_store=0, persistent=0,
                 overlap=0, split_epilogue=0) -> str:
-    """Return a *self-contained* host script: runtime preamble + launcher.
-
-    The result has no ``cuda_utils`` import and no ``sys.path`` hack — it
-    runs anywhere with torch + cuda-python + nvcc on PATH.
-    """
-    runtime  = _strip_module_docstring(RUNTIME_PY.read_text())
-    launcher = (KERNELS_DIR / tier["dir"] / "launcher.py").read_text()
-    launcher = substitute_launcher_constants(
-        launcher, **knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store, persistent,
-                                overlap=overlap, split_epilogue=split_epilogue))
-    header = (
-        '"""Self-contained matmul kernel launcher generated by mmcomposer.\n'
-        "\n"
-        f"Tier: {tier['label']}\n"
-        f"Config: BM={bm} BN={bn} BK={bk} NS={ns} GROUP_SIZE_M={gsm} NUM_WARPS={nw} "
-        f"TMA_STORE={tma_store} PERSISTENT={persistent} EPILOGUE_OVERLAP={overlap} "
-        f"EPILOGUE_SPLIT={split_epilogue}\n"
-        "\n"
-        "Run with:  python <this file>.py   (kernel.cu must sit alongside it)\n"
-        "Requires:  torch, numpy, cuda-python (cuda.bindings), and nvcc on PATH.\n"
-        '"""\n'
-    )
-    return f"{header}\n{runtime}\n\n# ===== tier launcher =====\n\n{launcher}"
+    """Return a self-contained host script for this knob combo (delegates to codegen)."""
+    config = knob_kwargs(bm, bn, bk, ns, gsm, nw, tma_store, persistent,
+                         overlap=overlap, split_epilogue=split_epilogue)
+    config["skeleton"] = tier["dir"]
+    config["label"] = tier["label"]
+    return _generate_host(config)
 
 
 def parse_shapes(text: str):
