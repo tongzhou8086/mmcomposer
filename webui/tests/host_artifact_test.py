@@ -39,21 +39,43 @@ CONFIGS = [
     (False, False, 128, 128, 64, 3, 16, 8),   # tier1: NW8, BN128, GSM16
     (True,  False, 128, 256, 64, 2, 1, 4),    # tier2 default (no swizzle)
     (True,  False, 128, 128, 64, 3, 8, 8),    # tier2: NW8, swizzle
+    (True,  False, 128, 256, 64, 3, 8, 4,
+     {"persistent": 1, "overlap": 1, "tma_pipelined": 1}),  # tier2: pipelined TMA store
     (True,  True,  128, 256, 64, 5, 8, 4),    # tier3 default
     (True,  True,  128, 256, 64, 3, 16, 16),  # tier3: NW16, GSM16
+    (True,  True,  128, 256, 64, 4, 8, 4,
+     {"persistent": 1, "overlap": 1, "tma_pipelined": 1}),  # tier3: pipelined TMA store
 ]
 
 
 def main():
     SCRATCH.mkdir(parents=True, exist_ok=True)
     failures = []
-    for (ms_ws, two_cta, bm, bn, bk, ns, gsm, nw) in CONFIGS:
+    for cfg in CONFIGS:
+        if len(cfg) == 8:
+            ms_ws, two_cta, bm, bn, bk, ns, gsm, nw = cfg
+            opts = {}
+        else:
+            ms_ws, two_cta, bm, bn, bk, ns, gsm, nw, opts = cfg
         tier = mc.tier_for(ms_ws, two_cta)
         tag = f"{tier['dir']}_bn{bn}_ns{ns}_gsm{gsm}_nw{nw}"
+        if opts.get("tma_pipelined"):
+            tag += "_tma"
         d = SCRATCH / tag
         d.mkdir(parents=True, exist_ok=True)
-        kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw)
-        host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw)
+        kernel_src = mc.render_kernel(
+            tier, bm, bn, bk, ns, gsm, nw,
+            overlap=opts.get("overlap", 0),
+            split_epilogue=opts.get("split_epilogue", 0),
+            l1_no_alloc=opts.get("l1_no_alloc", 0),
+            tma_pipelined=opts.get("tma_pipelined", 0))
+        host_src   = mc.render_host(
+            tier, bm, bn, bk, ns, gsm, nw,
+            persistent=opts.get("persistent", 0),
+            overlap=opts.get("overlap", 0),
+            split_epilogue=opts.get("split_epilogue", 0),
+            l1_no_alloc=opts.get("l1_no_alloc", 0),
+            tma_pipelined=opts.get("tma_pipelined", 0))
         (d / "kernel.cu").write_text(kernel_src)
         (d / "host.py").write_text(host_src)
 

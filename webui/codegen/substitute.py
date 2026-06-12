@@ -33,7 +33,8 @@ def substitute_launcher_constants(src: str, **values) -> str:
             src,
         )
     for name in ("NS", "GROUP_SIZE_M", "NUM_WARPS", "PERSISTENT",
-                 "TCGEN05_LD_WIDTH", "EPILOGUE_OVERLAP", "EPILOGUE_SPLIT", "TWO_CTA"):
+                 "TCGEN05_LD_WIDTH", "EPILOGUE_OVERLAP", "EPILOGUE_SPLIT",
+                 "EPILOGUE_L1_NO_ALLOC", "EPILOGUE_TMA_PIPELINED", "TWO_CTA"):
         if name in values:
             src = re.sub(
                 rf"^({name}\s*=\s*)\d+",

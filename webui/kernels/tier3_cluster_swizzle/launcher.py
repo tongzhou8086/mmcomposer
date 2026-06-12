@@ -25,19 +25,26 @@ PERSISTENT   = 0
 TCGEN05_LD_WIDTH = 8
 EPILOGUE_OVERLAP = 0
 EPILOGUE_SPLIT = 0
+EPILOGUE_L1_NO_ALLOC = 0
+EPILOGUE_TMA_PIPELINED = 0
 TWO_CTA      = 1            # 1 = 2-CTA cluster MMA; 0 = single-CTA (grid/SMEM degenerate)
 
 CTA_GROUP    = 2 if TWO_CTA else 1
 BN_LOCAL     = BN // CTA_GROUP
 ELEM_BYTES   = 2
+STORE_N      = 64
+TMA_STORE_STAGES = 2
 # Overlap uses two stream warps in warpgroup 0 plus NUM_WARPS epilogue
 # warps starting at warp 4, matching the Tier 2 overlap convention.
 THREADS      = (NUM_WARPS + 4) * 32 if EPILOGUE_OVERLAP else NUM_WARPS * 32
 A_SLOT_BYTES = BM       * BK * ELEM_BYTES
 B_SLOT_BYTES = BN_LOCAL * BK * ELEM_BYTES
 SLOT_BYTES   = A_SLOT_BYTES + B_SLOT_BYTES
-EPI_LD       = ((BN // 2 + 8) if (EPILOGUE_OVERLAP and EPILOGUE_SPLIT) else (BN + 8))
-EPI_BYTES    = BM * EPI_LD * ELEM_BYTES
+if EPILOGUE_OVERLAP and EPILOGUE_TMA_PIPELINED:
+    EPI_BYTES = BM * STORE_N * ELEM_BYTES * TMA_STORE_STAGES
+else:
+    EPI_LD    = ((BN // 2 + 8) if (EPILOGUE_OVERLAP and EPILOGUE_SPLIT) else (BN + 8))
+    EPI_BYTES = BM * EPI_LD * ELEM_BYTES
 SHARED_BYTES = ((NS * SLOT_BYTES + EPI_BYTES) if EPILOGUE_OVERLAP
                 else max(NS * SLOT_BYTES, EPI_BYTES)) + 1024
 HERE         = os.path.dirname(os.path.abspath(__file__))
@@ -71,12 +78,20 @@ def setup(M, N, K):
         dtype=TMA_BFLOAT16, rank=2, gptr=B.data_ptr(),
         global_dim=[N, K], global_strides=[N * ELEM_BYTES],
         box_dim=[64, BK], element_strides=[1, 1], swizzle=TMA_SWIZZLE_128B)
-    # Each cluster CTA stores its own BM×BN section; SWIZZLE_NONE matches
-    # the dense SMEM staging.
-    C_tmap = encode_tensor_map(
-        dtype=TMA_BFLOAT16, rank=2, gptr=C.data_ptr(),
-        global_dim=[N, M], global_strides=[N * ELEM_BYTES],
-        box_dim=[BN, BM], element_strides=[1, 1], swizzle=TMA_SWIZZLE_NONE)
+    if EPILOGUE_TMA_PIPELINED:
+        # Actively used by the chunked TMA-store epilogue.  STORE_N=64 columns
+        # map to one 128B swizzle atom per row.
+        C_tmap = encode_tensor_map(
+            dtype=TMA_BFLOAT16, rank=2, gptr=C.data_ptr(),
+            global_dim=[N, M], global_strides=[N * ELEM_BYTES],
+            box_dim=[STORE_N, BM], element_strides=[1, 1], swizzle=TMA_SWIZZLE_128B)
+    else:
+        # Not consumed by staged int4 stores; passed only because the kernel ABI
+        # is uniform across epilogue modes.
+        C_tmap = encode_tensor_map(
+            dtype=TMA_BFLOAT16, rank=2, gptr=C.data_ptr(),
+            global_dim=[N, M], global_strides=[N * ELEM_BYTES],
+            box_dim=[BN, BM], element_strides=[1, 1], swizzle=TMA_SWIZZLE_NONE)
 
     arg_a = (ctypes.c_byte * 128).from_buffer_copy(A_tmap.tobytes())
     arg_b = (ctypes.c_byte * 128).from_buffer_copy(B_tmap.tobytes())
@@ -114,6 +129,7 @@ for (M, N, K) in [(2048, 2048, 2048), (4096, 4096, 4096), (8192, 8192, 8192)]:
     print(f"     BM={BM} BN={BN} BK={BK} NS={NS} GSM={GROUP_SIZE_M} NW={NUM_WARPS} "
           f"PERSISTENT={PERSISTENT} "
           f"EPILOGUE_OVERLAP={EPILOGUE_OVERLAP} EPILOGUE_SPLIT={EPILOGUE_SPLIT}   "
+          f"EPILOGUE_TMA_PIPELINED={EPILOGUE_TMA_PIPELINED}   "
           f"{us:7.1f} us/call   "
           f"{tf:6.1f} TFLOPS")
     print()

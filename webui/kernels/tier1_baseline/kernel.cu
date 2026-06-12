@@ -140,23 +140,6 @@ __device__ __forceinline__ void mbarrier_wait_phase(uint32_t mb, uint32_t phase)
 // template) — this is what lets the webui's regex substitution treat
 // every knob uniformly.  GROUP_SIZE_M=1 collapses to the natural
 // N-fast walk; >1 swaps to a chunked M-fast walk for L2 reuse on B.
-// ── TMA store helpers (epilogue Phase 2 when TMA_STORE=1) ───────────
-__device__ __forceinline__ void tma_2d_store(
-    const void* tmap, uint32_t smem_src, int x, int y
-) {
-    asm volatile(
-        "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group "
-        "[%0, {%1, %2}], [%3];"
-        :: "l"(tmap), "r"(x), "r"(y), "r"(smem_src) : "memory");
-}
-__device__ __forceinline__ void tma_commit_group() {
-    asm volatile("cp.async.bulk.commit_group;" ::: "memory");
-}
-template <int N>
-__device__ __forceinline__ void tma_wait_group() {
-    asm volatile("cp.async.bulk.wait_group.read %0;" :: "n"(N) : "memory");
-}
-
 // MMA-issue building block (shared fragment).  MMA_ISSUE picks the
 // single-CTA g1 instruction; the cluster tier supplies the g2 variant.
 #define MMA_ISSUE(t, a, b, i, e) tcgen05_mma((t), (a), (b), (i), (e))

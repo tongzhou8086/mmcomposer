@@ -20,6 +20,8 @@ def main():
     ap.add_argument("--persistent", type=int, default=0)
     ap.add_argument("--overlap", type=int, default=0)
     ap.add_argument("--split_epilogue", type=int, default=0)
+    ap.add_argument("--l1_no_alloc", type=int, default=0)
+    ap.add_argument("--tma_pipelined", type=int, default=0)
     for k in ("bm", "bn", "bk", "ns", "nw"):
         ap.add_argument(f"--{k}", type=int, required=True)
     ap.add_argument("-M", type=int, required=True)
@@ -44,7 +46,9 @@ def main():
         cta_group = 2 if a.cluster else 1
         bn_local = a.bn // cta_group
         slot = a.bm * a.bk * 2 + bn_local * a.bk * 2
-        if a.overlap and a.cluster and a.split_epilogue:
+        if a.overlap and a.tma_pipelined:
+            epi = a.bm * 64 * 2 * 2
+        elif a.overlap and a.cluster and a.split_epilogue:
             epi = a.bm * (a.bn // 2 + 8) * 2
         else:
             epi = a.bm * (a.bn + 8) * 2
@@ -70,9 +74,14 @@ def main():
         B_t = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=B.data_ptr(),
             global_dim=[N, K], global_strides=[N * 2], box_dim=[64, a.bk],
             element_strides=[1, 1], swizzle=rt.TMA_SWIZZLE_128B)
-        C_t = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=C.data_ptr(),
-            global_dim=[N, M], global_strides=[N * 2], box_dim=[a.bn, a.bm],
-            element_strides=[1, 1], swizzle=rt.TMA_SWIZZLE_NONE)
+        if a.tma_pipelined:
+            C_t = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=C.data_ptr(),
+                global_dim=[N, M], global_strides=[N * 2], box_dim=[64, a.bm],
+                element_strides=[1, 1], swizzle=rt.TMA_SWIZZLE_128B)
+        else:
+            C_t = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=C.data_ptr(),
+                global_dim=[N, M], global_strides=[N * 2], box_dim=[a.bn, a.bm],
+                element_strides=[1, 1], swizzle=rt.TMA_SWIZZLE_NONE)
         args = [(ctypes.c_byte * 128).from_buffer_copy(x.tobytes()) for x in (A_t, B_t, C_t)] + \
                [ctypes.c_void_p(C.data_ptr()), ctypes.c_int(M), ctypes.c_int(N), ctypes.c_int(K)]
 

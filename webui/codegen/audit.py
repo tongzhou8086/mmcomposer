@@ -14,7 +14,8 @@ import re
 # `if constexpr`).  LDW is the derived alias of TCGEN05_LD_WIDTH used in the
 # epilogue branches.
 _BRANCH_KNOBS = ("EPILOGUE_OVERLAP", "EPILOGUE_SPLIT",
-                 "TCGEN05_LD_WIDTH", "LDW", "TWO_CTA", "EPILOGUE_L1_NO_ALLOC")
+                 "TCGEN05_LD_WIDTH", "LDW", "TWO_CTA", "EPILOGUE_L1_NO_ALLOC",
+                 "EPILOGUE_TMA_PIPELINED")
 _DIRECTIVE = re.compile(r"^\s*#\s*(if|elif|else|endif)\b")
 
 

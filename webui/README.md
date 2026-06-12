@@ -69,7 +69,7 @@ webui/
     tier3_cluster_swizzle/ { kernel.cu, launcher.py }   # unified warp-spec skeleton;
                                                         # TWO_CTA knob = single-CTA / 2-CTA cluster
   tests/
-    gpu_codegen_driver.py # B200 sweep: render→compile→run→bench every combo; emits compat_matrix
+    gpu_codegen_driver.py # B200 integration test: render→compile→run every valid combo
     host_artifact_test.py # runs the actual downloaded host.py end-to-end per tier
 ```
 
@@ -83,17 +83,27 @@ streamlit run webui/app.py
 The app opens at `http://localhost:8501` and hot-reloads on save.  Tip: inside
 the app, **Ctrl/Cmd + Enter** (re)generates without the mouse.
 
-## Regenerating the compatibility matrix (needs a B200)
+## Correctness integration test (needs a B200)
 
 ```bash
 srun --partition=dedicated --gres=gpu:nvidia_b200:1 \
-    python webui/tests/gpu_codegen_driver.py --perf-shapes 4096,8192
+    python webui/tests/gpu_codegen_driver.py --mode correctness --perf-shapes 2048
 ```
 
 This renders every static-valid combo, compiles in parallel, launches each in
 a fault-isolated worker (a faulting kernel can't poison the rest), checks
-correctness against torch, benchmarks with `do_bench`, and rewrites
-`kernels/compat_matrix.json`.
+correctness against torch, and does not time kernels.
+
+## Timing autotune (needs a B200)
+
+```bash
+python webui/autotune.py 32768x4608x768 --top 20
+```
+
+This uses the same render/compile/run backend in perf mode, but applies the
+production timing policy by default (`BN=256`, `NS>=3`) instead of timing every
+valid combination.  Use `--scope full` only for the expensive timed all-combo
+search.
 
 ## Deploy (Streamlit Community Cloud)
 

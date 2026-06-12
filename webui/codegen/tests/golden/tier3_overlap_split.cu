@@ -12,6 +12,7 @@ constexpr int NUM_WARPS    = 8;       // total warps per CTA
 constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (32-bit elems per lane)
 constexpr int EPILOGUE_OVERLAP = 1;  // 1 = persistent 2-CTA cluster + epilogue/K-loop overlap
 constexpr int EPILOGUE_SPLIT   = 1;  // 1 = split overlapped int4 writeback into two half-BN passes
+constexpr int EPILOGUE_TMA_PIPELINED = 0;  // 1 = chunked double-buffered TMA-store overlap epilogue
 constexpr int TWO_CTA          = 1;  // 1 = 2-CTA cluster MMA (cta_group::2); 0 = single-CTA
 
 // ── Derived constants (do not edit) ─────────────────────────────────
@@ -22,6 +23,8 @@ constexpr int K_MMAS    = BK / MMA_K;        // 4
 constexpr int CTA_GROUP        = TWO_CTA ? 2 : 1;    // 2-CTA cluster vs single-CTA
 constexpr int BN_LOCAL         = BN / CTA_GROUP;     // per-CTA N width of B (=BN single-CTA)
 constexpr int SWIZZLE_ROW_BYTES = 128;               // one 128B-swizzle atom row
+constexpr int STORE_N          = 64;                 // TMA-store chunk width
+constexpr int TMA_STORE_STAGES = 2;                  // double-buffered store SMEM
 
 // Per-stage SMEM per CTA: A = BM*BK*2 = 16 KB; B = BN_LOCAL*BK*2 = 16 KB.
 // Total 32 KB / stage / CTA — half of ch07's 48 KB / stage / CTA.
@@ -156,6 +159,9 @@ __device__ __forceinline__ void tcgen05_commit_mcast_g2(uint32_t smem_bar, int16
 __device__ __forceinline__ void tcgen05_fence_after_thread_sync() {
     asm volatile("tcgen05.fence::after_thread_sync;");
 }
+__device__ __forceinline__ void tcgen05_fence_before_thread_sync() {
+    asm volatile("tcgen05.fence::before_thread_sync;" ::: "memory");
+}
 __device__ __forceinline__ void tcgen05_wait_ld() {
     asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
 }
@@ -214,7 +220,7 @@ __device__ __forceinline__ void mbarrier_wait_phase(uint32_t mb, uint32_t phase)
 
 
 // ── Kernel (NS, GROUP_SIZE_M are file-level constexpr knobs) ────────
-// ── TMA store helpers (epilogue Phase 2 when TMA_STORE=1) ───────────
+// ── TMA store helpers (pipelined TMA-store epilogue) ────────────────
 __device__ __forceinline__ void tma_2d_store(
     const void* tmap, uint32_t smem_src, int x, int y
 ) {
@@ -228,7 +234,7 @@ __device__ __forceinline__ void tma_commit_group() {
 }
 template <int N>
 __device__ __forceinline__ void tma_wait_group() {
-    asm volatile("cp.async.bulk.wait_group.read %0;" :: "n"(N) : "memory");
+    asm volatile("cp.async.bulk.wait_group %0;" :: "n"(N) : "memory");
 }
 
 // MMA-issue building block (shared fragment).  The cluster tier uses the
@@ -443,6 +449,9 @@ __device__ __forceinline__ void matmul_cluster_impl(
                 //   EPI_OUT_ROW                  this CTA's GMEM row base
                 //   EPI_OUT_COL_BASE             this CTA's GMEM column base
                 //   EPI_TMEM_EMPTY_ARRIVE(buf)   release the drained TMEM buffer
+                // EPILOGUE_TMA_PIPELINED picks the Paul-v6-style path:
+                // chunk BN into STORE_N=64 columns, stage each chunk into one
+                // of two compact swizzled SMEM buffers, and launch TMA stores.
                 // EPILOGUE_SPLIT (constexpr) picks the two-pass half-BN writeback,
                 // which stages one BN/2 column panel at a time (EPI_STAGE_COLS=BN/2)
                 // so the epilogue SMEM shrinks enough for an extra K-loop stage.

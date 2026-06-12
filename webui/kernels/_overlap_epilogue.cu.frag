@@ -6,6 +6,9 @@
                 //   EPI_OUT_ROW                  this CTA's GMEM row base
                 //   EPI_OUT_COL_BASE             this CTA's GMEM column base
                 //   EPI_TMEM_EMPTY_ARRIVE(buf)   release the drained TMEM buffer
+                // EPILOGUE_TMA_PIPELINED picks the Paul-v6-style path:
+                // chunk BN into STORE_N=64 columns, stage each chunk into one
+                // of two compact swizzled SMEM buffers, and launch TMA stores.
                 // EPILOGUE_SPLIT (constexpr) picks the two-pass half-BN writeback,
                 // which stages one BN/2 column panel at a time (EPI_STAGE_COLS=BN/2)
                 // so the epilogue SMEM shrinks enough for an extra K-loop stage.
@@ -14,6 +17,66 @@
                 // allocation (`st...L1::no_allocate`) so it doesn't evict A/B from
                 // L1.  Measured win when the epilogue is exposed (low K), null at
                 // high K — so it's a sweep knob, not always-on.
+#if EPILOGUE_TMA_PIPELINED
+                {
+                    constexpr int LOADS_PER_CHUNK = STORE_N / 8;
+                    constexpr int LOADS_PER_WARP = LOADS_PER_CHUNK / COL_GROUPS;
+                    constexpr int NUM_CHUNKS = BN / STORE_N;
+                    static_assert(STORE_N == 64, "pipelined TMA store assumes STORE_N=64");
+                    static_assert(NUM_CHUNKS * STORE_N == BN, "BN must divide into STORE_N chunks");
+                    static_assert(LOADS_PER_WARP * COL_GROUPS == LOADS_PER_CHUNK,
+                                  "STORE_N/8 chunks must divide across column warp groups");
+                    int store_stage = 0;
+
+                    #pragma unroll
+                    for (int chunk = 0; chunk < NUM_CHUNKS; chunk++) {
+                        if (ew == 0)
+                            tma_wait_group<TMA_STORE_STAGES - 1>();
+
+                        float t[LOADS_PER_WARP][8];
+                        #pragma unroll
+                        for (int n = 0; n < LOADS_PER_WARP; n++) {
+                            const int local_n = col_warp * LOADS_PER_WARP + n;
+                            tcgen05_ld_32x32b_x8(trow + (uint32_t)(chunk * STORE_N + local_n * 8), t[n]);
+                        }
+                        tcgen05_wait_ld();
+
+                        if (chunk == NUM_CHUNKS - 1) {
+                            tcgen05_fence_before_thread_sync();
+                            if (ew == 0 && elect_sync())
+                                EPI_TMEM_EMPTY_ARRIVE(buf);
+                        }
+
+                        asm volatile("bar.sync 1, %0;" :: "n"(EPI_THREADS));
+
+                        #pragma unroll
+                        for (int n = 0; n < LOADS_PER_WARP; n++) {
+                            __nv_bfloat162 pk[4];
+                            #pragma unroll
+                            for (int i = 0; i < 4; i++)
+                                pk[i] = __floats2bfloat162_rn(t[n][2 * i], t[n][2 * i + 1]);
+                            const int local_n = col_warp * LOADS_PER_WARP + n;
+                            const int swizzled_n = local_n ^ (my_row & 7);
+                            __nv_bfloat16* write_ptr =
+                                C_store + store_stage * BM * STORE_N + my_row * STORE_N + swizzled_n * 8;
+                            *reinterpret_cast<int4*>(write_ptr) = *reinterpret_cast<int4*>(pk);
+                        }
+
+                        __syncwarp();
+                        asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+                        asm volatile("bar.sync 1, %0;" :: "n"(EPI_THREADS));
+
+                        if (ew == 0 && elect_sync()) {
+                            const uint32_t src = STORE_SMEM_BASE + store_stage * STORE_BUF_BYTES;
+                            tma_2d_store(C_tmap_ptr, src,
+                                         EPI_OUT_COL_BASE + chunk * STORE_N, EPI_OUT_ROW);
+                            tma_commit_group();
+                        }
+
+                        store_stage ^= 1;
+                    }
+                }
+#else
 #if EPILOGUE_L1_NO_ALLOC
 #define EPI_ST_I4(DST, VAL) do { int4 _v = (VAL); \
         asm volatile("st.relaxed.cta.global.L1::no_allocate.v4.b32 [%0], {%1,%2,%3,%4};" \
@@ -111,3 +174,4 @@
                 }
 #endif
 #undef EPI_ST_I4
+#endif

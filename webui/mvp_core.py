@@ -99,6 +99,12 @@ EPILOGUE_SPLIT_OPTS = [0, 1]
 # epilogue is exposed (low K) and null at high K — hence a sweep knob, not
 # always-on.
 EPILOGUE_L1_NO_ALLOC_OPTS = [0, 1]
+# Alternative overlapped epilogue mode: TMEM -> registers -> compact swizzled
+# SMEM buffers -> chunked, double-buffered TMA stores.  Unlike the dropped
+# simple TMA-store path, this is pipelined and can overlap store traffic with
+# subsequent epilogue chunks / tiles.  It is mutually exclusive with the staged
+# int4 modifiers (split writeback and L1 no-allocate).
+EPILOGUE_TMA_PIPELINED_OPTS = [0, 1]
 # On/off knobs are presented as dropdowns too, for a uniform UI (and to
 # leave room for an "Auto" value once auto-tuning lands).
 ONOFF_OPTS = ["Off", "On"]
@@ -161,7 +167,8 @@ def tier_for(ms_ws: bool, two_cta: bool):
 
 def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
                     persistent=0, persistent_ok=True, shape=None, ld_width=8,
-                    overlap=0, split_epilogue=0, l1_no_alloc=0) -> list[str]:
+                    overlap=0, split_epilogue=0, l1_no_alloc=0,
+                    tma_pipelined=0) -> list[str]:
     """Return a list of human-readable warnings; empty list = valid.
 
     ``cluster`` selects the 2-CTA geometry: each CTA owns BN/2 columns of
@@ -210,6 +217,20 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
         if not persistent:
             out.append("**Epilogue overlap** requires **Persistent grid** on "
                        "(it's a persistent pipeline launched with grid = #SMs).")
+
+    if tma_pipelined:
+        if not persistent_ok:
+            out.append("**Pipelined TMA-store epilogue** is only available on warp-specialized paths.")
+        if not persistent:
+            out.append("**Pipelined TMA-store epilogue** requires **Persistent grid**.")
+        if not overlap:
+            out.append("**Pipelined TMA-store epilogue** requires **Epilogue overlap**.")
+        if split_epilogue:
+            out.append("**Pipelined TMA-store epilogue** replaces **Split epilogue writeback**; "
+                       "turn split off.")
+        if l1_no_alloc:
+            out.append("**Pipelined TMA-store epilogue** uses TMA stores, so "
+                       "**L1 no-allocate C store** does not apply.")
 
     if split_epilogue:
         if not cluster:
@@ -265,6 +286,11 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
             )
         else:
             col_groups = nw // row_strips
+            if tma_pipelined and (8 % col_groups != 0):
+                out.append(
+                    f"**Pipelined TMA-store epilogue** needs STORE_N/8 = 8 chunk loads "
+                    f"to divide across {col_groups} column warp groups."
+                )
             if bn % col_groups != 0 or (bn // col_groups) % 8 != 0:
                 out.append(
                     f"**BN = {bn}** doesn't divide into {col_groups} column groups of a "
@@ -318,7 +344,9 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
     slot     = a_slot + b_slot
     # Tier 3 split writeback stages one half-BN column panel at a time, reducing
     # epilogue SMEM enough to try deeper rings such as NS=5 at BN=256.
-    if overlap and cluster and split_epilogue:
+    if overlap and tma_pipelined:
+        epi = bm * 64 * 2 * 2   # STORE_N=64, TMA_STORE_STAGES=2
+    elif overlap and cluster and split_epilogue:
         epi = bm * (bn // 2 + 8) * 2
     else:
         epi = bm * (bn + 8) * 2   # int4 staging buffer, +8 bank-pad
@@ -341,7 +369,8 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
 # codegen package (imported + re-exported at the top of this module).
 
 def knob_kwargs(bm, bn, bk, ns, gsm, nw, persistent=0, ld_width=8,
-                overlap=0, split_epilogue=0, l1_no_alloc=0) -> dict:
+                overlap=0, split_epilogue=0, l1_no_alloc=0,
+                tma_pipelined=0) -> dict:
     """Map UI knobs to the constant names used in the source files.
 
     PERSISTENT only appears in the launcher (it's a grid choice, not a
@@ -351,29 +380,34 @@ def knob_kwargs(bm, bn, bk, ns, gsm, nw, persistent=0, ld_width=8,
     return {"BM": bm, "BN": bn, "BK": bk, "NS": ns, "GROUP_SIZE_M": gsm,
             "NUM_WARPS": nw, "PERSISTENT": persistent,
             "TCGEN05_LD_WIDTH": ld_width, "EPILOGUE_OVERLAP": overlap,
-            "EPILOGUE_SPLIT": split_epilogue, "EPILOGUE_L1_NO_ALLOC": l1_no_alloc}
+            "EPILOGUE_SPLIT": split_epilogue, "EPILOGUE_L1_NO_ALLOC": l1_no_alloc,
+            "EPILOGUE_TMA_PIPELINED": tma_pipelined}
 
 
 # (_strip_module_docstring moved to codegen.generate, used by generate_host.)
 
 
 def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, ld_width=8,
-                  overlap=0, split_epilogue=0, l1_no_alloc=0) -> str:
+                  overlap=0, split_epilogue=0, l1_no_alloc=0,
+                  tma_pipelined=0) -> str:
     """Return the kernel.cu specialized to this knob combo (delegates to codegen)."""
     config = knob_kwargs(bm, bn, bk, ns, gsm, nw, ld_width=ld_width,
                          overlap=overlap, split_epilogue=split_epilogue,
-                         l1_no_alloc=l1_no_alloc)
+                         l1_no_alloc=l1_no_alloc,
+                         tma_pipelined=tma_pipelined)
     config["skeleton"] = tier["dir"]
     config["TWO_CTA"] = int(tier["cluster"])   # cluster tier -> the cta_group::2 #if arms
     return _generate_kernel(config)
 
 
-def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, persistent=0,
-                overlap=0, split_epilogue=0, l1_no_alloc=0) -> str:
+def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, persistent=0, ld_width=8,
+                overlap=0, split_epilogue=0, l1_no_alloc=0,
+                tma_pipelined=0) -> str:
     """Return a self-contained host script for this knob combo (delegates to codegen)."""
     config = knob_kwargs(bm, bn, bk, ns, gsm, nw, persistent=persistent,
-                         overlap=overlap, split_epilogue=split_epilogue,
-                         l1_no_alloc=l1_no_alloc)
+                         ld_width=ld_width, overlap=overlap, split_epilogue=split_epilogue,
+                         l1_no_alloc=l1_no_alloc,
+                         tma_pipelined=tma_pipelined)
     config["skeleton"] = tier["dir"]
     config["label"] = tier["label"]
     config["TWO_CTA"] = int(tier["cluster"])
@@ -412,7 +446,7 @@ def load_compat() -> dict:
 @functools.lru_cache(maxsize=1)
 def _compat_index() -> dict:
     """(tier_dir, two_cta, bm, bn, bk, ns, gsm, nw, persistent,
-    ld_width, overlap, split_epilogue) -> entry.
+    ld_width, overlap, split_epilogue, l1_no_alloc, tma_pipelined) -> entry.
 
     two_cta is part of the key because the warp-spec single-CTA and 2-CTA
     cluster tiers share one ``tier`` dir, distinguished only by that knob."""
@@ -421,18 +455,20 @@ def _compat_index() -> dict:
         idx[(e["tier"], e.get("two_cta", 0), e["bm"], e["bn"], e["bk"], e["ns"],
              e["gsm"], e["nw"], e.get("persistent", 0),
              e.get("ld_width", 8), e.get("overlap", 0), e.get("split_epilogue", 0),
-             e.get("l1_no_alloc", 0))] = e
+             e.get("l1_no_alloc", 0), e.get("tma_pipelined", 0))] = e
     return idx
 
 
 def compat_status(tier_dir, bm, bn, bk, ns, gsm, nw, persistent=0,
-                  ld_width=8, overlap=0, split_epilogue=0, two_cta=0, l1_no_alloc=0):
+                  ld_width=8, overlap=0, split_epilogue=0, two_cta=0,
+                  l1_no_alloc=0, tma_pipelined=0):
     """Return ('verified'|'failed'|'unknown', entry|None) for a combo.
 
     'verified'/'failed' come from the empirical B200 sweep; 'unknown'
     means the combo wasn't in the swept grid (fall back to static)."""
     e = _compat_index().get((tier_dir, two_cta, bm, bn, bk, ns, gsm, nw,
-                             persistent, ld_width, overlap, split_epilogue, l1_no_alloc))
+                             persistent, ld_width, overlap, split_epilogue,
+                             l1_no_alloc, tma_pipelined))
     if e is None:
         return "unknown", None
     return ("verified" if e["correct"] else "failed"), e
@@ -446,11 +482,12 @@ def shape_key(M, N, K):
 
 def compat_perf(tier_dir, bm, bn, bk, ns, gsm, nw, M, N, K,
                 persistent=0, ld_width=8, overlap=0, split_epilogue=0, two_cta=0,
-                l1_no_alloc=0):
+                l1_no_alloc=0, tma_pipelined=0):
     """Return the measured {rel_err, tflops, vs_cublas} for this combo at
     shape (M, N, K), or None if not in the matrix."""
     e = _compat_index().get((tier_dir, two_cta, bm, bn, bk, ns, gsm, nw,
-                             persistent, ld_width, overlap, split_epilogue, l1_no_alloc))
+                             persistent, ld_width, overlap, split_epilogue,
+                             l1_no_alloc, tma_pipelined))
     if e is None:
         return None
     return (e.get("perf") or {}).get(shape_key(M, N, K))
@@ -506,6 +543,7 @@ def recommended_config(shape=None):
     knobs["overlap"] = best.get("overlap", 0)
     knobs["split_epilogue"] = best.get("split_epilogue", 0)
     knobs["l1_no_alloc"] = best.get("l1_no_alloc", 0)
+    knobs["tma_pipelined"] = best.get("tma_pipelined", 0)
     return {**knobs, "ms_ws": ms_ws, "two_cta": two_cta,
             "tflops": best_tf, "shape": ref}
 

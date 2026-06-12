@@ -26,10 +26,21 @@ WORKER = HERE / "_live_bench_worker.py"
 DRIVER = HERE / "tests" / "gpu_codegen_driver.py"
 
 DEFAULT_SRUN_ARGS = "--partition=dedicated --gres=gpu:nvidia_b200:1 --time=00:10:00"
-# Autotune sweeps many combos with a 500/500 steady-state do_bench window
+# Autotune sweeps many combos with the driver do_bench window
 # (~1s/combo), so a big grid (>1k combos) needs a multi-hour allocation.  The
 # job releases when the sweep finishes — this is just the ceiling.
 DEFAULT_AUTOTUNE_SRUN_ARGS = "--partition=dedicated --gres=gpu:nvidia_b200:1 --time=02:00:00"
+FILTER_CLI = (
+    ("bn", "--bn"),
+    ("ns", "--ns"),
+    ("gsm", "--gsm"),
+    ("nw", "--nw"),
+    ("persistent", "--persistent"),
+    ("overlap", "--overlap"),
+    ("split_epilogue", "--split-epilogue"),
+    ("l1_no_alloc", "--l1-no-alloc"),
+    ("tma_pipelined", "--tma-pipelined"),
+)
 
 
 def live_available() -> bool:
@@ -48,7 +59,7 @@ def _sig(tier, knobs, M, N, K) -> str:
 def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900) -> dict:
     """Render → srun(compile+run+cuBLAS) → parsed result dict.
 
-    knobs: {bm,bn,bk,ns,gsm,nw,persistent,ld_width,overlap,split_epilogue,l1_no_alloc}.
+    knobs: {bm,bn,bk,ns,gsm,nw,persistent,ld_width,overlap,split_epilogue,l1_no_alloc,tma_pipelined}.
     Returns a dict with
     ok/tflops/cublas_tflops/vs_cublas/rel_err/us (+ error/stderr on failure).
     """
@@ -64,7 +75,8 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
         tier, knobs["bm"], knobs["bn"], knobs["bk"], knobs["ns"], knobs["gsm"],
         knobs["nw"], ld_width=knobs.get("ld_width", 8), overlap=knobs.get("overlap", 0),
         split_epilogue=knobs.get("split_epilogue", 0),
-        l1_no_alloc=knobs.get("l1_no_alloc", 0)))
+        l1_no_alloc=knobs.get("l1_no_alloc", 0),
+        tma_pipelined=knobs.get("tma_pipelined", 0)))
 
     py = os.environ.get("MMCOMPOSER_PY", sys.executable)
     srun_args = shlex.split(os.environ.get("MMCOMPOSER_SRUN_ARGS", DEFAULT_SRUN_ARGS))
@@ -75,6 +87,8 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
            "--ns", str(knobs["ns"]), "--nw", str(knobs["nw"]),
            "--overlap", str(knobs.get("overlap", 0)),
            "--split_epilogue", str(knobs.get("split_epilogue", 0)),
+           "--l1_no_alloc", str(knobs.get("l1_no_alloc", 0)),
+           "--tma_pipelined", str(knobs.get("tma_pipelined", 0)),
            "-M", str(M), "-N", str(N), "-K", str(K)]
 
     try:
@@ -95,19 +109,40 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
             "stderr": (proc.stderr or proc.stdout)[-800:]}
 
 
-def _autotune_cmd(tier_dirs, M, N, K, out_matrix, bn_opts):
+def _normal_filters(filters=None, bn_opts=None):
+    out = {k: list(v) for k, v in (filters or {}).items() if v is not None}
+    if bn_opts is not None and "bn" not in out:
+        out["bn"] = list(bn_opts)
+    return out
+
+
+def _filter_args(filters):
+    args = []
+    for key, flag in FILTER_CLI:
+        vals = (filters or {}).get(key)
+        if vals is not None:
+            args += [flag, ",".join(str(v) for v in vals)]
+    return args
+
+
+def _filter_sig(filters):
+    filters = {k: list(v) for k, v in (filters or {}).items() if v is not None}
+    return json.dumps(filters, sort_keys=True, separators=(",", ":"))
+
+
+def _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters=None, *, mode="perf"):
     py = os.environ.get("MMCOMPOSER_PY", sys.executable)
     srun_args = shlex.split(os.environ.get("MMCOMPOSER_AUTOTUNE_SRUN_ARGS", DEFAULT_AUTOTUNE_SRUN_ARGS))
     cmd = ["srun", *srun_args, py, str(DRIVER), "--perf-shapes", f"{M}x{N}x{K}",
-           "--tiers", ",".join(tier_dirs), "--invalid-sample", "0", "--compat-out", str(out_matrix)]
-    if bn_opts:
-        cmd += ["--bn", ",".join(str(b) for b in bn_opts)]
+           "--tiers", ",".join(tier_dirs), "--invalid-sample", "0",
+           "--mode", mode, "--compat-out", str(out_matrix)]
+    cmd += _filter_args(filters)
     return cmd
 
 
-def _out_matrix(tier_dirs, M, N, K, bn_opts):
-    bn_csv = ",".join(str(b) for b in bn_opts) if bn_opts else ""
-    tag = hashlib.sha1((",".join(tier_dirs) + f"|{M}x{N}x{K}|bn{bn_csv}").encode()).hexdigest()[:16]
+def _out_matrix(tier_dirs, M, N, K, filters=None):
+    tag_src = ",".join(tier_dirs) + f"|{M}x{N}x{K}|{_filter_sig(filters)}"
+    tag = hashlib.sha1(tag_src.encode()).hexdigest()[:16]
     return SCRATCH / f"autotune_{tag}.json"
 
 
@@ -134,6 +169,7 @@ def _rank_matrix(out_matrix, M, N, K) -> dict:
                             "ld_width": e.get("ld_width", 8), "overlap": e.get("overlap", 0),
                             "split_epilogue": e.get("split_epilogue", 0),
                             "l1_no_alloc": e.get("l1_no_alloc", 0),
+                            "tma_pipelined": e.get("tma_pipelined", 0),
                             "tflops": p["tflops"], "vs_cublas": p.get("vs_cublas"),
                             "rel_err": p.get("rel_err")})
     results.sort(key=lambda r: r["tflops"], reverse=True)
@@ -142,15 +178,27 @@ def _rank_matrix(out_matrix, M, N, K) -> dict:
             "error": None if results else "no correct combos measured for this shape"}
 
 
-def run_autotune(tier_dirs, M: int, N: int, K: int, bn_opts=None, timeout: int = 3000) -> dict:
-    """Blocking sweep (for CLI/tests): srun the driver over every valid combo,
-    then return ranked results.  Writes a TEMP matrix (committed one untouched)."""
+def run_autotune(tier_dirs, M: int, N: int, K: int, filters=None, timeout: int = 3000,
+                 bn_opts=None) -> dict:
+    """Blocking timing sweep: srun the driver in perf mode, then rank results.
+
+    Writes a TEMP matrix (committed one untouched).  ``bn_opts`` is accepted
+    only for older callers; new code should pass the general ``filters`` dict.
+    """
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    out_matrix = _out_matrix(tier_dirs, M, N, K, bn_opts)
-    if out_matrix.exists():
-        out_matrix.unlink()
+    filters = _normal_filters(filters, bn_opts)
+    out_matrix = _out_matrix(tier_dirs, M, N, K, filters)
+    jsonl = pathlib.Path(str(out_matrix)[:-5] + ".jsonl")
+    n_valid = pathlib.Path(str(jsonl) + ".nvalid")
+    cublas = pathlib.Path(str(jsonl) + ".cublas")
+    for f in (out_matrix, jsonl, n_valid, cublas):
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            pass
     try:
-        proc = subprocess.run(_autotune_cmd(tier_dirs, M, N, K, out_matrix, bn_opts),
+        cmd = _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters, mode="perf") + ["--jsonl", str(jsonl)]
+        proc = subprocess.run(cmd,
                               capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"autotune sweep timed out after {timeout}s"}
@@ -160,12 +208,13 @@ def run_autotune(tier_dirs, M: int, N: int, K: int, bn_opts=None, timeout: int =
     return res
 
 
-def autotune_start(tier_dirs, M, N, K, bn_opts=None) -> dict:
+def autotune_start(tier_dirs, M, N, K, filters=None, bn_opts=None) -> dict:
     """Launch the sweep in the BACKGROUND (non-blocking) for a UI progress bar.
     Uses a per-run jsonl (+ .nvalid sibling) so concurrent sweeps don't clobber
     each other's progress.  Returns a job dict for autotune_poll/collect."""
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    out_matrix = _out_matrix(tier_dirs, M, N, K, bn_opts)
+    filters = _normal_filters(filters, bn_opts)
+    out_matrix = _out_matrix(tier_dirs, M, N, K, filters)
     jsonl = pathlib.Path(str(out_matrix)[:-5] + ".jsonl")   # autotune_<tag>.jsonl
     n_valid = pathlib.Path(str(jsonl) + ".nvalid")
     cublas = pathlib.Path(str(jsonl) + ".cublas")
@@ -174,10 +223,11 @@ def autotune_start(tier_dirs, M, N, K, bn_opts=None) -> dict:
             f.unlink()
         except FileNotFoundError:
             pass
-    cmd = _autotune_cmd(tier_dirs, M, N, K, out_matrix, bn_opts) + ["--jsonl", str(jsonl)]
+    cmd = _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters, mode="perf") + ["--jsonl", str(jsonl)]
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     return {"proc": proc, "out_matrix": str(out_matrix),
-            "jsonl": str(jsonl), "n_valid": str(n_valid), "M": M, "N": N, "K": K}
+            "jsonl": str(jsonl), "n_valid": str(n_valid), "M": M, "N": N, "K": K,
+            "filters": filters}
 
 
 def autotune_poll(job) -> tuple:
@@ -233,6 +283,7 @@ def autotune_partial(job) -> dict:
                                 "ld_width": e.get("ld_width", 8), "overlap": e.get("overlap", 0),
                                 "split_epilogue": e.get("split_epilogue", 0),
                                 "l1_no_alloc": e.get("l1_no_alloc", 0),
+                                "tma_pipelined": e.get("tma_pipelined", 0),
                                 "tflops": tf, "rel_err": p.get("rel_err"),
                                 "vs_cublas": (tf / cub) if cub else None})
     except FileNotFoundError:

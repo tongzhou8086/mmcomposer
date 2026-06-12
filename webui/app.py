@@ -132,6 +132,12 @@ with st.sidebar:
         help="For Tier 3 overlap, stage/store the epilogue in two half-BN column "
              "passes.  This reduces epilogue SMEM and can allow a deeper K-loop "
              "ring, but adds an extra epilogue pass/barrier.") == "On"
+    tma_pipelined = st.selectbox(
+        "Pipelined TMA-store epilogue", mc.ONOFF_OPTS, index=_onoff("tma_pipelined"),
+        help="Alternative overlapped epilogue mode: drain TMEM in 64-column chunks "
+             "through two compact swizzled SMEM buffers and issue TMA stores.  "
+             "Requires Persistent grid + Epilogue overlap, and replaces split/L1 "
+             "staged-store modifiers.") == "On"
     l1_no_alloc = st.selectbox(
         "L1 no-allocate C store", mc.ONOFF_OPTS, index=_onoff("l1_no_alloc"),
         help="Write the C output with `st...L1::no_allocate` so the write-once "
@@ -154,7 +160,8 @@ if generate:
                                     ms_ws=ms_ws, two_cta=two_cta,
                                     persistent=int(persistent), ld_width=int(ld_width),
                                     overlap=int(overlap), split_epilogue=int(split_epilogue),
-                                    l1_no_alloc=int(l1_no_alloc), shapes_text=shapes_text)
+                                    l1_no_alloc=int(l1_no_alloc),
+                                    tma_pipelined=int(tma_pipelined), shapes_text=shapes_text)
     st.session_state.run_live = True   # fire the on-the-fly B200 bench (if live mode)
 
 if "applied" not in st.session_state:
@@ -170,6 +177,7 @@ ld_width = cfg.get("ld_width", 8)
 overlap = cfg.get("overlap", 0)
 split_epilogue = cfg.get("split_epilogue", 0)
 l1_no_alloc = cfg.get("l1_no_alloc", 0)
+tma_pipelined = cfg.get("tma_pipelined", 0)
 shapes_text = cfg["shapes_text"]
 
 # One shape at a time: different shapes have different optimal configs.
@@ -210,7 +218,7 @@ warnings = mc.validate_config(bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
                               persistent_ok=tier.get("persistent_ok", False),
                               shape=shapes[0] if shapes else None, ld_width=ld_width,
                               overlap=overlap, split_epilogue=split_epilogue,
-                              l1_no_alloc=l1_no_alloc)
+                              l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
 if warnings:
     st.error(f"⚠️  **{len(warnings)} configuration warning(s)** — this combination won't run.  "
              "Fix in the sidebar and re-generate.")
@@ -225,14 +233,14 @@ else:
                                           persistent=persistent,
                                           ld_width=ld_width, overlap=overlap,
                                           split_epilogue=split_epilogue, two_cta=two_cta_k,
-                                          l1_no_alloc=l1_no_alloc)
+                                          l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
         if status == "verified":
             # Prefer perf at the shape the user is tuning; else the largest swept square.
             em, en, ek = shapes[0]
             p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, em, en, ek,
                                persistent=persistent, ld_width=ld_width,
                                overlap=overlap, split_epilogue=split_epilogue, two_cta=two_cta_k,
-                               l1_no_alloc=l1_no_alloc)
+                               l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
             ref = (em, en, ek)
             if not (p and p.get("tflops")):
                 squares = [t for t in mc.perf_shapes() if t[0] == t[1] == t[2]]
@@ -241,7 +249,7 @@ else:
                     p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, *ref,
                                        persistent=persistent, ld_width=ld_width,
                                        overlap=overlap, split_epilogue=split_epilogue, two_cta=two_cta_k,
-                                       l1_no_alloc=l1_no_alloc)
+                                       l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
             msg = f"✅ Empirically verified on B200 ({cm.get('arch', 'sm_100a')}): compiles, runs, correct."
             if p and p.get("tflops"):
                 lbl = f"{ref[0]}³" if ref[0] == ref[1] == ref[2] else f"{ref[0]}×{ref[1]}×{ref[2]}"
@@ -261,10 +269,12 @@ else:
 
 kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw,
                               ld_width=ld_width, overlap=overlap,
-                              split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc)
+                              split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc,
+                              tma_pipelined=tma_pipelined)
 host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw,
-                            persistent=persistent, overlap=overlap,
-                            split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc)
+                            persistent=persistent, ld_width=ld_width, overlap=overlap,
+                            split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc,
+                            tma_pipelined=tma_pipelined)
 
 def ssh_copy_button(name, content, label):
     """One-click 'copy the heredoc to clipboard' for SSH use.
@@ -343,7 +353,8 @@ with tab_bench:
         m0, n0, k0 = shapes[0]
         knobs = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                      persistent=persistent, ld_width=ld_width,
-                     overlap=overlap, split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc)
+                     overlap=overlap, split_epilogue=split_epilogue,
+                     l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
         sig = (tier["dir"], tuple(sorted(knobs.items())), m0, n0, k0)
         cache = st.session_state.setdefault("live_cache", {})
         clicked = st.button("▶  Benchmark this config on a B200 (live)", type="primary",
@@ -387,13 +398,13 @@ with tab_bench:
             ["Warp specialization on (production)", "Full sweep (incl. warp-spec off)"],
             horizontal=True, key="autotune_scope",
             help="Production: warp specialization essentially always helps and (assuming N is "
-                 "reasonably large) BN<128 doesn't, so it sweeps only warp-spec-on combos with "
-                 "BN≥128 — a much smaller, practical search. Full sweeps everything, including "
+                 "reasonably large) BN=256 and NS>=3 are the practical timing subset, so it "
+                 "sweeps only those warp-spec-on combos — a much smaller search. Full sweeps everything, including "
                  "the warp-spec-off and BN=64 combos kept for educational comparison.")
         production = scope.startswith("Warp")
         at_dirs = WS_DIRS if production else ALL_DIRS
-        at_bn = [128, 256] if production else None     # production assumes large N → BN ≥ 128
-        at_sig = (tuple(at_dirs), tuple(at_bn or []), m0, n0, k0)
+        at_filters = {"bn": [256], "ns": [x for x in mc.NS_OPTS if x >= 3]} if production else {}
+        at_sig = (tuple(at_dirs), json.dumps(at_filters, sort_keys=True), m0, n0, k0)
         at_cache = st.session_state.setdefault("autotune_cache", {})
 
         def _knob_cols(row):
@@ -418,7 +429,8 @@ with tab_bench:
                 f"BN={b['bn']} NS={b['ns']} GSM={b['gsm']} NW={b['nw']} "
                 f"PERSISTENT={b['persistent']} "
                 f"LD_WIDTH={b.get('ld_width', 8)} OVERLAP={b.get('overlap', 0)} "
-                f"SPLIT={b.get('split_epilogue', 0)} L1NA={b.get('l1_no_alloc', 0)}")
+                f"SPLIT={b.get('split_epilogue', 0)} L1NA={b.get('l1_no_alloc', 0)} "
+                f"TMA_PIPE={b.get('tma_pipelined', 0)}")
             n_res = len(at["results"])
             if live:
                 top_n = min(10, n_res)
@@ -433,6 +445,7 @@ with tab_bench:
                              "PERS": r["persistent"],
                              "LD": r.get("ld_width", 8), "OV": r.get("overlap", 0),
                              "SPLIT": r.get("split_epilogue", 0), "L1NA": r.get("l1_no_alloc", 0),
+                             "TMA": r.get("tma_pipelined", 0),
                              "TFLOPS": f"{r['tflops']:.0f}",
                              "vs cuBLAS": f"{r['vs_cublas']:.0%}" if r.get("vs_cublas") else "—"})
             st.dataframe(rows, width="stretch", hide_index=True)
@@ -464,7 +477,7 @@ with tab_bench:
                 time.sleep(2.0)
                 st.rerun()
         elif st.button("🔧  Autotune: sweep combos on a B200", key="autotune_btn"):
-            j = live_bench.autotune_start(at_dirs, m0, n0, k0, bn_opts=at_bn)
+            j = live_bench.autotune_start(at_dirs, m0, n0, k0, filters=at_filters)
             j["sig"] = at_sig
             st.session_state.autotune_job = j
             st.rerun()
@@ -478,9 +491,9 @@ with tab_bench:
             if at.get("stderr"):
                 st.code(at["stderr"], language="text")
         elif st.session_state.get("autotune_job") is None:
-            st.caption("Autotune submits one srun that compiles + benchmarks every valid combo "
+            st.caption("Autotune submits one srun that compiles + benchmarks the selected valid combo set "
                        "(tens to hundreds of kernels), with a live progress bar + leaderboard. "
-                       "Production (warp-spec on) is faster; Full is the complete search.")
+                       "Production is the pruned timing sweep; Full is the complete timed search.")
         st.divider()
 
     try:
@@ -498,7 +511,8 @@ with tab_bench:
             p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, m, n, k,
                                persistent=persistent, ld_width=ld_width,
                                overlap=overlap, split_epilogue=split_epilogue,
-                               two_cta=int(tier["cluster"]), l1_no_alloc=l1_no_alloc)
+                               two_cta=int(tier["cluster"]), l1_no_alloc=l1_no_alloc,
+                               tma_pipelined=tma_pipelined)
             cub = mc.cublas_tflops(m, n, k)
         except Exception:
             p, cub = None, None
