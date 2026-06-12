@@ -31,6 +31,7 @@ import argparse
 import ctypes
 import itertools
 import json
+import statistics
 import os
 import pathlib
 import subprocess
@@ -77,6 +78,8 @@ SCRATCH = WEBUI / "tests" / "_scratch" / "gpu_driver"
 # independent) at half the wall-clock of 500/500.  Override via env.
 BENCH_WARMUP_MS = int(os.environ.get("MMCOMPOSER_BENCH_WARMUP_MS", "300"))
 BENCH_REP_MS    = int(os.environ.get("MMCOMPOSER_BENCH_REP_MS", "200"))
+CBLAS_WARMUP_SAMPLES = int(os.environ.get("MMCOMPOSER_CUBLAS_WARMUP_SAMPLES", "1"))
+CBLAS_MEASURE_SAMPLES = int(os.environ.get("MMCOMPOSER_CUBLAS_MEASURE_SAMPLES", "3"))
 
 
 def parse_int_csv(spec):
@@ -84,6 +87,26 @@ def parse_int_csv(spec):
     if spec is None:
         return None
     return [int(x) for x in spec.split(",") if x.strip()]
+
+
+def measure_cublas_tflops(A, B, M, N, K):
+    """Robust cuBLAS reference for perf sweeps.
+
+    A single fresh cuBLAS do_bench can catch a transient boost-clock outlier
+    (observed 4096^3: first 300/200 sample 1542 TFLOPS, steady median ~1356).
+    Discard a configurable number of warmup samples, then use the median of a
+    few measured samples.  This is cheap per shape and keeps the denominator
+    apple-to-apple with kernels timed later in the same warmed allocation.
+    """
+    for _ in range(CBLAS_WARMUP_SAMPLES):
+        rt.time_kernel_us(lambda: torch.mm(A, B),
+                          warmup_ms=BENCH_WARMUP_MS, rep_ms=BENCH_REP_MS)
+    vals = []
+    for _ in range(CBLAS_MEASURE_SAMPLES):
+        us = rt.time_kernel_us(lambda: torch.mm(A, B),
+                               warmup_ms=BENCH_WARMUP_MS, rep_ms=BENCH_REP_MS)
+        vals.append((2.0 * M * N * K) / (us * 1e-6) / 1e12)
+    return statistics.median(vals), vals
 
 
 def _opts(filters, name, default):
@@ -457,18 +480,19 @@ def main():
         print(f"# filters={filters}")
     print(f"# {n_valid} valid combos to run, {n_invalid} invalid ({n_sample} sampled)")
 
-    # ── cuBLAS reference TFLOPS per shape (one do_bench each) ────────
+    # ── cuBLAS reference TFLOPS per shape ───────────────────────────
     cublas_tflops = {}
     if args.mode == "perf":
         for (M, N, K) in shape_list:
             torch.manual_seed(0)
             A = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")
             B = torch.randn(K, N, dtype=torch.bfloat16, device="cuda")
-            us = rt.time_kernel_us(lambda: torch.mm(A, B),   # A:(M,K) @ B:(K,N)
-                                   warmup_ms=BENCH_WARMUP_MS, rep_ms=BENCH_REP_MS)
             key = mc.shape_key(M, N, K)
-            cublas_tflops[key] = (2.0 * M * N * K) / (us * 1e-6) / 1e12
-            print(f"# cuBLAS {key}: {cublas_tflops[key]:.0f} TFLOPS", flush=True)
+            cublas_tflops[key], samples = measure_cublas_tflops(A, B, M, N, K)
+            sample_msg = ", ".join(f"{x:.0f}" for x in samples)
+            print(f"# cuBLAS {key}: {cublas_tflops[key]:.0f} TFLOPS "
+                  f"(median of {len(samples)} after {CBLAS_WARMUP_SAMPLES} throwaway; "
+                  f"samples [{sample_msg}])", flush=True)
             del A, B
         torch.cuda.empty_cache()
     else:
