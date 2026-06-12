@@ -1,0 +1,35 @@
+{
+  "source_matrix": "study-gau-nernst/autotune_4096_prod_matrix.json",
+  "shape": [
+    4096,
+    4096,
+    4096
+  ],
+  "cublas_tflops": 1542.7,
+  "best_tflops": 1328.1,
+  "best_vs_cublas": 0.8609,
+  "best_entry": {
+    "tier": "tier3_cluster_swizzle",
+    "bm": 128,
+    "bn": 256,
+    "bk": 64,
+    "ns": 5,
+    "gsm": 1,
+    "nw": 4,
+    "tma_store": 0,
+    "persistent": 1,
+    "two_cta": 1,
+    "ld_width": 8,
+    "overlap": 1,
+    "split_epilogue": 1,
+    "l1_no_alloc": 1,
+    "correct": true,
+    "perf": {
+      "4096": {
+        "rel_err": 0.00287,
+        "tflops": 1328.1,
+        "vs_cublas": 0.8609
+      }
+    }
+  }
+}
