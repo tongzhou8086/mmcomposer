@@ -13,6 +13,7 @@ constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (
 constexpr int EPILOGUE_OVERLAP = 1;  // 1 = persistent 2-CTA cluster + epilogue/K-loop overlap
 constexpr int EPILOGUE_SPLIT   = 0;  // 1 = split overlapped int4 writeback into two half-BN passes
 constexpr int EPILOGUE_TMA_PIPELINED = 0;  // 1 = chunked double-buffered TMA-store overlap epilogue
+constexpr int SINGLE_TMEM_ACCUM = 0;  // 1 = overlap path synchronizes epilogue drain before reusing one TMEM accumulator
 constexpr int TWO_CTA          = 0;  // 1 = 2-CTA cluster MMA (cta_group::2); 0 = single-CTA
 
 // ── Derived constants (do not edit) ─────────────────────────────────
@@ -314,8 +315,9 @@ __device__ __forceinline__ void matmul_cluster_impl(
         constexpr int EPI_STAGE_COLS = BN;
         auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_STAGE_COLS + 8]>(smem + NS * SLOT_BYTES);
 
-        if (warp_id == 0)
+        if (warp_id == 0) {
             tcgen05_alloc_g2((uint32_t)__cvta_generic_to_shared(tmem_addr_holder), 2 * BN);
+        }
         if (warp_id == 0 && elect_sync()) {
             #pragma unroll
             for (int s = 0; s < NS; s++) {
@@ -495,8 +497,9 @@ __device__ __forceinline__ void matmul_cluster_impl(
         }
 
         __syncthreads();
-        if (warp_id == 0 && elect_sync())
+        if (warp_id == 0 && elect_sync()) {
             tcgen05_dealloc_g2(taddr, 2 * BN);
+        }
         return;
     }
 }

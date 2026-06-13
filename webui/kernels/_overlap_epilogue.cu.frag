@@ -41,6 +41,17 @@
                         }
                         tcgen05_wait_ld();
 
+#if SINGLE_TMEM_ACCUM
+                        if (chunk == NUM_CHUNKS - 1)
+                            tcgen05_fence_before_thread_sync();
+
+                        asm volatile("bar.sync 1, %0;" :: "n"(EPI_THREADS));
+
+                        if (chunk == NUM_CHUNKS - 1) {
+                            if (ew == 0 && elect_sync())
+                                EPI_TMEM_EMPTY_ARRIVE(buf);
+                        }
+#else
                         if (chunk == NUM_CHUNKS - 1) {
                             tcgen05_fence_before_thread_sync();
                             if (ew == 0 && elect_sync())
@@ -48,6 +59,7 @@
                         }
 
                         asm volatile("bar.sync 1, %0;" :: "n"(EPI_THREADS));
+#endif
 
                         #pragma unroll
                         for (int n = 0; n < LOADS_PER_WARP; n++) {

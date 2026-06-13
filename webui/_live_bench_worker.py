@@ -22,6 +22,7 @@ def main():
     ap.add_argument("--split_epilogue", type=int, default=0)
     ap.add_argument("--l1_no_alloc", type=int, default=0)
     ap.add_argument("--tma_pipelined", type=int, default=0)
+    ap.add_argument("--single_tmem", type=int, default=0)
     for k in ("bm", "bn", "bk", "ns", "nw"):
         ap.add_argument(f"--{k}", type=int, required=True)
     ap.add_argument("-M", type=int, required=True)

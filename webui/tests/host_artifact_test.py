@@ -45,6 +45,9 @@ CONFIGS = [
     (True,  True,  128, 256, 64, 3, 16, 16),  # tier3: NW16, GSM16
     (True,  True,  128, 256, 64, 4, 8, 4,
      {"persistent": 1, "overlap": 1, "tma_pipelined": 1}),  # tier3: pipelined TMA store
+    (True,  True,  128, 512, 64, 4, 8, 4,
+     {"persistent": 1, "overlap": 1, "tma_pipelined": 1,
+      "single_tmem": 1}),  # tier3: BN512 two-panel MMA + single-TMEM sync
 ]
 
 
@@ -61,6 +64,8 @@ def main():
         tag = f"{tier['dir']}_bn{bn}_ns{ns}_gsm{gsm}_nw{nw}"
         if opts.get("tma_pipelined"):
             tag += "_tma"
+        if opts.get("single_tmem"):
+            tag += "_stmem"
         d = SCRATCH / tag
         d.mkdir(parents=True, exist_ok=True)
         kernel_src = mc.render_kernel(
@@ -68,14 +73,16 @@ def main():
             overlap=opts.get("overlap", 0),
             split_epilogue=opts.get("split_epilogue", 0),
             l1_no_alloc=opts.get("l1_no_alloc", 0),
-            tma_pipelined=opts.get("tma_pipelined", 0))
+            tma_pipelined=opts.get("tma_pipelined", 0),
+            single_tmem=opts.get("single_tmem", 0))
         host_src   = mc.render_host(
             tier, bm, bn, bk, ns, gsm, nw,
             persistent=opts.get("persistent", 0),
             overlap=opts.get("overlap", 0),
             split_epilogue=opts.get("split_epilogue", 0),
             l1_no_alloc=opts.get("l1_no_alloc", 0),
-            tma_pipelined=opts.get("tma_pipelined", 0))
+            tma_pipelined=opts.get("tma_pipelined", 0),
+            single_tmem=opts.get("single_tmem", 0))
         (d / "kernel.cu").write_text(kernel_src)
         (d / "host.py").write_text(host_src)
 

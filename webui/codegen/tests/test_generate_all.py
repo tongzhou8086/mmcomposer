@@ -29,21 +29,22 @@ def all_valid_configs():
     for (ms_ws, two_cta), tier in mc.TIER_MAP.items():
         if tier is None:
             continue
-        for bm, bn, bk, ns, gsm, nw, pers, ld, ov, sp, l1, tma in itertools.product(
+        for bm, bn, bk, ns, gsm, nw, pers, ld, ov, sp, l1, tma, single_tmem in itertools.product(
                 mc.BM_OPTS, mc.BN_OPTS, mc.BK_OPTS, mc.NS_OPTS, mc.GSM_OPTS, mc.NW_OPTS,
                 mc.PERSISTENT_OPTS, mc.TCGEN05_LD_WIDTH_OPTS,
                 mc.EPILOGUE_OVERLAP_OPTS, mc.EPILOGUE_SPLIT_OPTS,
-                mc.EPILOGUE_L1_NO_ALLOC_OPTS, mc.EPILOGUE_TMA_PIPELINED_OPTS):
+                mc.EPILOGUE_L1_NO_ALLOC_OPTS, mc.EPILOGUE_TMA_PIPELINED_OPTS,
+                mc.SINGLE_TMEM_ACCUM_OPTS):
             errs = mc.validate_config(
                 bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
                 persistent=pers, persistent_ok=tier.get("persistent_ok", False),
                 ld_width=ld, overlap=ov, split_epilogue=sp, l1_no_alloc=l1,
-                tma_pipelined=tma)
+                tma_pipelined=tma, single_tmem=single_tmem)
             if errs:
                 continue
             cfg = mc.knob_kwargs(bm, bn, bk, ns, gsm, nw, pers,
                                  ld_width=ld, overlap=ov, split_epilogue=sp, l1_no_alloc=l1,
-                                 tma_pipelined=tma)
+                                 tma_pipelined=tma, single_tmem=single_tmem)
             cfg["skeleton"] = tier["dir"]
             cfg["TWO_CTA"] = int(tier["cluster"])
             yield cfg

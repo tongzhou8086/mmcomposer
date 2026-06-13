@@ -22,6 +22,9 @@ it, and shows **measured** performance for that exact config.
     cuBLAS.  The app annotates each config with its measured TFLOPS and a
     "verified on B200" badge, and flags any combo the hardware rejects even
     though the static checker passed.
+  - Validation constraints are documented in `VALIDATION_CONSTRAINTS.md`,
+    including which limits are hardware constraints, implementation guardrails,
+    or autotune policy.
 - **Self-contained downloads.** The host script inlines its runtime, so the
   downloaded `kernel.cu` + `host.py` run with just `python host.py` (given
   torch + cuda-python + `nvcc`) — no repo, no sibling modules.

@@ -40,6 +40,8 @@ FILTER_CLI = (
     ("split_epilogue", "--split-epilogue"),
     ("l1_no_alloc", "--l1-no-alloc"),
     ("tma_pipelined", "--tma-pipelined"),
+    ("single_tmem", "--single-tmem"),
+    ("single_tmem_policy", "--single-tmem-policy"),
 )
 
 
@@ -59,7 +61,7 @@ def _sig(tier, knobs, M, N, K) -> str:
 def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900) -> dict:
     """Render → srun(compile+run+cuBLAS) → parsed result dict.
 
-    knobs: {bm,bn,bk,ns,gsm,nw,persistent,ld_width,overlap,split_epilogue,l1_no_alloc,tma_pipelined}.
+    knobs: {bm,bn,bk,ns,gsm,nw,persistent,ld_width,overlap,split_epilogue,l1_no_alloc,tma_pipelined,single_tmem}.
     Returns a dict with
     ok/tflops/cublas_tflops/vs_cublas/rel_err/us (+ error/stderr on failure).
     """
@@ -76,7 +78,8 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
         knobs["nw"], ld_width=knobs.get("ld_width", 8), overlap=knobs.get("overlap", 0),
         split_epilogue=knobs.get("split_epilogue", 0),
         l1_no_alloc=knobs.get("l1_no_alloc", 0),
-        tma_pipelined=knobs.get("tma_pipelined", 0)))
+        tma_pipelined=knobs.get("tma_pipelined", 0),
+        single_tmem=knobs.get("single_tmem", 0)))
 
     py = os.environ.get("MMCOMPOSER_PY", sys.executable)
     srun_args = shlex.split(os.environ.get("MMCOMPOSER_SRUN_ARGS", DEFAULT_SRUN_ARGS))
@@ -89,6 +92,7 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
            "--split_epilogue", str(knobs.get("split_epilogue", 0)),
            "--l1_no_alloc", str(knobs.get("l1_no_alloc", 0)),
            "--tma_pipelined", str(knobs.get("tma_pipelined", 0)),
+           "--single_tmem", str(knobs.get("single_tmem", 0)),
            "-M", str(M), "-N", str(N), "-K", str(K)]
 
     try:
@@ -110,9 +114,14 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
 
 
 def _normal_filters(filters=None, bn_opts=None):
-    out = {k: list(v) for k, v in (filters or {}).items() if v is not None}
+    out = {}
+    for k, v in (filters or {}).items():
+        if v is None:
+            continue
+        out[k] = list(v) if isinstance(v, (list, tuple, set)) else v
     if bn_opts is not None and "bn" not in out:
         out["bn"] = list(bn_opts)
+    out.setdefault("single_tmem_policy", "bn512-only")
     return out
 
 
@@ -121,12 +130,15 @@ def _filter_args(filters):
     for key, flag in FILTER_CLI:
         vals = (filters or {}).get(key)
         if vals is not None:
-            args += [flag, ",".join(str(v) for v in vals)]
+            if isinstance(vals, (list, tuple, set)):
+                vals = ",".join(str(v) for v in vals)
+            args += [flag, str(vals)]
     return args
 
 
 def _filter_sig(filters):
-    filters = {k: list(v) for k, v in (filters or {}).items() if v is not None}
+    filters = {k: (list(v) if isinstance(v, (list, tuple, set)) else v)
+               for k, v in (filters or {}).items() if v is not None}
     return json.dumps(filters, sort_keys=True, separators=(",", ":"))
 
 
@@ -170,6 +182,7 @@ def _rank_matrix(out_matrix, M, N, K) -> dict:
                             "split_epilogue": e.get("split_epilogue", 0),
                             "l1_no_alloc": e.get("l1_no_alloc", 0),
                             "tma_pipelined": e.get("tma_pipelined", 0),
+                            "single_tmem": e.get("single_tmem", 0),
                             "tflops": p["tflops"], "vs_cublas": p.get("vs_cublas"),
                             "rel_err": p.get("rel_err")})
     results.sort(key=lambda r: r["tflops"], reverse=True)
@@ -284,6 +297,7 @@ def autotune_partial(job) -> dict:
                                 "split_epilogue": e.get("split_epilogue", 0),
                                 "l1_no_alloc": e.get("l1_no_alloc", 0),
                                 "tma_pipelined": e.get("tma_pipelined", 0),
+                                "single_tmem": e.get("single_tmem", 0),
                                 "tflops": tf, "rel_err": p.get("rel_err"),
                                 "vs_cublas": (tf / cub) if cub else None})
     except FileNotFoundError:

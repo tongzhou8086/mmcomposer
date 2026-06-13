@@ -84,8 +84,9 @@ with st.sidebar:
                       help="M tile per CTA.  Locked at 128: tcgen05.mma.kind::f16 M-atom is 128 and "
                            "TMEM holds 128 lanes.  Larger M is served by turning on 2-CTA cluster MMA.")
     bn = st.selectbox("BN", mc.BN_OPTS, index=_idx(mc.BN_OPTS, "bn", 2),
-                      help="N tile per CTA.  Multiple of 64 (K-major B TMA sub-tile).  Caps at 256: "
-                           "the tcgen05.mma N-atom max is 256, and the cluster splits M, not N.")
+                      help="N tile per CTA.  Multiple of 64 (K-major B TMA sub-tile).  A single "
+                           "tcgen05.mma N atom caps at 256 columns; BN512 uses the guarded "
+                           "two-panel path.")
     bk = st.selectbox("BK", mc.BK_OPTS, index=_idx(mc.BK_OPTS, "bk", 0),
                       help="K tile per stage.  Locked at 64: the K-major B descriptor uses "
                            "SWIZZLE_128B → inner box = one 128 B atom = 64 BF16.")
@@ -133,6 +134,12 @@ with st.sidebar:
              "through two compact swizzled SMEM buffers and issue TMA stores.  "
              "Requires Persistent grid + Epilogue overlap, and replaces split/L1 "
              "staged-store modifiers.")
+    single_tmem = st.toggle(
+        "Single-TMEM accumulator sync", value=_default_on("single_tmem"),
+        help="Reuse one TMEM accumulator by making the MMA warp wait until the "
+             "epilogue warps have safely drained the tile from TMEM.  BN512 "
+             "currently requires this as part of its guarded two-panel path; "
+             "for smaller BN it is an independent buffering/sync choice.")
     l1_no_alloc = st.toggle(
         "L1 no-allocate C store", value=_default_on("l1_no_alloc"),
         help="Write the C output with `st...L1::no_allocate` so the write-once "
@@ -156,7 +163,8 @@ if generate:
                                     persistent=int(persistent), ld_width=int(ld_width),
                                     overlap=int(overlap), split_epilogue=int(split_epilogue),
                                     l1_no_alloc=int(l1_no_alloc),
-                                    tma_pipelined=int(tma_pipelined), shapes_text=shapes_text)
+                                    tma_pipelined=int(tma_pipelined),
+                                    single_tmem=int(single_tmem), shapes_text=shapes_text)
     st.session_state.run_live = True   # fire the on-the-fly B200 bench (if live mode)
 
 if "applied" not in st.session_state:
@@ -173,6 +181,7 @@ overlap = cfg.get("overlap", 0)
 split_epilogue = cfg.get("split_epilogue", 0)
 l1_no_alloc = cfg.get("l1_no_alloc", 0)
 tma_pipelined = cfg.get("tma_pipelined", 0)
+single_tmem = cfg.get("single_tmem", 0)
 shapes_text = cfg["shapes_text"]
 
 # One shape at a time: different shapes have different optimal configs.
@@ -213,7 +222,8 @@ warnings = mc.validate_config(bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
                               persistent_ok=tier.get("persistent_ok", False),
                               shape=shapes[0] if shapes else None, ld_width=ld_width,
                               overlap=overlap, split_epilogue=split_epilogue,
-                              l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
+                              l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                              single_tmem=single_tmem)
 if warnings:
     st.error(f"⚠️  **{len(warnings)} configuration warning(s)** — this combination won't run.  "
              "Fix in the sidebar and re-generate.")
@@ -228,14 +238,16 @@ else:
                                           persistent=persistent,
                                           ld_width=ld_width, overlap=overlap,
                                           split_epilogue=split_epilogue, two_cta=two_cta_k,
-                                          l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
+                                          l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                                          single_tmem=single_tmem)
         if status == "verified":
             # Prefer perf at the shape the user is tuning; else the largest swept square.
             em, en, ek = shapes[0]
             p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, em, en, ek,
                                persistent=persistent, ld_width=ld_width,
                                overlap=overlap, split_epilogue=split_epilogue, two_cta=two_cta_k,
-                               l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
+                               l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                               single_tmem=single_tmem)
             ref = (em, en, ek)
             if not (p and p.get("tflops")):
                 squares = [t for t in mc.perf_shapes() if t[0] == t[1] == t[2]]
@@ -244,7 +256,8 @@ else:
                     p = mc.compat_perf(tier["dir"], bm, bn, bk, ns, gsm, nw, *ref,
                                        persistent=persistent, ld_width=ld_width,
                                        overlap=overlap, split_epilogue=split_epilogue, two_cta=two_cta_k,
-                                       l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
+                                       l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                                       single_tmem=single_tmem)
             msg = f"✅ Empirically verified on B200 ({cm.get('arch', 'sm_100a')}): compiles, runs, correct."
             if p and p.get("tflops"):
                 lbl = f"{ref[0]}³" if ref[0] == ref[1] == ref[2] else f"{ref[0]}×{ref[1]}×{ref[2]}"
@@ -265,11 +278,11 @@ else:
 kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw,
                               ld_width=ld_width, overlap=overlap,
                               split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc,
-                              tma_pipelined=tma_pipelined)
+                              tma_pipelined=tma_pipelined, single_tmem=single_tmem)
 host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw,
                             persistent=persistent, ld_width=ld_width, overlap=overlap,
                             split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc,
-                            tma_pipelined=tma_pipelined)
+                            tma_pipelined=tma_pipelined, single_tmem=single_tmem)
 
 def ssh_copy_button(name, content, label):
     """One-click 'copy the heredoc to clipboard' for SSH use.
@@ -349,7 +362,8 @@ with tab_bench:
         knobs = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                      persistent=persistent, ld_width=ld_width,
                      overlap=overlap, split_epilogue=split_epilogue,
-                     l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined)
+                     l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                     single_tmem=single_tmem)
         sig = (tier["dir"], tuple(sorted(knobs.items())), m0, n0, k0)
         cache = st.session_state.setdefault("live_cache", {})
         clicked = st.button("▶  Benchmark this config on a B200 (live)", type="primary",
@@ -393,12 +407,14 @@ with tab_bench:
             ["Warp specialization on (production)", "Full sweep (incl. warp-spec off)"],
             horizontal=True, key="autotune_scope",
             help="Production: warp specialization essentially always helps and (assuming N is "
-                 "reasonably large) BN=256 and NS>=3 are the practical timing subset, so it "
+                 "reasonably large) BN=256/512 and NS>=3 are the practical timing subset, so it "
                  "sweeps only those warp-spec-on combos — a much smaller search. Full sweeps everything, including "
                  "the warp-spec-off and BN=64 combos kept for educational comparison.")
         production = scope.startswith("Warp")
         at_dirs = WS_DIRS if production else ALL_DIRS
-        at_filters = {"bn": [256], "ns": [x for x in mc.NS_OPTS if x >= 3]} if production else {}
+        at_filters = {"bn": [256, 512],
+                      "ns": [x for x in mc.NS_OPTS if x >= 3],
+                      "single_tmem_policy": "bn512-only"} if production else {"single_tmem_policy": "all"}
         at_sig = (tuple(at_dirs), json.dumps(at_filters, sort_keys=True), m0, n0, k0)
         at_cache = st.session_state.setdefault("autotune_cache", {})
 
@@ -425,7 +441,7 @@ with tab_bench:
                 f"PERSISTENT={b['persistent']} "
                 f"OVERLAP={b.get('overlap', 0)} "
                 f"SPLIT={b.get('split_epilogue', 0)} L1NA={b.get('l1_no_alloc', 0)} "
-                f"TMA_PIPE={b.get('tma_pipelined', 0)}")
+                f"TMA_PIPE={b.get('tma_pipelined', 0)} SINGLE_TMEM={b.get('single_tmem', 0)}")
             n_res = len(at["results"])
             if live:
                 top_n = min(10, n_res)
@@ -441,6 +457,7 @@ with tab_bench:
                              "OV": r.get("overlap", 0),
                              "SPLIT": r.get("split_epilogue", 0), "L1NA": r.get("l1_no_alloc", 0),
                              "TMA": r.get("tma_pipelined", 0),
+                             "STMEM": r.get("single_tmem", 0),
                              "TFLOPS": f"{r['tflops']:.0f}",
                              "vs cuBLAS": f"{r['vs_cublas']:.0%}" if r.get("vs_cublas") else "—"})
             st.dataframe(rows, width="stretch", hide_index=True)
@@ -507,7 +524,7 @@ with tab_bench:
                                persistent=persistent, ld_width=ld_width,
                                overlap=overlap, split_epilogue=split_epilogue,
                                two_cta=int(tier["cluster"]), l1_no_alloc=l1_no_alloc,
-                               tma_pipelined=tma_pipelined)
+                               tma_pipelined=tma_pipelined, single_tmem=single_tmem)
             cub = mc.cublas_tflops(m, n, k)
         except Exception:
             p, cub = None, None

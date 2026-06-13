@@ -13,6 +13,7 @@ constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (
 constexpr int EPILOGUE_OVERLAP = 0;  // 1 = persistent 2-CTA cluster + epilogue/K-loop overlap
 constexpr int EPILOGUE_SPLIT   = 0;  // 1 = split overlapped int4 writeback into two half-BN passes
 constexpr int EPILOGUE_TMA_PIPELINED = 0;  // 1 = chunked double-buffered TMA-store overlap epilogue
+constexpr int SINGLE_TMEM_ACCUM = 0;  // 1 = overlap path synchronizes epilogue drain before reusing one TMEM accumulator
 constexpr int TWO_CTA          = 1;  // 1 = 2-CTA cluster MMA (cta_group::2); 0 = single-CTA
 
 // ── Derived constants (do not edit) ─────────────────────────────────
@@ -331,8 +332,13 @@ __device__ __forceinline__ void matmul_cluster_impl(
         auto C_sh = reinterpret_cast<__nv_bfloat16(*)[EPI_STAGE_COLS + 8]>(smem + NS * SLOT_BYTES);
 #endif
 
-        if (warp_id == 0)
+        if (warp_id == 0) {
+#if SINGLE_TMEM_ACCUM
+            tcgen05_alloc_g2((uint32_t)__cvta_generic_to_shared(tmem_addr_holder), BN);
+#else
             tcgen05_alloc_g2((uint32_t)__cvta_generic_to_shared(tmem_addr_holder), 2 * BN);
+#endif
+        }
         if (warp_id == 0 && elect_sync()) {
             #pragma unroll
             for (int s = 0; s < NS; s++) {
@@ -359,7 +365,13 @@ __device__ __forceinline__ void matmul_cluster_impl(
 #endif
 
         const uint32_t taddr = tmem_addr_holder[0];
+#if BN == 512
+        constexpr int BN_PANEL = 256;
+        constexpr int BN_PANEL_LOCAL = BN_PANEL / CTA_GROUP;
+        const uint32_t idesc = make_idesc_bf16_cluster(CTA_GROUP * BM, BN_PANEL);
+#else
         const uint32_t idesc = make_idesc_bf16_cluster(CTA_GROUP * BM, BN);
+#endif
         const int num_k = K / BK;
         constexpr int16_t cta_mask = (1 << CTA_GROUP) - 1;
 
@@ -398,11 +410,26 @@ __device__ __forceinline__ void matmul_cluster_impl(
                         ((uint32_t)__cvta_generic_to_shared(&tile_ready[slot])) & 0xFEFFFFFFu;
                     mbarrier_wait_phase(done_mb, ph[slot]);
                     tma_2d_load_g2(A_base(slot), A_tmap, k * BK, local_m, ready_mb_cta0);
+#if BN == 512
+                    #pragma unroll
+                    for (int panel = 0; panel < 2; panel++) {
+                        #pragma unroll
+                        for (int n = 0; n < BN_PANEL_LOCAL; n += 64) {
+                            tma_2d_load_g2(
+                                B_base(slot) + (panel * BN_PANEL_LOCAL + n) * BK * BF16_BYTES,
+                                B_tmap,
+                                base_n + panel * BN_PANEL + cta_rank * BN_PANEL_LOCAL + n,
+                                k * BK,
+                                ready_mb_cta0);
+                        }
+                    }
+#else
                     #pragma unroll
                     for (int n = 0; n < BN_LOCAL; n += 64) {
                         tma_2d_load_g2(B_base(slot) + n * BK * BF16_BYTES,
                                        B_tmap, local_n + n, k * BK, ready_mb_cta0);
                     }
+#endif
                     mbarrier_arrive_expect_tx(ready_mb_cta0, SLOT_BYTES);
                     ph[slot] ^= 1;
                     gk++;
@@ -413,8 +440,13 @@ __device__ __forceinline__ void matmul_cluster_impl(
             uint32_t emp[2] = {};
             long gk = 0;
             for (int ti = 0; ti < num_my; ti++) {
+#if SINGLE_TMEM_ACCUM
+                const int buf = 0;
+                uint32_t d_tmem = taddr;
+#else
                 int buf = ti & 1;
                 uint32_t d_tmem = taddr + buf * BN;
+#endif
                 mbarrier_wait_phase((uint32_t)__cvta_generic_to_shared(&tmem_empty[buf]), emp[buf]);
                 emp[buf] ^= 1;
                 for (int k = 0; k < num_k; k++) {
@@ -423,7 +455,20 @@ __device__ __forceinline__ void matmul_cluster_impl(
                     uint32_t done_mb  = (uint32_t)__cvta_generic_to_shared(&mma_done[slot]);
                     mbarrier_wait_phase(ready_mb, ph[slot]);
                     tcgen05_fence_after_thread_sync();
+#if BN == 512
+                    issue_mma_chain(d_tmem,
+                                    A_base(slot),
+                                    B_base(slot),
+                                    idesc,
+                                    /*first_k_tile=*/ k == 0);
+                    issue_mma_chain(d_tmem + BN_PANEL,
+                                    A_base(slot),
+                                    B_base(slot) + BN_PANEL_LOCAL * BK * BF16_BYTES,
+                                    idesc,
+                                    /*first_k_tile=*/ k == 0);
+#else
                     issue_mma_chain(d_tmem, A_base(slot), B_base(slot), idesc, /*first_k_tile=*/ k == 0);
+#endif
                     tcgen05_commit_mcast_g2(done_mb, cta_mask);
                     ph[slot] ^= 1;
                     gk++;
@@ -450,7 +495,11 @@ __device__ __forceinline__ void matmul_cluster_impl(
             uint32_t full[2] = {};
             for (int ti = 0; ti < num_my; ti++) {
                 int base_m, base_n, local_m, local_n;
+#if SINGLE_TMEM_ACCUM
+                const int buf = 0;
+#else
                 int buf = ti & 1;
+#endif
                 map_off(ti, base_m, base_n, local_m, local_n);
                 mbarrier_wait_phase((uint32_t)__cvta_generic_to_shared(&tmem_full[buf]), full[buf]);
                 full[buf] ^= 1;
@@ -472,8 +521,13 @@ __device__ __forceinline__ void matmul_cluster_impl(
         }
 
         __syncthreads();
-        if (warp_id == 0 && elect_sync())
+        if (warp_id == 0 && elect_sync()) {
+#if SINGLE_TMEM_ACCUM
+            tcgen05_dealloc_g2(taddr, BN);
+#else
             tcgen05_dealloc_g2(taddr, 2 * BN);
+#endif
+        }
         return;
     }
 #else

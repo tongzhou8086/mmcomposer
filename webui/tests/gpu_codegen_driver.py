@@ -128,6 +128,8 @@ def all_combos(tier_dirs, filters=None):
     ld_list = _opts(filters, "ld_width", mc.TCGEN05_LD_WIDTH_OPTS)
     l1_list = _opts(filters, "l1_no_alloc", mc.EPILOGUE_L1_NO_ALLOC_OPTS)
     tma_filter = filters.get("tma_pipelined")
+    single_filter = filters.get("single_tmem")
+    single_tmem_policy = filters.get("single_tmem_policy")
     # A skeleton dir may back >1 tier: the warp-spec single-CTA and 2-CTA
     # cluster tiers share one dir, distinguished by the TWO_CTA knob.  Sweep
     # every (ms_ws, two_cta) arm registered for each requested dir.
@@ -152,15 +154,22 @@ def all_combos(tier_dirs, filters=None):
         sp_opts = _opts(filters, "split_epilogue", sp_default)
         tma_default = mc.EPILOGUE_TMA_PIPELINED_OPTS if tier.get("persistent_ok") else [0]
         tma_opts = tma_filter if tma_filter is not None else tma_default
-        for bm, bn, bk, ns, gsm, nw, pers, ldw, ov, sp, l1, tma in itertools.product(
+        single_default = mc.SINGLE_TMEM_ACCUM_OPTS if tier.get("persistent_ok") else [0]
+        single_opts = single_filter if single_filter is not None else single_default
+        for bm, bn, bk, ns, gsm, nw, pers, ldw, ov, sp, l1, tma, single_tmem in itertools.product(
             mc.BM_OPTS, bn_list, mc.BK_OPTS, ns_list, gsm_list, nw_list,
             pers_opts, ld_list, ov_opts, sp_opts,
-            l1_list, tma_opts
+            l1_list, tma_opts, single_opts
         ):
+            if single_tmem_policy == "bn512-only":
+                if bn == 512 and single_tmem != 1:
+                    continue
+                if bn != 512 and single_tmem != 0:
+                    continue
             yield tier, dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                              persistent=pers, ld_width=ldw, overlap=ov,
                              split_epilogue=sp, l1_no_alloc=l1,
-                             tma_pipelined=tma)
+                             tma_pipelined=tma, single_tmem=single_tmem)
 
 
 def parse_perf_shapes(spec):
@@ -231,7 +240,7 @@ def tag_for(tier, k):
             f"_ns{k['ns']}_gsm{k['gsm']}_nw{k['nw']}"
             f"_ld{k.get('ld_width', 8)}_ov{k.get('overlap', 0)}"
             f"_sp{k.get('split_epilogue', 0)}_l1{k.get('l1_no_alloc', 0)}"
-            f"_tp{k.get('tma_pipelined', 0)}")
+            f"_tp{k.get('tma_pipelined', 0)}_st{k.get('single_tmem', 0)}")
 
 
 def render_to_dir(tier, k):
@@ -243,7 +252,8 @@ def render_to_dir(tier, k):
                            overlap=k.get("overlap", 0),
                            split_epilogue=k.get("split_epilogue", 0),
                            l1_no_alloc=k.get("l1_no_alloc", 0),
-                           tma_pipelined=k.get("tma_pipelined", 0))
+                           tma_pipelined=k.get("tma_pipelined", 0),
+                           single_tmem=k.get("single_tmem", 0))
     # Codegen must emit a fully branch-free kernel; a residual #if / knob
     # if-constexpr means a forgotten conversion — fail clearly here rather than
     # as an opaque nvcc error during compile.
@@ -358,7 +368,8 @@ def build_to_run(tier_dirs, invalid_sample, filters=None):
                                       overlap=k.get("overlap", 0),
                                       split_epilogue=k.get("split_epilogue", 0),
                                       l1_no_alloc=k.get("l1_no_alloc", 0),
-                                      tma_pipelined=k.get("tma_pipelined", 0))
+                                      tma_pipelined=k.get("tma_pipelined", 0),
+                                      single_tmem=k.get("single_tmem", 0))
         (valid if not warnings else invalid).append((tier, k))
     stepi = max(1, len(invalid) // max(1, invalid_sample))
     inv_sample = invalid[::stepi][:invalid_sample]
@@ -424,6 +435,9 @@ def main():
     ap.add_argument("--split-epilogue", default=None, help="comma-separated EPILOGUE_SPLIT values to sweep")
     ap.add_argument("--l1-no-alloc", default=None, help="comma-separated EPILOGUE_L1_NO_ALLOC values to sweep")
     ap.add_argument("--tma-pipelined", default=None, help="comma-separated EPILOGUE_TMA_PIPELINED values to sweep")
+    ap.add_argument("--single-tmem", default=None, help="comma-separated SINGLE_TMEM_ACCUM values to sweep")
+    ap.add_argument("--single-tmem-policy", choices=["all", "bn512-only"], default=None,
+                    help="optional production pruning: bn512-only keeps SINGLE_TMEM_ACCUM=0 for BN<512 and =1 for BN=512")
     ap.add_argument("--json", default=None)
     ap.add_argument("--compat-out", default=None,
                     help="path for a compatibility/perf matrix. If omitted, perf mode writes "
@@ -446,6 +460,8 @@ def main():
         "split_epilogue": parse_int_csv(args.split_epilogue),
         "l1_no_alloc": parse_int_csv(args.l1_no_alloc),
         "tma_pipelined": parse_int_csv(args.tma_pipelined),
+        "single_tmem": parse_int_csv(args.single_tmem),
+        "single_tmem_policy": args.single_tmem_policy,
     }
     filters = {k: v for k, v in filters.items() if v is not None}
     to_run, n_valid, n_invalid, n_sample = build_to_run(tier_dirs, args.invalid_sample, filters)
@@ -539,6 +555,8 @@ def main():
             ("--persistent", args.persistent), ("--overlap", args.overlap),
             ("--split-epilogue", args.split_epilogue), ("--l1-no-alloc", args.l1_no_alloc),
             ("--tma-pipelined", args.tma_pipelined),
+            ("--single-tmem", args.single_tmem),
+            ("--single-tmem-policy", args.single_tmem_policy),
         ):
             if val is not None:
                 cmd += [flag, val]
@@ -620,7 +638,8 @@ def main():
                 ratio_msg = f" ({ratio:.0%} cuBLAS)" if ratio is not None else ""
                 print(f"  best {label:32}: {tf:.0f} TFLOPS{ratio_msg}  "
                       f"bn{best['bn']} ns{best['ns']} gsm{best['gsm']} nw{best['nw']} "
-                      f"pers{best.get('persistent',0)} tma{best.get('tma_pipelined',0)}")
+                      f"pers{best.get('persistent',0)} tma{best.get('tma_pipelined',0)} "
+                      f"st{best.get('single_tmem',0)}")
 
     if args.json:
         pathlib.Path(args.json).write_text(json.dumps(ordered, indent=2))
@@ -650,6 +669,7 @@ def main():
                               "split_epilogue": r.get("split_epilogue", 0),
                               "l1_no_alloc": r.get("l1_no_alloc", 0),
                               "tma_pipelined": r.get("tma_pipelined", 0),
+                              "single_tmem": r.get("single_tmem", 0),
                               "correct": bool(r["correct"]), "perf": perf})
         matrix = {
             "generated_by": "webui/tests/gpu_codegen_driver.py",
