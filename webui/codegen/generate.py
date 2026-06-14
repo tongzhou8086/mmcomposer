@@ -66,6 +66,7 @@ def generate_host(config: dict) -> str:
         f"EPILOGUE_SPLIT={config['EPILOGUE_SPLIT']} "
         f"EPILOGUE_L1_NO_ALLOC={config['EPILOGUE_L1_NO_ALLOC']} "
         f"EPILOGUE_TMA_PIPELINED={config['EPILOGUE_TMA_PIPELINED']} "
+        f"TMA_STORE_STAGES={config['TMA_STORE_STAGES']} "
         f"SINGLE_TMEM_ACCUM={config['SINGLE_TMEM_ACCUM']}\n"
         "\n"
         "Run with:  python <this file>.py   (kernel.cu must sit alongside it)\n"

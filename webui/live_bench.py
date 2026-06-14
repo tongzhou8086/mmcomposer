@@ -41,6 +41,7 @@ FILTER_CLI = (
     ("split_epilogue", "--split-epilogue"),
     ("l1_no_alloc", "--l1-no-alloc"),
     ("tma_pipelined", "--tma-pipelined"),
+    ("tma_store_stages", "--tma-store-stages"),
     ("single_tmem", "--single-tmem"),
     ("single_tmem_policy", "--single-tmem-policy"),
 )
@@ -62,10 +63,13 @@ def _sig(tier, knobs, M, N, K) -> str:
 def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900) -> dict:
     """Render → srun(compile+run+cuBLAS) → parsed result dict.
 
-    knobs: {bm,bn,bk,ns,gsm,nw,persistent,ld_width,overlap,split_epilogue,l1_no_alloc,tma_pipelined,single_tmem}.
+    knobs: {bm,bn,bk,ns,gsm,nw,persistent,ld_width,overlap,split_epilogue,l1_no_alloc,tma_pipelined,tma_store_stages,single_tmem}.
     Returns a dict with
     ok/tflops/cublas_tflops/vs_cublas/rel_err/us (+ error/stderr on failure).
     """
+    knobs = dict(knobs)
+    knobs["tma_store_stages"] = mc.normalize_tma_store_stages(
+        knobs.get("tma_pipelined", 0), knobs.get("tma_store_stages", 2))
     SCRATCH.mkdir(parents=True, exist_ok=True)
     d = SCRATCH / _sig(tier, knobs, M, N, K)
     d.mkdir(exist_ok=True)
@@ -80,6 +84,7 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
         split_epilogue=knobs.get("split_epilogue", 0),
         l1_no_alloc=knobs.get("l1_no_alloc", 0),
         tma_pipelined=knobs.get("tma_pipelined", 0),
+        tma_store_stages=knobs.get("tma_store_stages", 2),
         single_tmem=knobs.get("single_tmem", 0)))
 
     py = os.environ.get("MMCOMPOSER_PY", sys.executable)
@@ -93,6 +98,7 @@ def run_live_bench(tier, knobs: dict, M: int, N: int, K: int, timeout: int = 900
            "--split_epilogue", str(knobs.get("split_epilogue", 0)),
            "--l1_no_alloc", str(knobs.get("l1_no_alloc", 0)),
            "--tma_pipelined", str(knobs.get("tma_pipelined", 0)),
+           "--tma_store_stages", str(knobs.get("tma_store_stages", 2)),
            "--single_tmem", str(knobs.get("single_tmem", 0)),
            "-M", str(M), "-N", str(N), "-K", str(K)]
 
@@ -199,6 +205,7 @@ def _rank_matrix(out_matrix, M, N, K) -> dict:
                             "split_epilogue": e.get("split_epilogue", 0),
                             "l1_no_alloc": e.get("l1_no_alloc", 0),
                             "tma_pipelined": e.get("tma_pipelined", 0),
+                            "tma_store_stages": e.get("tma_store_stages", 2),
                             "single_tmem": e.get("single_tmem", 0),
                             "tflops": p["tflops"], "vs_cublas": p.get("vs_cublas"),
                             "rel_err": p.get("rel_err")})
@@ -345,6 +352,7 @@ def autotune_partial(job) -> dict:
                                 "split_epilogue": e.get("split_epilogue", 0),
                                 "l1_no_alloc": e.get("l1_no_alloc", 0),
                                 "tma_pipelined": e.get("tma_pipelined", 0),
+                                "tma_store_stages": e.get("tma_store_stages", 2),
                                 "single_tmem": e.get("single_tmem", 0),
                                 "tflops": tf, "rel_err": p.get("rel_err"),
                                 "vs_cublas": (tf / cub) if cub else None})

@@ -64,6 +64,8 @@ def main():
         tag = f"{tier['dir']}_bn{bn}_ns{ns}_gsm{gsm}_nw{nw}"
         if opts.get("tma_pipelined"):
             tag += "_tma"
+        if opts.get("tma_store_stages", 2) != 2:
+            tag += f"_ts{opts['tma_store_stages']}"
         if opts.get("single_tmem"):
             tag += "_stmem"
         d = SCRATCH / tag
@@ -74,6 +76,7 @@ def main():
             split_epilogue=opts.get("split_epilogue", 0),
             l1_no_alloc=opts.get("l1_no_alloc", 0),
             tma_pipelined=opts.get("tma_pipelined", 0),
+            tma_store_stages=opts.get("tma_store_stages", 2),
             single_tmem=opts.get("single_tmem", 0))
         host_src   = mc.render_host(
             tier, bm, bn, bk, ns, gsm, nw,
@@ -82,6 +85,7 @@ def main():
             split_epilogue=opts.get("split_epilogue", 0),
             l1_no_alloc=opts.get("l1_no_alloc", 0),
             tma_pipelined=opts.get("tma_pipelined", 0),
+            tma_store_stages=opts.get("tma_store_stages", 2),
             single_tmem=opts.get("single_tmem", 0))
         (d / "kernel.cu").write_text(kernel_src)
         (d / "host.py").write_text(host_src)

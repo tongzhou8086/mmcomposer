@@ -1,0 +1,83 @@
+{
+  "shape": [
+    32768,
+    4608,
+    768
+  ],
+  "config": {
+    "bm": 128,
+    "bn": 256,
+    "bk": 64,
+    "ns": 5,
+    "gsm": 1,
+    "nw": 4,
+    "persistent": 1,
+    "ld_width": 8,
+    "overlap": 1,
+    "split_epilogue": 0,
+    "l1_no_alloc": 0,
+    "tma_pipelined": 1,
+    "single_tmem": 0
+  },
+  "warmup_ms": 300,
+  "rep_ms": 200,
+  "cublas_tflops": 1355.3543252013678,
+  "cublas_samples": [
+    1373.201424104088,
+    1355.4810835174833,
+    1354.7209359210437,
+    1363.8986411341416,
+    1354.7209359210437,
+    1355.2275668852526,
+    1354.2148014337736,
+    1324.8802095567207,
+    1355.7345769252588,
+    1370.9935094307032
+  ],
+  "results": [
+    {
+      "stages": 1,
+      "shared_bytes": 181248,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1/kernel.cu",
+      "correct": true,
+      "tflops": 1323.7912868005255,
+      "vs_cublas": 0.9767123343217627,
+      "us": 175.20000040531158,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    },
+    {
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2/kernel.cu",
+      "correct": true,
+      "tflops": 1308.0233256041713,
+      "vs_cublas": 0.9650785047738978,
+      "us": 177.3120015859604,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    },
+    {
+      "stages": 3,
+      "shared_bytes": 214016,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts3/kernel.cu",
+      "correct": true,
+      "tflops": 1278.0386481775438,
+      "vs_cublas": 0.942955376622761,
+      "us": 181.47200345993042,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    },
+    {
+      "stages": 4,
+      "shared_bytes": 230400,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts4/kernel.cu",
+      "correct": true,
+      "tflops": 1265.5416840995524,
+      "vs_cublas": 0.9337349360002435,
+      "us": 183.26400220394135,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    }
+  ]
+}

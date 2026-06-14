@@ -51,6 +51,10 @@ messages so it is clear that the limitation is not necessarily fundamental.
   list.
 - In pipelined TMA-store mode, `STORE_N = 64`, so `STORE_N/8 = 8` tcgen05 load
   atoms must divide across the epilogue column warp groups.
+- `TMA_STORE_STAGES` controls how many compact `BM x STORE_N` SMEM buffers the
+  pipelined TMA-store epilogue uses.  The generator validates stages `1..4`.
+  This is a real implementation knob only when the pipelined TMA-store epilogue
+  is on; non-TMA paths keep the default value for compatibility.
 - The UI hides the epilogue tcgen05 load-width knob and currently uses
   `TCGEN05_LD_WIDTH = 8`.  Some non-TMA epilogue paths still validate 8 or 16,
   but the pipelined TMA-store branch currently emits x8 loads.
@@ -89,7 +93,8 @@ Initial guardrails:
   tile.  In the sync-fixed design, `tmem_empty[0]` is released only after all
   epilogue worker warps complete the final chunk's `tcgen05.ld`.
 - Outstanding TMA stores do not block TMEM reuse.  After the final TMEM load,
-  the old tile's data lives in registers and the two SMEM TMA-store buffers.
+  the old tile's data lives in registers and the configured SMEM TMA-store
+  buffers.
 - Shared memory for the studied config is:
 
 ```text
@@ -97,7 +102,8 @@ BN_LOCAL = 512 / 2 = 256
 A slot   = 128 * 64 * 2 = 16 KiB
 B slot   = 256 * 64 * 2 = 32 KiB
 slot     = 48 KiB
-epilogue = 2 * 128 * 64 * 2 = 32 KiB
+epilogue = TMA_STORE_STAGES * 128 * 64 * 2
+         = 32 KiB when TMA_STORE_STAGES=2
 
 NS=4: 4 * 48 KiB + 32 KiB + 1 KiB = 230400 B  fits
 NS=5: 5 * 48 KiB + 32 KiB + 1 KiB = 279552 B  does not fit
@@ -119,6 +125,11 @@ performance wins.
 Autotune may intentionally prune valid configurations.  For example, production
 timing sweeps currently prefer practical subsets such as `BN=256` and `NS>=3`
 instead of timing every valid educational combination.
+
+For `TMA_STORE_STAGES`, full/correctness coverage can exercise the valid
+`1..4` range, but production timing sweeps currently use `[1, 2]`.  The study
+results showed stages 3/4 compile and run but did not improve the tested
+matmul or fused-SwiGLU shapes.
 
 Policy filters should not be presented as correctness requirements.  If a
 combination is valid but pruned, document it as a timing-scope decision in the

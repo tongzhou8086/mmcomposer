@@ -94,11 +94,16 @@ EPILOGUE_SPLIT_OPTS = [0, 1]
 # always-on.
 EPILOGUE_L1_NO_ALLOC_OPTS = [0, 1]
 # Alternative overlapped epilogue mode: TMEM -> registers -> compact swizzled
-# SMEM buffers -> chunked, double-buffered TMA stores.  Unlike the dropped
-# simple TMA-store path, this is pipelined and can overlap store traffic with
-# subsequent epilogue chunks / tiles.  It is mutually exclusive with the staged
-# int4 modifiers (split writeback and L1 no-allocate).
+# SMEM buffers -> chunked TMA stores.  Unlike the dropped simple TMA-store
+# path, this is pipelined and can overlap store traffic with subsequent
+# epilogue chunks / tiles.  It is mutually exclusive with the staged int4
+# modifiers (split writeback and L1 no-allocate).
 EPILOGUE_TMA_PIPELINED_OPTS = [0, 1]
+# Number of compact STORE_N=64 SMEM buffers in the pipelined TMA-store
+# epilogue.  Production timing sweeps prune this to [1, 2], but the generator
+# and correctness sweep keep [1, 2, 3, 4] because higher values are valid and
+# useful for controlled experiments.
+TMA_STORE_STAGES_OPTS = [1, 2, 3, 4]
 # Reuse one TMEM accumulator buffer in the overlap pipeline.  This changes the
 # tmem_empty/tmem_full synchronization between the MMA warp and epilogue drain;
 # BN512 currently requires it as part of its guarded two-panel implementation,
@@ -164,10 +169,16 @@ def tier_for(ms_ws: bool, two_cta: bool):
 
 # ── Validation ────────────────────────────────────────────────────────
 
+def normalize_tma_store_stages(tma_pipelined=0, tma_store_stages=2) -> int:
+    """Collapse the TMA-store stage knob when the TMA epilogue is disabled."""
+    return int(tma_store_stages) if int(tma_pipelined) else 2
+
+
 def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
                     persistent=0, persistent_ok=True, shape=None, ld_width=8,
                     overlap=0, split_epilogue=0, l1_no_alloc=0,
-                    tma_pipelined=0, single_tmem=0) -> list[str]:
+                    tma_pipelined=0, tma_store_stages=2,
+                    single_tmem=0) -> list[str]:
     """Return a list of human-readable warnings; empty list = valid.
 
     ``cluster`` selects the 2-CTA geometry: each CTA owns BN/2 columns of
@@ -177,6 +188,7 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
     """
     out: list[str] = []
     cta_group = 2 if cluster else 1
+    tma_store_stages = normalize_tma_store_stages(tma_pipelined, tma_store_stages)
 
     # Shape-tiling: does this config's tile geometry tile (M, N, K) exactly?
     # Pure divisibility, known statically — mirrors the sweep's skip rule.
@@ -230,6 +242,12 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
         if l1_no_alloc:
             out.append("**Pipelined TMA-store epilogue** uses TMA stores, so "
                        "**L1 no-allocate C store** does not apply.")
+
+    if tma_store_stages not in TMA_STORE_STAGES_OPTS:
+        out.append(
+            f"**TMA store stages = {tma_store_stages}** must be one of "
+            f"{'/'.join(str(x) for x in TMA_STORE_STAGES_OPTS)}."
+        )
 
     if split_epilogue:
         if not cluster:
@@ -359,7 +377,7 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
     # Tier 3 split writeback stages one half-BN column panel at a time, reducing
     # epilogue SMEM enough to try deeper rings such as NS=5 at BN=256.
     if overlap and tma_pipelined:
-        epi = bm * 64 * 2 * 2   # STORE_N=64, TMA_STORE_STAGES=2
+        epi = bm * 64 * 2 * tma_store_stages   # STORE_N=64, TMA_STORE_STAGES buffers
     elif overlap and cluster and split_epilogue:
         epi = bm * (bn // 2 + 8) * 2
     else:
@@ -384,18 +402,21 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
 
 def knob_kwargs(bm, bn, bk, ns, gsm, nw, persistent=0, ld_width=8,
                 overlap=0, split_epilogue=0, l1_no_alloc=0,
-                tma_pipelined=0, single_tmem=0) -> dict:
+                tma_pipelined=0, tma_store_stages=2,
+                single_tmem=0) -> dict:
     """Map UI knobs to the constant names used in the source files.
 
     PERSISTENT only appears in the launcher (it's a grid choice, not a
     kernel constexpr); substitute_kernel_constexprs simply finds no match
     in kernel.cu and leaves it untouched.
     """
+    tma_store_stages = normalize_tma_store_stages(tma_pipelined, tma_store_stages)
     return {"BM": bm, "BN": bn, "BK": bk, "NS": ns, "GROUP_SIZE_M": gsm,
             "NUM_WARPS": nw, "PERSISTENT": persistent,
             "TCGEN05_LD_WIDTH": ld_width, "EPILOGUE_OVERLAP": overlap,
             "EPILOGUE_SPLIT": split_epilogue, "EPILOGUE_L1_NO_ALLOC": l1_no_alloc,
             "EPILOGUE_TMA_PIPELINED": tma_pipelined,
+            "TMA_STORE_STAGES": tma_store_stages,
             "SINGLE_TMEM_ACCUM": single_tmem}
 
 
@@ -404,12 +425,14 @@ def knob_kwargs(bm, bn, bk, ns, gsm, nw, persistent=0, ld_width=8,
 
 def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, ld_width=8,
                   overlap=0, split_epilogue=0, l1_no_alloc=0,
-                  tma_pipelined=0, single_tmem=0) -> str:
+                  tma_pipelined=0, tma_store_stages=2,
+                  single_tmem=0) -> str:
     """Return the kernel.cu specialized to this knob combo (delegates to codegen)."""
     config = knob_kwargs(bm, bn, bk, ns, gsm, nw, ld_width=ld_width,
                          overlap=overlap, split_epilogue=split_epilogue,
                          l1_no_alloc=l1_no_alloc,
                          tma_pipelined=tma_pipelined,
+                         tma_store_stages=tma_store_stages,
                          single_tmem=single_tmem)
     config["skeleton"] = tier["dir"]
     config["TWO_CTA"] = int(tier["cluster"])   # cluster tier -> the cta_group::2 #if arms
@@ -418,12 +441,14 @@ def render_kernel(tier: dict, bm, bn, bk, ns, gsm, nw, ld_width=8,
 
 def render_host(tier: dict, bm, bn, bk, ns, gsm, nw, persistent=0, ld_width=8,
                 overlap=0, split_epilogue=0, l1_no_alloc=0,
-                tma_pipelined=0, single_tmem=0) -> str:
+                tma_pipelined=0, tma_store_stages=2,
+                single_tmem=0) -> str:
     """Return a self-contained host script for this knob combo (delegates to codegen)."""
     config = knob_kwargs(bm, bn, bk, ns, gsm, nw, persistent=persistent,
                          ld_width=ld_width, overlap=overlap, split_epilogue=split_epilogue,
                          l1_no_alloc=l1_no_alloc,
                          tma_pipelined=tma_pipelined,
+                         tma_store_stages=tma_store_stages,
                          single_tmem=single_tmem)
     config["skeleton"] = tier["dir"]
     config["label"] = tier["label"]
@@ -464,7 +489,7 @@ def load_compat() -> dict:
 def _compat_index() -> dict:
     """(tier_dir, two_cta, bm, bn, bk, ns, gsm, nw, persistent,
     ld_width, overlap, split_epilogue, l1_no_alloc, tma_pipelined,
-    single_tmem) -> entry.
+    tma_store_stages, single_tmem) -> entry.
 
     two_cta is part of the key because the warp-spec single-CTA and 2-CTA
     cluster tiers share one ``tier`` dir, distinguished only by that knob."""
@@ -474,20 +499,24 @@ def _compat_index() -> dict:
              e["gsm"], e["nw"], e.get("persistent", 0),
              e.get("ld_width", 8), e.get("overlap", 0), e.get("split_epilogue", 0),
              e.get("l1_no_alloc", 0), e.get("tma_pipelined", 0),
+             e.get("tma_store_stages", 2),
              e.get("single_tmem", 0))] = e
     return idx
 
 
 def compat_status(tier_dir, bm, bn, bk, ns, gsm, nw, persistent=0,
                   ld_width=8, overlap=0, split_epilogue=0, two_cta=0,
-                  l1_no_alloc=0, tma_pipelined=0, single_tmem=0):
+                  l1_no_alloc=0, tma_pipelined=0, tma_store_stages=2,
+                  single_tmem=0):
     """Return ('verified'|'failed'|'unknown', entry|None) for a combo.
 
     'verified'/'failed' come from the empirical B200 sweep; 'unknown'
     means the combo wasn't in the swept grid (fall back to static)."""
+    tma_store_stages = normalize_tma_store_stages(tma_pipelined, tma_store_stages)
     e = _compat_index().get((tier_dir, two_cta, bm, bn, bk, ns, gsm, nw,
                              persistent, ld_width, overlap, split_epilogue,
-                             l1_no_alloc, tma_pipelined, single_tmem))
+                             l1_no_alloc, tma_pipelined, tma_store_stages,
+                             single_tmem))
     if e is None:
         return "unknown", None
     return ("verified" if e["correct"] else "failed"), e
@@ -501,12 +530,15 @@ def shape_key(M, N, K):
 
 def compat_perf(tier_dir, bm, bn, bk, ns, gsm, nw, M, N, K,
                 persistent=0, ld_width=8, overlap=0, split_epilogue=0, two_cta=0,
-                l1_no_alloc=0, tma_pipelined=0, single_tmem=0):
+                l1_no_alloc=0, tma_pipelined=0, tma_store_stages=2,
+                single_tmem=0):
     """Return the measured {rel_err, tflops, vs_cublas} for this combo at
     shape (M, N, K), or None if not in the matrix."""
+    tma_store_stages = normalize_tma_store_stages(tma_pipelined, tma_store_stages)
     e = _compat_index().get((tier_dir, two_cta, bm, bn, bk, ns, gsm, nw,
                              persistent, ld_width, overlap, split_epilogue,
-                             l1_no_alloc, tma_pipelined, single_tmem))
+                             l1_no_alloc, tma_pipelined, tma_store_stages,
+                             single_tmem))
     if e is None:
         return None
     return (e.get("perf") or {}).get(shape_key(M, N, K))
@@ -563,6 +595,7 @@ def recommended_config(shape=None):
     knobs["split_epilogue"] = best.get("split_epilogue", 0)
     knobs["l1_no_alloc"] = best.get("l1_no_alloc", 0)
     knobs["tma_pipelined"] = best.get("tma_pipelined", 0)
+    knobs["tma_store_stages"] = best.get("tma_store_stages", 2)
     knobs["single_tmem"] = best.get("single_tmem", 0)
     return {**knobs, "ms_ws": ms_ws, "two_cta": two_cta,
             "tflops": best_tf, "shape": ref}

@@ -131,6 +131,7 @@ for (M, N, K) in [(2048, 2048, 2048), (4096, 4096, 4096), (8192, 8192, 8192)]:
           f"PERSISTENT={PERSISTENT} "
           f"EPILOGUE_OVERLAP={EPILOGUE_OVERLAP} EPILOGUE_SPLIT={EPILOGUE_SPLIT}   "
           f"EPILOGUE_TMA_PIPELINED={EPILOGUE_TMA_PIPELINED}   "
+          f"TMA_STORE_STAGES={TMA_STORE_STAGES}   "
           f"SINGLE_TMEM_ACCUM={SINGLE_TMEM_ACCUM}   "
           f"{us:7.1f} us/call   "
           f"{tf:6.1f} TFLOPS")

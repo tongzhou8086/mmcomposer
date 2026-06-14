@@ -104,7 +104,7 @@ def render_leaderboard(res: dict, M: int, N: int, K: int, *, top: int,
 
     hdr = (f"{'#':>2}  {'TFLOPS':>7}  {'%cuBLAS':>7}  {'WS':>3} {'2CTA':>4}  "
            f"{'BN':>3} {'NS':>2} {'GSM':>3} {'NW':>2}  {'PERS':>4} "
-           f"{'OV':>2} {'SPLIT':>5} {'L1NA':>4} {'TMA':>3}")
+           f"{'OV':>2} {'SPLIT':>5} {'L1NA':>4} {'TMA':>3} {'TMS':>3}")
     lines.append(hdr)
     lines.append("-" * len(hdr))
     for i, r in enumerate(rows, 1):
@@ -115,7 +115,8 @@ def render_leaderboard(res: dict, M: int, N: int, K: int, *, top: int,
                      f"{r['bn']:>3} {r['ns']:>2} {r['gsm']:>3} {r['nw']:>2}  "
                      f"{r['persistent']:>4} "
                      f"{r.get('overlap', 0):>2} {r.get('split_epilogue', 0):>5} "
-                     f"{r.get('l1_no_alloc', 0):>4} {r.get('tma_pipelined', 0):>3}")
+                     f"{r.get('l1_no_alloc', 0):>4} {r.get('tma_pipelined', 0):>3} "
+                     f"{r.get('tma_store_stages', 2):>3}")
     return "\n".join(lines) + "\n"
 
 
@@ -170,6 +171,8 @@ def main() -> int:
                     help="override EPILOGUE_L1_NO_ALLOC list")
     ap.add_argument("--tma-pipelined", dest="tma_pipelined", default=None,
                     help="override EPILOGUE_TMA_PIPELINED list")
+    ap.add_argument("--tma-store-stages", dest="tma_store_stages", default=None,
+                    help="override TMA_STORE_STAGES list")
     ap.add_argument("--single-tmem", dest="single_tmem", default=None,
                     help="override SINGLE_TMEM_ACCUM list")
     ap.add_argument("--single-tmem-policy", dest="single_tmem_policy",
@@ -199,6 +202,7 @@ def main() -> int:
         filters["bn"] = [256, 512]
         filters["ns"] = [x for x in mc.NS_OPTS if x >= 3]
         filters["two_cta"] = [1]
+        filters["tma_store_stages"] = [1, 2]
         filters["single_tmem_policy"] = "bn512-only"
     else:
         filters["single_tmem_policy"] = "all"
@@ -212,6 +216,7 @@ def main() -> int:
     with_filter_override(filters, "split_epilogue", args.split_epilogue)
     with_filter_override(filters, "l1_no_alloc", args.l1_no_alloc)
     with_filter_override(filters, "tma_pipelined", args.tma_pipelined)
+    with_filter_override(filters, "tma_store_stages", args.tma_store_stages)
     with_filter_override(filters, "single_tmem", args.single_tmem)
     if args.single_tmem_policy is not None:
         filters["single_tmem_policy"] = args.single_tmem_policy

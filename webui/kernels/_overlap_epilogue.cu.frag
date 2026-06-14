@@ -8,7 +8,8 @@
                 //   EPI_TMEM_EMPTY_ARRIVE(buf)   release the drained TMEM buffer
                 // EPILOGUE_TMA_PIPELINED picks the Paul-v6-style path:
                 // chunk BN into STORE_N=64 columns, stage each chunk into one
-                // of two compact swizzled SMEM buffers, and launch TMA stores.
+                // of TMA_STORE_STAGES compact swizzled SMEM buffers, and
+                // launch TMA stores.
                 // EPILOGUE_SPLIT (constexpr) picks the two-pass half-BN writeback,
                 // which stages one BN/2 column panel at a time (EPI_STAGE_COLS=BN/2)
                 // so the epilogue SMEM shrinks enough for an extra K-loop stage.
@@ -85,7 +86,13 @@
                             tma_commit_group();
                         }
 
+#if TMA_STORE_STAGES == 1
+                        store_stage = 0;
+#elif TMA_STORE_STAGES == 2
                         store_stage ^= 1;
+#else
+                        store_stage = (store_stage + 1) % TMA_STORE_STAGES;
+#endif
                     }
                 }
 #else

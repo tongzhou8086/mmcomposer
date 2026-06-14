@@ -15,7 +15,7 @@ import re
 # epilogue branches.
 _BRANCH_KNOBS = ("EPILOGUE_OVERLAP", "EPILOGUE_SPLIT",
                  "TCGEN05_LD_WIDTH", "LDW", "TWO_CTA", "EPILOGUE_L1_NO_ALLOC",
-                 "EPILOGUE_TMA_PIPELINED")
+                 "EPILOGUE_TMA_PIPELINED", "TMA_STORE_STAGES")
 _DIRECTIVE = re.compile(r"^\s*#\s*(if|elif|else|endif)\b")
 
 

@@ -149,6 +149,7 @@ def all_combos(tier_dirs, filters=None):
     l1_list = _opts(filters, "l1_no_alloc", mc.EPILOGUE_L1_NO_ALLOC_OPTS)
     two_cta_list = filters.get("two_cta")
     tma_filter = filters.get("tma_pipelined")
+    tma_store_stage_filter = filters.get("tma_store_stages")
     single_filter = filters.get("single_tmem")
     single_tmem_policy = filters.get("single_tmem_policy")
     # A skeleton dir may back >1 tier: the warp-spec single-CTA and 2-CTA
@@ -176,6 +177,10 @@ def all_combos(tier_dirs, filters=None):
         sp_opts = _opts(filters, "split_epilogue", sp_default)
         tma_default = mc.EPILOGUE_TMA_PIPELINED_OPTS if tier.get("persistent_ok") else [0]
         tma_opts = tma_filter if tma_filter is not None else tma_default
+        tma_store_stage_opts = (
+            tma_store_stage_filter if tma_store_stage_filter is not None
+            else mc.TMA_STORE_STAGES_OPTS
+        )
         single_default = mc.SINGLE_TMEM_ACCUM_OPTS if tier.get("persistent_ok") else [0]
         single_opts = single_filter if single_filter is not None else single_default
         for bm, bn, bk, ns, gsm, nw, pers, ldw, ov, sp, l1, tma, single_tmem in itertools.product(
@@ -188,10 +193,13 @@ def all_combos(tier_dirs, filters=None):
                     continue
                 if bn != 512 and single_tmem != 0:
                     continue
-            yield tier, dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
-                             persistent=pers, ld_width=ldw, overlap=ov,
-                             split_epilogue=sp, l1_no_alloc=l1,
-                             tma_pipelined=tma, single_tmem=single_tmem)
+            stage_opts = tma_store_stage_opts if tma else [2]
+            for tma_store_stages in stage_opts:
+                yield tier, dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
+                                 persistent=pers, ld_width=ldw, overlap=ov,
+                                 split_epilogue=sp, l1_no_alloc=l1,
+                                 tma_pipelined=tma, tma_store_stages=tma_store_stages,
+                                 single_tmem=single_tmem)
 
 
 def parse_perf_shapes(spec):
@@ -230,7 +238,7 @@ def launch_spec(tier, k, M, N, K, num_sms=None):
     b_slot = bn_local * k["bk"] * 2
     slot   = a_slot + b_slot
     if k.get("overlap", 0) and k.get("tma_pipelined", 0):
-        epi = k["bm"] * 64 * 2 * 2
+        epi = k["bm"] * 64 * 2 * k.get("tma_store_stages", 2)
     elif k.get("overlap", 0) and tier["cluster"] and k.get("split_epilogue", 0):
         epi = k["bm"] * (k["bn"] // 2 + 8) * 2
     else:
@@ -262,7 +270,8 @@ def tag_for(tier, k):
             f"_ns{k['ns']}_gsm{k['gsm']}_nw{k['nw']}"
             f"_ld{k.get('ld_width', 8)}_ov{k.get('overlap', 0)}"
             f"_sp{k.get('split_epilogue', 0)}_l1{k.get('l1_no_alloc', 0)}"
-            f"_tp{k.get('tma_pipelined', 0)}_st{k.get('single_tmem', 0)}")
+            f"_tp{k.get('tma_pipelined', 0)}_ts{k.get('tma_store_stages', 2)}"
+            f"_st{k.get('single_tmem', 0)}")
 
 
 def render_to_dir(tier, k):
@@ -275,6 +284,7 @@ def render_to_dir(tier, k):
                            split_epilogue=k.get("split_epilogue", 0),
                            l1_no_alloc=k.get("l1_no_alloc", 0),
                            tma_pipelined=k.get("tma_pipelined", 0),
+                           tma_store_stages=k.get("tma_store_stages", 2),
                            single_tmem=k.get("single_tmem", 0))
     # Codegen must emit a fully branch-free kernel; a residual #if / knob
     # if-constexpr means a forgotten conversion — fail clearly here rather than
@@ -391,6 +401,7 @@ def build_to_run(tier_dirs, invalid_sample, filters=None):
                                       split_epilogue=k.get("split_epilogue", 0),
                                       l1_no_alloc=k.get("l1_no_alloc", 0),
                                       tma_pipelined=k.get("tma_pipelined", 0),
+                                      tma_store_stages=k.get("tma_store_stages", 2),
                                       single_tmem=k.get("single_tmem", 0))
         (valid if not warnings else invalid).append((tier, k))
     stepi = max(1, len(invalid) // max(1, invalid_sample))
@@ -468,6 +479,7 @@ def main():
     ap.add_argument("--split-epilogue", default=None, help="comma-separated EPILOGUE_SPLIT values to sweep")
     ap.add_argument("--l1-no-alloc", default=None, help="comma-separated EPILOGUE_L1_NO_ALLOC values to sweep")
     ap.add_argument("--tma-pipelined", default=None, help="comma-separated EPILOGUE_TMA_PIPELINED values to sweep")
+    ap.add_argument("--tma-store-stages", default=None, help="comma-separated TMA_STORE_STAGES values to sweep")
     ap.add_argument("--single-tmem", default=None, help="comma-separated SINGLE_TMEM_ACCUM values to sweep")
     ap.add_argument("--single-tmem-policy", choices=["all", "bn512-only"], default=None,
                     help="optional production pruning: bn512-only keeps SINGLE_TMEM_ACCUM=0 for BN<512 and =1 for BN=512")
@@ -502,6 +514,7 @@ def main():
         "split_epilogue": parse_int_csv(args.split_epilogue),
         "l1_no_alloc": parse_int_csv(args.l1_no_alloc),
         "tma_pipelined": parse_int_csv(args.tma_pipelined),
+        "tma_store_stages": parse_int_csv(args.tma_store_stages),
         "single_tmem": parse_int_csv(args.single_tmem),
         "single_tmem_policy": args.single_tmem_policy,
     }
@@ -625,6 +638,7 @@ def main():
             ("--overlap", args.overlap),
             ("--split-epilogue", args.split_epilogue), ("--l1-no-alloc", args.l1_no_alloc),
             ("--tma-pipelined", args.tma_pipelined),
+            ("--tma-store-stages", args.tma_store_stages),
             ("--single-tmem", args.single_tmem),
             ("--single-tmem-policy", args.single_tmem_policy),
         ):
@@ -712,6 +726,7 @@ def main():
                 print(f"  best {label:32}: {tf:.0f} TFLOPS{ratio_msg}  "
                       f"bn{best['bn']} ns{best['ns']} gsm{best['gsm']} nw{best['nw']} "
                       f"pers{best.get('persistent',0)} tma{best.get('tma_pipelined',0)} "
+                      f"tms{best.get('tma_store_stages',2)} "
                       f"st{best.get('single_tmem',0)}")
 
     if args.json:
@@ -742,6 +757,7 @@ def main():
                               "split_epilogue": r.get("split_epilogue", 0),
                               "l1_no_alloc": r.get("l1_no_alloc", 0),
                               "tma_pipelined": r.get("tma_pipelined", 0),
+                              "tma_store_stages": r.get("tma_store_stages", 2),
                               "single_tmem": r.get("single_tmem", 0),
                               "correct": bool(r["correct"]), "perf": perf})
         matrix = {

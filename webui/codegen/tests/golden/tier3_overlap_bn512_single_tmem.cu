@@ -12,7 +12,7 @@ constexpr int NUM_WARPS    = 4;       // total warps per CTA
 constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (32-bit elems per lane)
 constexpr int EPILOGUE_OVERLAP = 1;  // 1 = persistent 2-CTA cluster + epilogue/K-loop overlap
 constexpr int EPILOGUE_SPLIT   = 0;  // 1 = split overlapped int4 writeback into two half-BN passes
-constexpr int EPILOGUE_TMA_PIPELINED = 1;  // 1 = chunked double-buffered TMA-store overlap epilogue
+constexpr int EPILOGUE_TMA_PIPELINED = 1;  // 1 = chunked staged TMA-store overlap epilogue
 constexpr int SINGLE_TMEM_ACCUM = 1;  // 1 = overlap path synchronizes epilogue drain before reusing one TMEM accumulator
 constexpr int TWO_CTA          = 1;  // 1 = 2-CTA cluster MMA (cta_group::2); 0 = single-CTA
 
@@ -25,7 +25,7 @@ constexpr int CTA_GROUP        = TWO_CTA ? 2 : 1;    // 2-CTA cluster vs single-
 constexpr int BN_LOCAL         = BN / CTA_GROUP;     // per-CTA N width of B (=BN single-CTA)
 constexpr int SWIZZLE_ROW_BYTES = 128;               // one 128B-swizzle atom row
 constexpr int STORE_N          = 64;                 // TMA-store chunk width
-constexpr int TMA_STORE_STAGES = 2;                  // double-buffered store SMEM
+constexpr int TMA_STORE_STAGES = 2;                  // TMA-store SMEM buffers
 
 // Per-stage SMEM per CTA: A = BM*BK*2 = 16 KB; B = BN_LOCAL*BK*2 = 16 KB.
 // Total 32 KB / stage / CTA — half of ch07's 48 KB / stage / CTA.
@@ -314,7 +314,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
         __shared__ uint64_t tmem_full[2];
         __shared__ uint64_t tmem_empty[2];
         // Pipelined TMA-store mode keeps the K-loop ring intact and reserves
-        // two compact 128B-swizzled SMEM buffers for chunked TMA stores.
+        // compact 128B-swizzled SMEM buffers for chunked TMA stores.
         constexpr int STORE_BUF_BYTES = BM * STORE_N * BF16_BYTES;
         const uint32_t STORE_SMEM_BASE = SMEM_BASE + NS * SLOT_BYTES;
         auto C_store = reinterpret_cast<__nv_bfloat16*>(smem + NS * SLOT_BYTES);
@@ -472,7 +472,8 @@ __device__ __forceinline__ void matmul_cluster_impl(
                 //   EPI_TMEM_EMPTY_ARRIVE(buf)   release the drained TMEM buffer
                 // EPILOGUE_TMA_PIPELINED picks the Paul-v6-style path:
                 // chunk BN into STORE_N=64 columns, stage each chunk into one
-                // of two compact swizzled SMEM buffers, and launch TMA stores.
+                // of TMA_STORE_STAGES compact swizzled SMEM buffers, and
+                // launch TMA stores.
                 // EPILOGUE_SPLIT (constexpr) picks the two-pass half-BN writeback,
                 // which stages one BN/2 column panel at a time (EPI_STAGE_COLS=BN/2)
                 // so the epilogue SMEM shrinks enough for an extra K-loop stage.

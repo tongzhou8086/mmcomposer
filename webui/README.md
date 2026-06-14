@@ -104,9 +104,9 @@ python webui/autotune.py 32768x4608x768 --top 20
 ```
 
 This uses the same render/compile/run backend in perf mode, but applies the
-production timing policy by default (`BN=256`, `NS>=3`) instead of timing every
-valid combination.  Use `--scope full` only for the expensive timed all-combo
-search.
+production timing policy by default (`BN=256/512`, `NS>=3`, `2CTA=on`,
+`TMA_STORE_STAGES=1/2`) instead of timing every valid combination.  Use
+`--scope full` only for the expensive timed all-combo search.
 
 ## Deploy (Streamlit Community Cloud)
 

@@ -1,0 +1,87 @@
+{
+  "shape": [
+    32768,
+    4608,
+    768
+  ],
+  "config": {
+    "bm": 128,
+    "bn": 256,
+    "bk": 64,
+    "ns": 5,
+    "gsm": 1,
+    "nw": 4,
+    "persistent": 1,
+    "ld_width": 8,
+    "overlap": 1,
+    "split_epilogue": 0,
+    "l1_no_alloc": 0,
+    "tma_pipelined": 1,
+    "single_tmem": 0
+  },
+  "warmup_ms": 300,
+  "rep_ms": 200,
+  "cublas_tflops": 1359.5600422435405,
+  "cublas_samples": [
+    1355.7345769252588,
+    1386.8651627831873,
+    1355.7345769252588,
+    1355.4810835174833,
+    1369.8274995733655,
+    1354.7209359210437,
+    1354.9742630244075,
+    1363.385507561822,
+    1370.6045787493642,
+    1371.382660905134
+  ],
+  "results": [
+    {
+      "stages": 1,
+      "alloc_stages": 4,
+      "shared_bytes": 230400,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1/kernel.cu",
+      "correct": true,
+      "tflops": 1324.638065670575,
+      "vs_cublas": 0.9743137665951573,
+      "us": 175.08800327777863,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    },
+    {
+      "stages": 2,
+      "alloc_stages": 4,
+      "shared_bytes": 230400,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2/kernel.cu",
+      "correct": true,
+      "tflops": 1298.6485319522778,
+      "vs_cublas": 0.9551976312934685,
+      "us": 178.5919964313507,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    },
+    {
+      "stages": 3,
+      "alloc_stages": 4,
+      "shared_bytes": 230400,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts3/kernel.cu",
+      "correct": true,
+      "tflops": 1266.205022454282,
+      "vs_cublas": 0.9313343898845362,
+      "us": 183.16799402236938,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    },
+    {
+      "stages": 4,
+      "alloc_stages": 4,
+      "shared_bytes": 230400,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts4/kernel.cu",
+      "correct": true,
+      "tflops": 1287.0030027725873,
+      "vs_cublas": 0.9466319712138496,
+      "us": 180.2079975605011,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    }
+  ]
+}

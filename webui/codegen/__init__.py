@@ -6,9 +6,10 @@ Public contract:
     generate_host(config)   -> str   # a self-contained host.py for that config
 
 `config` is the JSON-style dict the user's choices map to: the integer knobs
-(BM, BN, …, EPILOGUE_OVERLAP, EPILOGUE_SPLIT, EPILOGUE_TMA_PIPELINED) plus a `skeleton` (tier dir) and,
-for host generation, a `label`.  How fragments are spliced and `#if` branches
-are resolved is internal (see directives.py)."""
+(BM, BN, …, EPILOGUE_OVERLAP, EPILOGUE_SPLIT, EPILOGUE_TMA_PIPELINED,
+TMA_STORE_STAGES) plus a `skeleton` (tier dir) and, for host generation, a
+`label`.  How fragments are spliced and `#if` branches are resolved is internal
+(see directives.py)."""
 
 from __future__ import annotations
 

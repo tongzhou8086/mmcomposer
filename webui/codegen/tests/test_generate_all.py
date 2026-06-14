@@ -35,19 +35,24 @@ def all_valid_configs():
                 mc.EPILOGUE_OVERLAP_OPTS, mc.EPILOGUE_SPLIT_OPTS,
                 mc.EPILOGUE_L1_NO_ALLOC_OPTS, mc.EPILOGUE_TMA_PIPELINED_OPTS,
                 mc.SINGLE_TMEM_ACCUM_OPTS):
-            errs = mc.validate_config(
-                bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
-                persistent=pers, persistent_ok=tier.get("persistent_ok", False),
-                ld_width=ld, overlap=ov, split_epilogue=sp, l1_no_alloc=l1,
-                tma_pipelined=tma, single_tmem=single_tmem)
-            if errs:
-                continue
-            cfg = mc.knob_kwargs(bm, bn, bk, ns, gsm, nw, pers,
-                                 ld_width=ld, overlap=ov, split_epilogue=sp, l1_no_alloc=l1,
-                                 tma_pipelined=tma, single_tmem=single_tmem)
-            cfg["skeleton"] = tier["dir"]
-            cfg["TWO_CTA"] = int(tier["cluster"])
-            yield cfg
+            stage_opts = mc.TMA_STORE_STAGES_OPTS if tma else [2]
+            for tma_store_stages in stage_opts:
+                errs = mc.validate_config(
+                    bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
+                    persistent=pers, persistent_ok=tier.get("persistent_ok", False),
+                    ld_width=ld, overlap=ov, split_epilogue=sp, l1_no_alloc=l1,
+                    tma_pipelined=tma, tma_store_stages=tma_store_stages,
+                    single_tmem=single_tmem)
+                if errs:
+                    continue
+                cfg = mc.knob_kwargs(bm, bn, bk, ns, gsm, nw, pers,
+                                     ld_width=ld, overlap=ov, split_epilogue=sp,
+                                     l1_no_alloc=l1, tma_pipelined=tma,
+                                     tma_store_stages=tma_store_stages,
+                                     single_tmem=single_tmem)
+                cfg["skeleton"] = tier["dir"]
+                cfg["TWO_CTA"] = int(tier["cluster"])
+                yield cfg
 
 
 def _structural_issues(src: str) -> list[str]:

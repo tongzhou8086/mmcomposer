@@ -1,0 +1,72 @@
+{
+  "shape": [
+    32768,
+    4608,
+    768
+  ],
+  "config": {
+    "bm": 128,
+    "bn": 256,
+    "bk": 64,
+    "ns": 5,
+    "gsm": 1,
+    "nw": 4,
+    "persistent": 1,
+    "ld_width": 8,
+    "overlap": 1,
+    "split_epilogue": 0,
+    "l1_no_alloc": 0,
+    "tma_pipelined": 1,
+    "single_tmem": 0
+  },
+  "warmup_ms": 300,
+  "rep_ms": 200,
+  "cublas_tflops": 1371.512399148375,
+  "cublas_samples": [
+    1371.642137391616,
+    1372.68126810434,
+    1371.382660905134,
+    1372.1615060159465,
+    1371.9018330107083,
+    1360.0595277642728,
+    1324.2750439236465,
+    1371.1231617847347,
+    1371.1231617847347,
+    1371.642137391616
+  ],
+  "results": [
+    {
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2/kernel.cu",
+      "correct": true,
+      "tflops": 1293.5493913194882,
+      "vs_cublas": 0.9431554480460425,
+      "us": 179.29600179195404,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    },
+    {
+      "stages": 3,
+      "shared_bytes": 214016,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts3/kernel.cu",
+      "correct": true,
+      "tflops": 1278.7151553768667,
+      "vs_cublas": 0.9323394787906186,
+      "us": 181.37599527835846,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    },
+    {
+      "stages": 4,
+      "shared_bytes": 230400,
+      "source": "study-tma-store-stages/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts4/kernel.cu",
+      "correct": true,
+      "tflops": 1265.7627539590305,
+      "vs_cublas": 0.9228955966748763,
+      "us": 183.23199450969696,
+      "rel_err": 0.003105590062111801,
+      "error": null
+    }
+  ]
+}

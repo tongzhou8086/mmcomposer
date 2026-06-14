@@ -131,9 +131,17 @@ with st.sidebar:
     tma_pipelined = st.toggle(
         "Pipelined TMA-store epilogue", value=_default_on("tma_pipelined"),
         help="Alternative overlapped epilogue mode: drain TMEM in 64-column chunks "
-             "through two compact swizzled SMEM buffers and issue TMA stores.  "
+             "through compact swizzled SMEM buffers and issue TMA stores.  "
              "Requires Persistent grid + Epilogue overlap, and replaces split/L1 "
              "staged-store modifiers.")
+    tma_store_stages = st.selectbox(
+        "TMA store stages", mc.TMA_STORE_STAGES_OPTS,
+        index=_idx(mc.TMA_STORE_STAGES_OPTS, "tma_store_stages", 1),
+        disabled=not tma_pipelined,
+        help="Number of compact STORE_N=64 SMEM buffers in the pipelined "
+             "TMA-store epilogue.  Shape-dependent: store-only paths often "
+             "prefer 1, while fused epilogues can prefer 2; 3/4 are exposed "
+             "for controlled experiments.")
     single_tmem = st.toggle(
         "Single-TMEM accumulator sync", value=_default_on("single_tmem"),
         help="Reuse one TMEM accumulator by making the MMA warp wait until the "
@@ -158,12 +166,15 @@ with st.sidebar:
 # ── Gate on Generate; snapshot config into session_state ──────────────
 
 if generate:
+    applied_tma_store_stages = mc.normalize_tma_store_stages(
+        tma_pipelined, tma_store_stages)
     st.session_state.applied = dict(bm=bm, bn=bn, bk=bk, ns=ns, gsm=gsm, nw=nw,
                                     ms_ws=ms_ws, two_cta=two_cta,
                                     persistent=int(persistent), ld_width=int(ld_width),
                                     overlap=int(overlap), split_epilogue=int(split_epilogue),
                                     l1_no_alloc=int(l1_no_alloc),
                                     tma_pipelined=int(tma_pipelined),
+                                    tma_store_stages=applied_tma_store_stages,
                                     single_tmem=int(single_tmem), shapes_text=shapes_text)
     st.session_state.run_live = True   # fire the on-the-fly B200 bench (if live mode)
 
@@ -181,6 +192,8 @@ overlap = cfg.get("overlap", 0)
 split_epilogue = cfg.get("split_epilogue", 0)
 l1_no_alloc = cfg.get("l1_no_alloc", 0)
 tma_pipelined = cfg.get("tma_pipelined", 0)
+tma_store_stages = mc.normalize_tma_store_stages(
+    tma_pipelined, cfg.get("tma_store_stages", 2))
 single_tmem = cfg.get("single_tmem", 0)
 shapes_text = cfg["shapes_text"]
 
@@ -223,6 +236,7 @@ warnings = mc.validate_config(bm, bn, bk, ns, gsm, nw, cluster=tier["cluster"],
                               shape=shapes[0] if shapes else None, ld_width=ld_width,
                               overlap=overlap, split_epilogue=split_epilogue,
                               l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                              tma_store_stages=tma_store_stages,
                               single_tmem=single_tmem)
 if warnings:
     st.error(f"⚠️  **{len(warnings)} configuration warning(s)** — this combination won't run.  "
@@ -239,6 +253,7 @@ else:
                                           ld_width=ld_width, overlap=overlap,
                                           split_epilogue=split_epilogue, two_cta=two_cta_k,
                                           l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                                          tma_store_stages=tma_store_stages,
                                           single_tmem=single_tmem)
         if status == "verified":
             # Prefer perf at the shape the user is tuning; else the largest swept square.
@@ -247,6 +262,7 @@ else:
                                persistent=persistent, ld_width=ld_width,
                                overlap=overlap, split_epilogue=split_epilogue, two_cta=two_cta_k,
                                l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                               tma_store_stages=tma_store_stages,
                                single_tmem=single_tmem)
             ref = (em, en, ek)
             if not (p and p.get("tflops")):
@@ -257,6 +273,7 @@ else:
                                        persistent=persistent, ld_width=ld_width,
                                        overlap=overlap, split_epilogue=split_epilogue, two_cta=two_cta_k,
                                        l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                                       tma_store_stages=tma_store_stages,
                                        single_tmem=single_tmem)
             msg = f"✅ Empirically verified on B200 ({cm.get('arch', 'sm_100a')}): compiles, runs, correct."
             if p and p.get("tflops"):
@@ -278,11 +295,15 @@ else:
 kernel_src = mc.render_kernel(tier, bm, bn, bk, ns, gsm, nw,
                               ld_width=ld_width, overlap=overlap,
                               split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc,
-                              tma_pipelined=tma_pipelined, single_tmem=single_tmem)
+                              tma_pipelined=tma_pipelined,
+                              tma_store_stages=tma_store_stages,
+                              single_tmem=single_tmem)
 host_src   = mc.render_host(tier, bm, bn, bk, ns, gsm, nw,
                             persistent=persistent, ld_width=ld_width, overlap=overlap,
                             split_epilogue=split_epilogue, l1_no_alloc=l1_no_alloc,
-                            tma_pipelined=tma_pipelined, single_tmem=single_tmem)
+                            tma_pipelined=tma_pipelined,
+                            tma_store_stages=tma_store_stages,
+                            single_tmem=single_tmem)
 
 def ssh_copy_button(name, content, label):
     """One-click 'copy the heredoc to clipboard' for SSH use.
@@ -363,6 +384,7 @@ with tab_bench:
                      persistent=persistent, ld_width=ld_width,
                      overlap=overlap, split_epilogue=split_epilogue,
                      l1_no_alloc=l1_no_alloc, tma_pipelined=tma_pipelined,
+                     tma_store_stages=tma_store_stages,
                      single_tmem=single_tmem)
         sig = (tier["dir"], tuple(sorted(knobs.items())), m0, n0, k0)
         cache = st.session_state.setdefault("live_cache", {})
@@ -415,6 +437,7 @@ with tab_bench:
         at_filters = {"bn": [256, 512],
                       "ns": [x for x in mc.NS_OPTS if x >= 3],
                       "two_cta": [1],
+                      "tma_store_stages": [1, 2],
                       "single_tmem_policy": "bn512-only"} if production else {"single_tmem_policy": "all"}
         at_sig = (tuple(at_dirs), json.dumps(at_filters, sort_keys=True), m0, n0, k0)
         at_cache = st.session_state.setdefault("autotune_cache", {})
@@ -442,7 +465,9 @@ with tab_bench:
                 f"PERSISTENT={b['persistent']} "
                 f"OVERLAP={b.get('overlap', 0)} "
                 f"SPLIT={b.get('split_epilogue', 0)} L1NA={b.get('l1_no_alloc', 0)} "
-                f"TMA_PIPE={b.get('tma_pipelined', 0)} SINGLE_TMEM={b.get('single_tmem', 0)}")
+                f"TMA_PIPE={b.get('tma_pipelined', 0)} "
+                f"TMA_STAGES={b.get('tma_store_stages', 2)} "
+                f"SINGLE_TMEM={b.get('single_tmem', 0)}")
             n_res = len(at["results"])
             if live:
                 top_n = min(10, n_res)
@@ -458,6 +483,7 @@ with tab_bench:
                              "OV": r.get("overlap", 0),
                              "SPLIT": r.get("split_epilogue", 0), "L1NA": r.get("l1_no_alloc", 0),
                              "TMA": r.get("tma_pipelined", 0),
+                             "TMS": r.get("tma_store_stages", 2),
                              "STMEM": r.get("single_tmem", 0),
                              "TFLOPS": f"{r['tflops']:.0f}",
                              "vs cuBLAS": f"{r['vs_cublas']:.0%}" if r.get("vs_cublas") else "—"})
@@ -525,7 +551,9 @@ with tab_bench:
                                persistent=persistent, ld_width=ld_width,
                                overlap=overlap, split_epilogue=split_epilogue,
                                two_cta=int(tier["cluster"]), l1_no_alloc=l1_no_alloc,
-                               tma_pipelined=tma_pipelined, single_tmem=single_tmem)
+                               tma_pipelined=tma_pipelined,
+                               tma_store_stages=tma_store_stages,
+                               single_tmem=single_tmem)
             cub = mc.cublas_tflops(m, n, k)
         except Exception:
             p, cub = None, None

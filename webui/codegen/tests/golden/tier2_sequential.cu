@@ -12,7 +12,7 @@ constexpr int NUM_WARPS    = 8;       // total warps per CTA
 constexpr int TCGEN05_LD_WIDTH = 8;  // TMEM->reg epilogue load width: 8 or 16 (32-bit elems per lane)
 constexpr int EPILOGUE_OVERLAP = 0;  // 1 = persistent 2-CTA cluster + epilogue/K-loop overlap
 constexpr int EPILOGUE_SPLIT   = 0;  // 1 = split overlapped int4 writeback into two half-BN passes
-constexpr int EPILOGUE_TMA_PIPELINED = 0;  // 1 = chunked double-buffered TMA-store overlap epilogue
+constexpr int EPILOGUE_TMA_PIPELINED = 0;  // 1 = chunked staged TMA-store overlap epilogue
 constexpr int SINGLE_TMEM_ACCUM = 0;  // 1 = overlap path synchronizes epilogue drain before reusing one TMEM accumulator
 constexpr int TWO_CTA          = 0;  // 1 = 2-CTA cluster MMA (cta_group::2); 0 = single-CTA
 
@@ -25,7 +25,7 @@ constexpr int CTA_GROUP        = TWO_CTA ? 2 : 1;    // 2-CTA cluster vs single-
 constexpr int BN_LOCAL         = BN / CTA_GROUP;     // per-CTA N width of B (=BN single-CTA)
 constexpr int SWIZZLE_ROW_BYTES = 128;               // one 128B-swizzle atom row
 constexpr int STORE_N          = 64;                 // TMA-store chunk width
-constexpr int TMA_STORE_STAGES = 2;                  // double-buffered store SMEM
+constexpr int TMA_STORE_STAGES = 2;                  // TMA-store SMEM buffers
 
 // Per-stage SMEM per CTA: A = BM*BK*2 = 16 KB; B = BN_LOCAL*BK*2 = 16 KB.
 // Total 32 KB / stage / CTA — half of ch07's 48 KB / stage / CTA.

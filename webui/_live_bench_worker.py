@@ -22,6 +22,7 @@ def main():
     ap.add_argument("--split_epilogue", type=int, default=0)
     ap.add_argument("--l1_no_alloc", type=int, default=0)
     ap.add_argument("--tma_pipelined", type=int, default=0)
+    ap.add_argument("--tma_store_stages", type=int, default=2)
     ap.add_argument("--single_tmem", type=int, default=0)
     for k in ("bm", "bn", "bk", "ns", "nw"):
         ap.add_argument(f"--{k}", type=int, required=True)
@@ -48,7 +49,7 @@ def main():
         bn_local = a.bn // cta_group
         slot = a.bm * a.bk * 2 + bn_local * a.bk * 2
         if a.overlap and a.tma_pipelined:
-            epi = a.bm * 64 * 2 * 2
+            epi = a.bm * 64 * 2 * a.tma_store_stages
         elif a.overlap and a.cluster and a.split_epilogue:
             epi = a.bm * (a.bn // 2 + 8) * 2
         else:
