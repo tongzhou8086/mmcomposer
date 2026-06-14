@@ -1,0 +1,290 @@
+{
+  "shapes": [
+    [
+      32768,
+      4608,
+      768
+    ]
+  ],
+  "config": {
+    "bm": 128,
+    "bn": 256,
+    "bk": 64,
+    "ns": 5,
+    "gsm": 1,
+    "nw": 4,
+    "persistent": 1,
+    "ld_width": 8,
+    "overlap": 1,
+    "split_epilogue": 0,
+    "l1_no_alloc": 0,
+    "tma_pipelined": 1,
+    "single_tmem": 0
+  },
+  "warmup_ms": 100,
+  "rep_ms": 100,
+  "cublas_tflops": {
+    "32768x4608x768": 1198.3725809417517
+  },
+  "cublas_samples": {
+    "32768x4608x768": [
+      1278.2641060216688,
+      1198.3725809417517,
+      1161.1274070158217
+    ]
+  },
+  "results": [
+    {
+      "variant": "half-only",
+      "stages": 1,
+      "shared_bytes": 181248,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1_extrahalfonly/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1371.642137391616,
+          "vs_cublas": 1.1445873839283762,
+          "us": 169.08800601959229,
+          "rel_err": null,
+          "d_rel_err": 0.004219409282700422,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "half-only",
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2_extrahalfonly/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1379.474184930321,
+          "vs_cublas": 1.1511229536362129,
+          "us": 168.12799870967865,
+          "rel_err": null,
+          "d_rel_err": 0.004219409282700422,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "base",
+      "stages": 1,
+      "shared_bytes": 181248,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1_extrabase/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1224.6971007975285,
+          "vs_cublas": 1.0219668909940258,
+          "us": 189.37599658966064,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": null,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "base",
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2_extrabase/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1263.5560377575675,
+          "vs_cublas": 1.0543933146105453,
+          "us": 183.55199694633484,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": null,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "extra-half",
+      "stages": 1,
+      "shared_bytes": 181248,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1_extraextrahalf/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1250.044398627306,
+          "vs_cublas": 1.0431183243903557,
+          "us": 185.5359971523285,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": 0.0031645569620253164,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "extra-half",
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2_extraextrahalf/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1179.0722797064884,
+          "vs_cublas": 0.9838945737392489,
+          "us": 196.70400023460388,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": 0.0031645569620253164,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "extra-full",
+      "stages": 1,
+      "shared_bytes": 181248,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1_extraextrafull/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1062.8768602255016,
+          "vs_cublas": 0.8869335606712817,
+          "us": 218.20800006389618,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": 0.003105590062111801,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "extra-full",
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2_extraextrafull/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1082.7243919824757,
+          "vs_cublas": 0.9034956316604033,
+          "us": 214.20800685882568,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": 0.003105590062111801,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "swiglu-half",
+      "stages": 1,
+      "shared_bytes": 181248,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1_extraswigluhalf/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 547.1244268676063,
+          "vs_cublas": 0.45655619593502694,
+          "us": 423.9040017127991,
+          "rel_err": 0.005917159763313609,
+          "d_rel_err": 0.004739336492890996,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "swiglu-half",
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2_extraswigluhalf/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 600.825424935404,
+          "vs_cublas": 0.5013678003741041,
+          "us": 386.01601123809814,
+          "rel_err": 0.005917159763313609,
+          "d_rel_err": 0.004739336492890996,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "swiglu-out-fast",
+      "stages": 1,
+      "shared_bytes": 181248,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1_extraswigluoutfast/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1072.7881994012046,
+          "vs_cublas": 0.8952042265170523,
+          "us": 216.19200706481934,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": 0.004739336492890996,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "swiglu-out-fast",
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2_extraswigluoutfast/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1094.1662365902653,
+          "vs_cublas": 0.9130434507525239,
+          "us": 211.96800470352173,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": 0.004739336492890996,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "swiglu-out-fast-dual-b",
+      "stages": 1,
+      "shared_bytes": 181248,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts1_extraswigluoutfastdualb/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1073.741796148149,
+          "vs_cublas": 0.8959999696457837,
+          "us": 216.0000056028366,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": 0.004739336492890996,
+          "correct": true
+        }
+      },
+      "error": null
+    },
+    {
+      "variant": "swiglu-out-fast-dual-b",
+      "stages": 2,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_ts2_extraswigluoutfastdualb/kernel.cu",
+      "correct": true,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": 1223.8698759127012,
+          "vs_cublas": 1.0212766007637726,
+          "us": 189.5039975643158,
+          "rel_err": 0.003105590062111801,
+          "d_rel_err": 0.004739336492890996,
+          "correct": true
+        }
+      },
+      "error": null
+    }
+  ]
+}

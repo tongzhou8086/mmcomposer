@@ -1,0 +1,725 @@
+{
+  "shapes": [
+    [
+      32768,
+      4608,
+      768
+    ],
+    [
+      32768,
+      9216,
+      768
+    ],
+    [
+      32768,
+      12288,
+      768
+    ],
+    [
+      32768,
+      18432,
+      768
+    ],
+    [
+      32768,
+      24576,
+      768
+    ],
+    [
+      32768,
+      32768,
+      768
+    ]
+  ],
+  "config": {
+    "bm": 128,
+    "bn": 256,
+    "bk": 64,
+    "ns": 5,
+    "gsm": 1,
+    "nw": 4,
+    "persistent": 1,
+    "ld_width": 8,
+    "overlap": 1,
+    "split_epilogue": 0,
+    "l1_no_alloc": 0,
+    "tma_pipelined": 1,
+    "single_tmem": 0
+  },
+  "warmup_ms": 1000,
+  "rep_ms": 1000,
+  "cublas_tflops": {
+    "32768x4608x768": 1405.693775889081,
+    "32768x9216x768": 1376.91899535517,
+    "32768x12288x768": 1287.24586186729,
+    "32768x18432x768": 1354.0250101451077,
+    "32768x24576x768": 1342.3293481446567,
+    "32768x32768x768": 1333.8005272704222
+  },
+  "cublas_samples": {
+    "32768x4608x768": [
+      1405.693775889081,
+      1406.512219672887,
+      1405.421257523196,
+      1405.9665269645832,
+      1389.7904999374002,
+      1397.023403985177,
+      1405.693775889081,
+      1405.693775889081,
+      1405.693775889081,
+      1406.512219672887
+    ],
+    "32768x9216x768": [
+      1375.9387539100462,
+      1376.330657374938,
+      1384.4808492409752,
+      1376.8535833354508,
+      1380.5252208979596,
+      1380.393723216932,
+      1376.5921315703624,
+      1376.984407374889,
+      1377.1152562776183,
+      1376.8535833354508
+    ],
+    "32768x12288x768": [
+      1287.5459500698723,
+      1287.4602415410602,
+      1285.0633558142824,
+      1287.5459500698723,
+      1287.4602415410602,
+      1287.1172820143688,
+      1285.0633558142824,
+      1287.2886990094537,
+      1286.988689364079,
+      1287.2030247251262
+    ],
+    "32768x18432x768": [
+      1354.0882679968358,
+      1353.961758203436,
+      1354.2779591835122,
+      1353.961758203436,
+      1354.0250101451077,
+      1353.961758203436,
+      1354.0882679968358,
+      1354.151531759448,
+      1354.0250101451077,
+      1354.0250101451077
+    ],
+    "32768x24576x768": [
+      1337.6256040108067,
+      1347.9811113204764,
+      1346.3847221137985,
+      1337.671904568218,
+      1337.4868077675706,
+      1338.2739741755151,
+      1346.478543241439,
+      1347.9811113204764,
+      1347.1589627548055,
+      1337.5330987167308
+    ],
+    "32768x32768x768": [
+      1340.8155783297748,
+      1325.590110792631,
+      1329.8828030949433,
+      1340.3970935432092,
+      1339.8394983880994,
+      1339.7176693912318,
+      1337.718251445901,
+      1327.7586630761668,
+      1327.587679700465,
+      1325.6071303358258
+    ]
+  },
+  "results": [
+    {
+      "variant": "half-only",
+      "store_n": 128,
+      "stages": 1,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts1_extrahalfonly/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "half-only",
+      "store_n": 128,
+      "stages": 2,
+      "shared_bytes": 230400,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts2_extrahalfonly/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "base",
+      "store_n": 128,
+      "stages": 1,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts1_extrabase/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "base",
+      "store_n": 128,
+      "stages": 2,
+      "shared_bytes": 230400,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts2_extrabase/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "extra-half",
+      "store_n": 128,
+      "stages": 1,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts1_extraextrahalf/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "extra-half",
+      "store_n": 128,
+      "stages": 2,
+      "shared_bytes": 230400,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts2_extraextrahalf/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "extra-full",
+      "store_n": 128,
+      "stages": 1,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts1_extraextrafull/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "extra-full",
+      "store_n": 128,
+      "stages": 2,
+      "shared_bytes": 230400,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts2_extraextrafull/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "swiglu-out-fast",
+      "store_n": 128,
+      "stages": 1,
+      "shared_bytes": 197632,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts1_extraswigluoutfast/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    },
+    {
+      "variant": "swiglu-out-fast",
+      "store_n": 128,
+      "stages": 2,
+      "shared_bytes": 230400,
+      "source": "study-swiglu-extra-store/_scratch/tier3_cluster_swizzle_tc1_bm128_bn256_bk64_ns5_gsm1_nw4_ld8_ov1_sp0_l10_tp1_st0_sn128_ts2_extraswigluoutfast/kernel.cu",
+      "correct": false,
+      "perf": {
+        "32768x4608x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x9216x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x12288x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x18432x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x24576x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        },
+        "32768x32768x768": {
+          "tflops": null,
+          "vs_cublas": null,
+          "us": null,
+          "rel_err": null,
+          "d_rel_err": null,
+          "correct": null
+        }
+      },
+      "error": "RuntimeError: cuTensorMapEncodeTiled failed: CUresult=1"
+    }
+  ]
+}
