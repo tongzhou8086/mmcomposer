@@ -414,6 +414,7 @@ with tab_bench:
         at_dirs = WS_DIRS if production else ALL_DIRS
         at_filters = {"bn": [256, 512],
                       "ns": [x for x in mc.NS_OPTS if x >= 3],
+                      "two_cta": [1],
                       "single_tmem_policy": "bn512-only"} if production else {"single_tmem_policy": "all"}
         at_sig = (tuple(at_dirs), json.dumps(at_filters, sort_keys=True), m0, n0, k0)
         at_cache = st.session_state.setdefault("autotune_cache", {})

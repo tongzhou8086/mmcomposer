@@ -3,11 +3,11 @@
 
 Sweeps a timing-oriented subset of valid knob combinations for a shape on a
 B200 and prints the top configs by measured TFLOPS.  Same sweep+rank path as
-the webui Autotune button (`live_bench.run_autotune`), just without the live
-leaderboard — it runs to completion, then prints the ranking.
+the webui Autotune button, with a live terminal leaderboard while results
+stream into the jsonl file.
 
 Full compile/run coverage belongs to the test harness:
-    srun ... python webui/tests/gpu_codegen_driver.py --mode correctness
+    python webui/tests/gpu_codegen_driver.py --mode correctness
 
 Writes a throwaway matrix under tests/_scratch/; the committed
 `kernels/compat_matrix.json` is never touched.
@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # webui/
 
@@ -58,6 +59,83 @@ def with_filter_override(filters: dict[str, list[int]], key: str, spec: str | No
         filters[key] = vals
 
 
+def format_progress_bar(done: int, total: int | None, *, width: int = 36) -> str:
+    if total and total > 0:
+        done = min(done, total)
+        frac = done / total
+        filled = min(width, int(round(frac * width)))
+        bar = "#" * filled + "-" * (width - filled)
+        return f"[{bar}] {done}/{total} ({frac * 100:5.1f}%)"
+    return f"[{'?' * width}] {done} measured"
+
+
+def progress_lines(done: int | None, total: int | None, progress: dict | None) -> list[str]:
+    if done is None:
+        return []
+    p = progress or {}
+    phase = p.get("phase")
+    phase_done = p.get("done")
+    phase_total = p.get("total")
+    msg = p.get("message") or phase
+    if phase and phase not in {"benchmarking", "collecting", "done"}:
+        lines = [format_progress_bar(int(phase_done or 0), phase_total)]
+        lines.append(f"phase: {msg}")
+        if total:
+            lines.append(f"measured combos: {done}/{total}")
+        return lines
+    lines = [format_progress_bar(done, total)]
+    if msg and phase in {"benchmarking", "collecting", "done"}:
+        lines.append(f"phase: {msg}")
+    return lines
+
+
+def render_leaderboard(res: dict, M: int, N: int, K: int, *, top: int,
+                       title: str, done: int | None = None,
+                       total: int | None = None,
+                       progress: dict | None = None) -> str:
+    cub = res.get("cublas_tflops")
+    rows = res.get("results", [])[:top]
+    lines = [title]
+    lines.extend(progress_lines(done, total, progress))
+    lines.append(f"cuBLAS reference: {cub:.0f} TFLOPS" if cub else "cuBLAS reference: n/a")
+    lines.append(f"Top {len(rows)} of {res.get('n_combos', len(rows))} measured combos at "
+                 f"{M}x{N}x{K}, by TFLOPS:")
+    lines.append("")
+
+    hdr = (f"{'#':>2}  {'TFLOPS':>7}  {'%cuBLAS':>7}  {'WS':>3} {'2CTA':>4}  "
+           f"{'BN':>3} {'NS':>2} {'GSM':>3} {'NW':>2}  {'PERS':>4} "
+           f"{'OV':>2} {'SPLIT':>5} {'L1NA':>4} {'TMA':>3}")
+    lines.append(hdr)
+    lines.append("-" * len(hdr))
+    for i, r in enumerate(rows, 1):
+        ws  = "on" if mc.toggles_for_dir(r["tier"])[0] else "off"
+        cta = "on" if r.get("two_cta") else "off"
+        vsc = f"{r['vs_cublas'] * 100:.0f}%" if r.get("vs_cublas") else "-"
+        lines.append(f"{i:>2}  {r['tflops']:>7.0f}  {vsc:>7}  {ws:>3} {cta:>4}  "
+                     f"{r['bn']:>3} {r['ns']:>2} {r['gsm']:>3} {r['nw']:>2}  "
+                     f"{r['persistent']:>4} "
+                     f"{r.get('overlap', 0):>2} {r.get('split_epilogue', 0):>5} "
+                     f"{r.get('l1_no_alloc', 0):>4} {r.get('tma_pipelined', 0):>3}")
+    return "\n".join(lines) + "\n"
+
+
+def print_leaderboard(res: dict, M: int, N: int, K: int, *, top: int,
+                      title: str, done: int | None = None,
+                      total: int | None = None,
+                      progress: dict | None = None) -> None:
+    print(render_leaderboard(res, M, N, K, top=top, title=title,
+                             done=done, total=total, progress=progress),
+          end="", flush=True)
+
+
+def emit_live_block(block: str, state: dict, *, redraw: bool) -> None:
+    if redraw and state.get("lines"):
+        sys.stdout.write(f"\x1b[{state['lines']}F\x1b[J")
+    sys.stdout.write(block)
+    sys.stdout.flush()
+    state["lines"] = len(block.splitlines())
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Terminal autotune: sweep valid knob combos on a B200, print the top configs.")
@@ -66,11 +144,25 @@ def main() -> int:
                     help="production (default): warp-spec-on, BN=256/512, NS>=3; full: timed all-combo sweep")
     ap.add_argument("--top", type=int, default=10, help="how many top configs to print (default 10)")
     ap.add_argument("--timeout", type=int, default=3600, help="sweep timeout in seconds (default 3600)")
+    ap.add_argument("--live-interval", type=float, default=30.0,
+                    help="seconds between live leaderboard updates (default 30)")
+    ap.add_argument("--live-redraw", choices=["auto", "always", "never"], default="auto",
+                    help="update the same terminal table in place; default auto uses redraw only on a TTY")
+    ap.add_argument("--warmup-ms", type=int, default=None,
+                    help="override do_bench warmup window in ms for this run, e.g. 100")
+    ap.add_argument("--rep-ms", type=int, default=None,
+                    help="override do_bench repetition window in ms for this run, e.g. 200")
+    ap.add_argument("--cublas-samples", type=int, default=None,
+                    help="override measured cuBLAS samples; median is used, e.g. 10")
+    ap.add_argument("--cublas-warmup-samples", type=int, default=None,
+                    help="override throwaway cuBLAS samples before measured samples")
     ap.add_argument("--bn", default=None, help="override BN list, e.g. 128,256")
     ap.add_argument("--ns", default=None, help="override NS list, e.g. 3,4,5,6,7")
     ap.add_argument("--gsm", default=None, help="override GROUP_SIZE_M list")
     ap.add_argument("--nw", default=None, help="override NUM_WARPS list")
     ap.add_argument("--persistent", default=None, help="override PERSISTENT list")
+    ap.add_argument("--two-cta", dest="two_cta", default=None,
+                    help="override TWO_CTA list, e.g. 1 or 0,1")
     ap.add_argument("--overlap", default=None, help="override EPILOGUE_OVERLAP list")
     ap.add_argument("--split-epilogue", dest="split_epilogue", default=None,
                     help="override EPILOGUE_SPLIT list")
@@ -84,6 +176,14 @@ def main() -> int:
                     choices=["all", "bn512-only"], default=None,
                     help="production pruning policy; default production uses bn512-only")
     args = ap.parse_args()
+    if args.warmup_ms is not None and args.warmup_ms <= 0:
+        ap.error("--warmup-ms must be positive")
+    if args.rep_ms is not None and args.rep_ms <= 0:
+        ap.error("--rep-ms must be positive")
+    if args.cublas_samples is not None and args.cublas_samples <= 0:
+        ap.error("--cublas-samples must be positive")
+    if args.cublas_warmup_samples is not None and args.cublas_warmup_samples < 0:
+        ap.error("--cublas-warmup-samples must be non-negative")
 
     M, N, K = parse_shape(args.shape)
 
@@ -98,6 +198,7 @@ def main() -> int:
     if production:
         filters["bn"] = [256, 512]
         filters["ns"] = [x for x in mc.NS_OPTS if x >= 3]
+        filters["two_cta"] = [1]
         filters["single_tmem_policy"] = "bn512-only"
     else:
         filters["single_tmem_policy"] = "all"
@@ -106,6 +207,7 @@ def main() -> int:
     with_filter_override(filters, "gsm", args.gsm)
     with_filter_override(filters, "nw", args.nw)
     with_filter_override(filters, "persistent", args.persistent)
+    with_filter_override(filters, "two_cta", args.two_cta)
     with_filter_override(filters, "overlap", args.overlap)
     with_filter_override(filters, "split_epilogue", args.split_epilogue)
     with_filter_override(filters, "l1_no_alloc", args.l1_no_alloc)
@@ -115,39 +217,83 @@ def main() -> int:
         filters["single_tmem_policy"] = args.single_tmem_policy
 
     print(f"# autotune {M}x{N}x{K}  scope={args.scope}  "
-          f"(timing on a B200 via srun — this can take a while)", flush=True)
+          f"(timing on the current GPU; this can take a while)", flush=True)
+    if args.warmup_ms is not None or args.rep_ms is not None:
+        warmup = args.warmup_ms if args.warmup_ms is not None else "driver-default"
+        rep = args.rep_ms if args.rep_ms is not None else "driver-default"
+        print(f"# do_bench override: warmup={warmup}ms rep={rep}ms", flush=True)
+    if args.cublas_samples is not None or args.cublas_warmup_samples is not None:
+        warmup_samples = (args.cublas_warmup_samples if args.cublas_warmup_samples is not None
+                          else "driver-default")
+        samples = args.cublas_samples if args.cublas_samples is not None else "driver-default"
+        print(f"# cuBLAS sample override: warmup={warmup_samples} measured={samples}", flush=True)
     if filters:
         print(f"# filters={filters}", flush=True)
 
-    res = lb.run_autotune(tier_dirs, M, N, K, filters=filters, timeout=args.timeout)
+    job = lb.autotune_start(tier_dirs, M, N, K, filters=filters, use_srun=False,
+                            bench_warmup_ms=args.warmup_ms,
+                            bench_rep_ms=args.rep_ms,
+                            cublas_samples=args.cublas_samples,
+                            cublas_warmup_samples=args.cublas_warmup_samples)
+    started = time.monotonic()
+    last_print = 0.0
+    last_done = -1
+    last_total = None
+    last_progress = None
+    live_state = {"lines": 0}
+    redraw = args.live_redraw == "always" or (
+        args.live_redraw == "auto" and sys.stdout.isatty()
+    )
+    try:
+        while True:
+            done, total, finished = lb.autotune_poll(job)
+            progress = lb.autotune_progress(job)
+            now = time.monotonic()
+            timed_out = args.timeout and (now - started) > args.timeout
+            progress_changed = done != last_done or total != last_total or progress != last_progress
+            should_print = finished or (progress_changed and (now - last_print) >= args.live_interval)
+            if should_print:
+                part = lb.autotune_partial(job)
+                title = "# live autotune leaderboard" if part.get("ok") else "# live autotune startup"
+                block = render_leaderboard(part, M, N, K, top=args.top, title=title,
+                                           done=done, total=total, progress=progress)
+                emit_live_block(block, live_state, redraw=redraw)
+                last_print = now
+                last_done = done
+                last_total = total
+                last_progress = progress
+            if finished:
+                break
+            if timed_out:
+                try:
+                    job["proc"].terminate()
+                except Exception:
+                    pass
+                print(f"\nFAILED: autotune sweep timed out after {args.timeout}s")
+                return 1
+            time.sleep(max(1.0, min(args.live_interval, 5.0)))
+    except KeyboardInterrupt:
+        try:
+            job["proc"].terminate()
+        except Exception:
+            pass
+        print("\nInterrupted: autotune subprocess terminated.")
+        return 130
+
+    res = lb.autotune_collect(job)
 
     if not res.get("ok"):
+        if redraw and live_state.get("lines"):
+            sys.stdout.write(f"\x1b[{live_state['lines']}F\x1b[J")
         print(f"\nFAILED: {res.get('error')}")
         if res.get("stderr"):
             print("--- driver stderr (tail) ---")
             print(res["stderr"])
         return 1
 
-    cub = res.get("cublas_tflops")
-    rows = res["results"][:args.top]
-    print(f"\ncuBLAS reference: {cub:.0f} TFLOPS" if cub else "\ncuBLAS reference: n/a")
-    print(f"Top {len(rows)} of {res['n_combos']} valid combos at {M}x{N}x{K}, by TFLOPS:\n")
-
-    hdr = (f"{'#':>2}  {'TFLOPS':>7}  {'%cuBLAS':>7}  {'WS':>3} {'2CTA':>4}  "
-           f"{'BN':>3} {'NS':>2} {'GSM':>3} {'NW':>2}  {'PERS':>4} "
-           f"{'LDW':>3} {'OV':>2} {'SPLIT':>5} {'L1NA':>4} {'TMA':>3} {'ST':>2}")
-    print(hdr)
-    print("-" * len(hdr))
-    for i, r in enumerate(rows, 1):
-        ws  = "on" if mc.toggles_for_dir(r["tier"])[0] else "off"
-        cta = "on" if r.get("two_cta") else "off"
-        vsc = f"{r['vs_cublas'] * 100:.0f}%" if r.get("vs_cublas") else "-"
-        print(f"{i:>2}  {r['tflops']:>7.0f}  {vsc:>7}  {ws:>3} {cta:>4}  "
-              f"{r['bn']:>3} {r['ns']:>2} {r['gsm']:>3} {r['nw']:>2}  "
-              f"{r['persistent']:>4} {r.get('ld_width', 8):>3} "
-              f"{r.get('overlap', 0):>2} {r.get('split_epilogue', 0):>5} "
-              f"{r.get('l1_no_alloc', 0):>4} {r.get('tma_pipelined', 0):>3} "
-              f"{r.get('single_tmem', 0):>2}")
+    final_block = render_leaderboard(res, M, N, K, top=args.top,
+                                     title="# final autotune leaderboard")
+    emit_live_block(final_block, live_state, redraw=redraw)
     return 0
 
 

@@ -36,6 +36,7 @@ FILTER_CLI = (
     ("gsm", "--gsm"),
     ("nw", "--nw"),
     ("persistent", "--persistent"),
+    ("two_cta", "--two-cta"),
     ("overlap", "--overlap"),
     ("split_epilogue", "--split-epilogue"),
     ("l1_no_alloc", "--l1-no-alloc"),
@@ -142,12 +143,28 @@ def _filter_sig(filters):
     return json.dumps(filters, sort_keys=True, separators=(",", ":"))
 
 
-def _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters=None, *, mode="perf"):
+def _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters=None, *, mode="perf",
+                  use_srun: bool = True, bench_warmup_ms: int | None = None,
+                  bench_rep_ms: int | None = None,
+                  cublas_samples: int | None = None,
+                  cublas_warmup_samples: int | None = None):
     py = os.environ.get("MMCOMPOSER_PY", sys.executable)
-    srun_args = shlex.split(os.environ.get("MMCOMPOSER_AUTOTUNE_SRUN_ARGS", DEFAULT_AUTOTUNE_SRUN_ARGS))
-    cmd = ["srun", *srun_args, py, str(DRIVER), "--perf-shapes", f"{M}x{N}x{K}",
-           "--tiers", ",".join(tier_dirs), "--invalid-sample", "0",
-           "--mode", mode, "--compat-out", str(out_matrix)]
+    driver_cmd = [py, str(DRIVER), "--perf-shapes", f"{M}x{N}x{K}",
+                  "--tiers", ",".join(tier_dirs), "--invalid-sample", "0",
+                  "--mode", mode, "--compat-out", str(out_matrix)]
+    if bench_warmup_ms is not None:
+        driver_cmd += ["--bench-warmup-ms", str(bench_warmup_ms)]
+    if bench_rep_ms is not None:
+        driver_cmd += ["--bench-rep-ms", str(bench_rep_ms)]
+    if cublas_warmup_samples is not None:
+        driver_cmd += ["--cublas-warmup-samples", str(cublas_warmup_samples)]
+    if cublas_samples is not None:
+        driver_cmd += ["--cublas-samples", str(cublas_samples)]
+    if use_srun:
+        srun_args = shlex.split(os.environ.get("MMCOMPOSER_AUTOTUNE_SRUN_ARGS", DEFAULT_AUTOTUNE_SRUN_ARGS))
+        cmd = ["srun", *srun_args, *driver_cmd]
+    else:
+        cmd = driver_cmd
     cmd += _filter_args(filters)
     return cmd
 
@@ -192,7 +209,11 @@ def _rank_matrix(out_matrix, M, N, K) -> dict:
 
 
 def run_autotune(tier_dirs, M: int, N: int, K: int, filters=None, timeout: int = 3000,
-                 bn_opts=None) -> dict:
+                 bn_opts=None, use_srun: bool = True,
+                 bench_warmup_ms: int | None = None,
+                 bench_rep_ms: int | None = None,
+                 cublas_samples: int | None = None,
+                 cublas_warmup_samples: int | None = None) -> dict:
     """Blocking timing sweep: srun the driver in perf mode, then rank results.
 
     Writes a TEMP matrix (committed one untouched).  ``bn_opts`` is accepted
@@ -204,13 +225,19 @@ def run_autotune(tier_dirs, M: int, N: int, K: int, filters=None, timeout: int =
     jsonl = pathlib.Path(str(out_matrix)[:-5] + ".jsonl")
     n_valid = pathlib.Path(str(jsonl) + ".nvalid")
     cublas = pathlib.Path(str(jsonl) + ".cublas")
-    for f in (out_matrix, jsonl, n_valid, cublas):
+    progress = pathlib.Path(str(jsonl) + ".progress")
+    for f in (out_matrix, jsonl, n_valid, cublas, progress):
         try:
             f.unlink()
         except FileNotFoundError:
             pass
     try:
-        cmd = _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters, mode="perf") + ["--jsonl", str(jsonl)]
+        cmd = _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters,
+                            mode="perf", use_srun=use_srun,
+                            bench_warmup_ms=bench_warmup_ms,
+                            bench_rep_ms=bench_rep_ms,
+                            cublas_samples=cublas_samples,
+                            cublas_warmup_samples=cublas_warmup_samples) + ["--jsonl", str(jsonl)]
         proc = subprocess.run(cmd,
                               capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -221,7 +248,11 @@ def run_autotune(tier_dirs, M: int, N: int, K: int, filters=None, timeout: int =
     return res
 
 
-def autotune_start(tier_dirs, M, N, K, filters=None, bn_opts=None) -> dict:
+def autotune_start(tier_dirs, M, N, K, filters=None, bn_opts=None,
+                   use_srun: bool = True, bench_warmup_ms: int | None = None,
+                   bench_rep_ms: int | None = None,
+                   cublas_samples: int | None = None,
+                   cublas_warmup_samples: int | None = None) -> dict:
     """Launch the sweep in the BACKGROUND (non-blocking) for a UI progress bar.
     Uses a per-run jsonl (+ .nvalid sibling) so concurrent sweeps don't clobber
     each other's progress.  Returns a job dict for autotune_poll/collect."""
@@ -231,16 +262,25 @@ def autotune_start(tier_dirs, M, N, K, filters=None, bn_opts=None) -> dict:
     jsonl = pathlib.Path(str(out_matrix)[:-5] + ".jsonl")   # autotune_<tag>.jsonl
     n_valid = pathlib.Path(str(jsonl) + ".nvalid")
     cublas = pathlib.Path(str(jsonl) + ".cublas")
-    for f in (out_matrix, jsonl, n_valid, cublas):           # clean slate for fresh progress
+    progress = pathlib.Path(str(jsonl) + ".progress")
+    for f in (out_matrix, jsonl, n_valid, cublas, progress): # clean slate for fresh progress
         try:
             f.unlink()
         except FileNotFoundError:
             pass
-    cmd = _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters, mode="perf") + ["--jsonl", str(jsonl)]
+    cmd = _autotune_cmd(tier_dirs, M, N, K, out_matrix, filters,
+                        mode="perf", use_srun=use_srun,
+                        bench_warmup_ms=bench_warmup_ms,
+                        bench_rep_ms=bench_rep_ms,
+                        cublas_samples=cublas_samples,
+                        cublas_warmup_samples=cublas_warmup_samples) + ["--jsonl", str(jsonl)]
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     return {"proc": proc, "out_matrix": str(out_matrix),
-            "jsonl": str(jsonl), "n_valid": str(n_valid), "M": M, "N": N, "K": K,
-            "filters": filters}
+            "jsonl": str(jsonl), "n_valid": str(n_valid),
+            "progress": str(progress), "M": M, "N": N, "K": K,
+            "filters": filters, "bench_warmup_ms": bench_warmup_ms,
+            "bench_rep_ms": bench_rep_ms, "cublas_samples": cublas_samples,
+            "cublas_warmup_samples": cublas_warmup_samples}
 
 
 def autotune_poll(job) -> tuple:
@@ -259,6 +299,14 @@ def autotune_poll(job) -> tuple:
     except FileNotFoundError:
         pass
     return done, total, finished
+
+
+def autotune_progress(job) -> dict:
+    """Return best-effort driver phase progress from the per-run sidecar."""
+    try:
+        return json.loads(pathlib.Path(job["progress"]).read_text())
+    except Exception:
+        return {}
 
 
 def autotune_partial(job) -> dict:

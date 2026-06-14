@@ -82,6 +82,26 @@ CBLAS_WARMUP_SAMPLES = int(os.environ.get("MMCOMPOSER_CUBLAS_WARMUP_SAMPLES", "1
 CBLAS_MEASURE_SAMPLES = int(os.environ.get("MMCOMPOSER_CUBLAS_MEASURE_SAMPLES", "3"))
 
 
+def publish_progress(jsonl_path, phase: str, done: int = 0, total: int | None = None,
+                     message: str | None = None) -> None:
+    """Best-effort live progress sidecar for UI/terminal sweep frontends."""
+    if not jsonl_path:
+        return
+    data = {"phase": phase, "done": done}
+    if total is not None:
+        data["total"] = total
+    if message:
+        data["message"] = message
+    path = jsonl_path + ".progress"
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
 def parse_int_csv(spec):
     """Parse a comma-separated integer list, or return None for no filter."""
     if spec is None:
@@ -127,6 +147,7 @@ def all_combos(tier_dirs, filters=None):
     nw_list = _opts(filters, "nw", mc.NW_OPTS)
     ld_list = _opts(filters, "ld_width", mc.TCGEN05_LD_WIDTH_OPTS)
     l1_list = _opts(filters, "l1_no_alloc", mc.EPILOGUE_L1_NO_ALLOC_OPTS)
+    two_cta_list = filters.get("two_cta")
     tma_filter = filters.get("tma_pipelined")
     single_filter = filters.get("single_tmem")
     single_tmem_policy = filters.get("single_tmem_policy")
@@ -137,7 +158,8 @@ def all_combos(tier_dirs, filters=None):
     for _key, t in mc.TIER_MAP.items():
         if t:
             keys_for_dir.setdefault(t["dir"], []).append(_key)
-    tier_keys = [k for tdir in tier_dirs for k in keys_for_dir[tdir]]
+    tier_keys = [k for tdir in tier_dirs for k in keys_for_dir[tdir]
+                 if two_cta_list is None or int(k[1]) in two_cta_list]
     for key in tier_keys:
         tier = mc.TIER_MAP[key]
         # PERSISTENT is a launch knob (same cubin) — only the persistent-
@@ -415,11 +437,21 @@ def worker_loop(to_run, start, arch, shape_list, jsonl_path, *, bench_valid: boo
 
 
 def main():
+    global BENCH_WARMUP_MS, BENCH_REP_MS, CBLAS_WARMUP_SAMPLES, CBLAS_MEASURE_SAMPLES
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--perf-shapes", default="4096,8192",
                     help="comma-separated square shapes (M=N=K) to check + benchmark")
     ap.add_argument("--mode", choices=["correctness", "perf"], default="correctness",
                     help="correctness: compile+launch+check only; perf: also time valid combos")
+    ap.add_argument("--bench-warmup-ms", type=int, default=BENCH_WARMUP_MS,
+                    help="do_bench warmup window in ms for cuBLAS and generated kernels")
+    ap.add_argument("--bench-rep-ms", type=int, default=BENCH_REP_MS,
+                    help="do_bench repetition window in ms for cuBLAS and generated kernels")
+    ap.add_argument("--cublas-warmup-samples", type=int, default=CBLAS_WARMUP_SAMPLES,
+                    help="number of throwaway cuBLAS do_bench samples before measured samples")
+    ap.add_argument("--cublas-samples", type=int, default=CBLAS_MEASURE_SAMPLES,
+                    help="number of measured cuBLAS do_bench samples; median is used")
     # tier3_cluster_swizzle backs BOTH warp-spec arms (single-CTA + 2-CTA) via
     # the TWO_CTA knob; the sweep expands it to both arms automatically.
     ap.add_argument("--tiers", default="tier1_baseline,tier3_cluster_swizzle")
@@ -431,6 +463,7 @@ def main():
     ap.add_argument("--gsm", default=None, help="comma-separated GROUP_SIZE_M values to sweep")
     ap.add_argument("--nw", default=None, help="comma-separated NUM_WARPS values to sweep")
     ap.add_argument("--persistent", default=None, help="comma-separated PERSISTENT values to sweep")
+    ap.add_argument("--two-cta", default=None, help="comma-separated TWO_CTA values to sweep")
     ap.add_argument("--overlap", default=None, help="comma-separated EPILOGUE_OVERLAP values to sweep")
     ap.add_argument("--split-epilogue", default=None, help="comma-separated EPILOGUE_SPLIT values to sweep")
     ap.add_argument("--l1-no-alloc", default=None, help="comma-separated EPILOGUE_L1_NO_ALLOC values to sweep")
@@ -446,6 +479,14 @@ def main():
                     help="internal: run the isolated launch worker from this index")
     ap.add_argument("--jsonl", default=None, help="internal: worker append path")
     args = ap.parse_args()
+    if args.bench_warmup_ms <= 0 or args.bench_rep_ms <= 0:
+        ap.error("--bench-warmup-ms and --bench-rep-ms must be positive")
+    if args.cublas_warmup_samples < 0 or args.cublas_samples <= 0:
+        ap.error("--cublas-warmup-samples must be non-negative and --cublas-samples must be positive")
+    BENCH_WARMUP_MS = args.bench_warmup_ms
+    BENCH_REP_MS = args.bench_rep_ms
+    CBLAS_WARMUP_SAMPLES = args.cublas_warmup_samples
+    CBLAS_MEASURE_SAMPLES = args.cublas_samples
 
     shape_list = parse_perf_shapes(args.perf_shapes)
     tier_dirs = args.tiers.split(",")
@@ -456,6 +497,7 @@ def main():
         "gsm": parse_int_csv(args.gsm),
         "nw": parse_int_csv(args.nw),
         "persistent": parse_int_csv(args.persistent),
+        "two_cta": parse_int_csv(args.two_cta),
         "overlap": parse_int_csv(args.overlap),
         "split_epilogue": parse_int_csv(args.split_epilogue),
         "l1_no_alloc": parse_int_csv(args.l1_no_alloc),
@@ -478,7 +520,11 @@ def main():
                 _f.write(str(n_valid))
         except Exception:
             pass
+        publish_progress(jsonl, "enumerated", 0, n_valid,
+                         f"enumerated {n_valid} valid combos")
 
+    if args.launch_worker is None:
+        publish_progress(jsonl, "cuda-init", 0, None, "initializing CUDA")
     load_cuda_runtime()
     device, _ = rt.init_cuda()
     arch = rt.compute_arch(device)
@@ -492,6 +538,8 @@ def main():
         return  # unreachable (worker_loop exits)
 
     print(f"# mode={args.mode} | perf shapes {[s[0] for s in shape_list]} | arch={arch} | tiers={tier_dirs}")
+    print(f"# do_bench warmup={BENCH_WARMUP_MS}ms rep={BENCH_REP_MS}ms")
+    print(f"# cuBLAS samples: warmup={CBLAS_WARMUP_SAMPLES} measured={CBLAS_MEASURE_SAMPLES} median")
     if filters:
         print(f"# filters={filters}")
     print(f"# {n_valid} valid combos to run, {n_invalid} invalid ({n_sample} sampled)")
@@ -499,7 +547,9 @@ def main():
     # ── cuBLAS reference TFLOPS per shape ───────────────────────────
     cublas_tflops = {}
     if args.mode == "perf":
-        for (M, N, K) in shape_list:
+        publish_progress(jsonl, "cublas", 0, len(shape_list),
+                         "measuring cuBLAS reference")
+        for si, (M, N, K) in enumerate(shape_list, 1):
             torch.manual_seed(0)
             A = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")
             B = torch.randn(K, N, dtype=torch.bfloat16, device="cuda")
@@ -510,6 +560,8 @@ def main():
                   f"(median of {len(samples)} after {CBLAS_WARMUP_SAMPLES} throwaway; "
                   f"samples [{sample_msg}])", flush=True)
             del A, B
+            publish_progress(jsonl, "cublas", si, len(shape_list),
+                             "measuring cuBLAS reference")
         torch.cuda.empty_cache()
     else:
         cublas_tflops = {mc.shape_key(M, N, K): None for (M, N, K) in shape_list}
@@ -524,18 +576,29 @@ def main():
         pass
 
     # ── Phase 1: render + parallel nvcc compile (CPU-bound) ──────────
+    publish_progress(jsonl, "rendering", 0, len(to_run), "rendering kernel sources")
     for (t, k, _) in to_run:
         render_to_dir(t, k)
+    publish_progress(jsonl, "rendering", len(to_run), len(to_run), "rendering kernel sources")
     # PERSISTENT isn't in tag_for (same cubin both ways), so dedup the
     # compile jobs — persistent on/off variants share one kernel.cu.
     jobs = sorted({(str(SCRATCH / tag_for(t, k) / "kernel.cu"), arch) for (t, k, _) in to_run})
     workers = min(32, (os.cpu_count() or 8))
     print(f"# compiling {len(jobs)} kernels with {workers} workers ...", flush=True)
+    publish_progress(jsonl, "compiling", 0, len(jobs),
+                     f"compiling {len(jobs)} kernels with {workers} workers")
     n_comp_ok = 0
+    n_comp_done = 0
     with ProcessPoolExecutor(max_workers=workers) as ex:
         for src_path, rc, stderr in ex.map(_compile_worker, jobs):
+            n_comp_done += 1
             n_comp_ok += (rc == 0)
+            if n_comp_done == len(jobs) or n_comp_done % 8 == 0:
+                publish_progress(jsonl, "compiling", n_comp_done, len(jobs),
+                                 f"compiled OK: {n_comp_ok}/{n_comp_done}")
     print(f"# compiled OK: {n_comp_ok}/{len(jobs)}", flush=True)
+    publish_progress(jsonl, "compiling", len(jobs), len(jobs),
+                     f"compiled OK: {n_comp_ok}/{len(jobs)}")
 
     # ── Phase 2: supervised isolated launches ───────────────────────
     # A fresh worker process runs until it hits a CUDA fault (sticky →
@@ -544,15 +607,22 @@ def main():
         os.remove(jsonl)
     next_idx = 0
     n_spawns = 0
+    publish_progress(jsonl, "benchmarking", 0, len(to_run),
+                     "benchmarking generated kernels")
     while next_idx < len(to_run):
         n_spawns += 1
         cmd = [sys.executable, os.path.abspath(__file__),
                "--launch-worker", str(next_idx), "--jsonl", jsonl,
                "--perf-shapes", args.perf_shapes, "--tiers", args.tiers,
-               "--invalid-sample", str(args.invalid_sample), "--mode", args.mode]
+               "--invalid-sample", str(args.invalid_sample), "--mode", args.mode,
+               "--bench-warmup-ms", str(args.bench_warmup_ms),
+               "--bench-rep-ms", str(args.bench_rep_ms),
+               "--cublas-warmup-samples", str(args.cublas_warmup_samples),
+               "--cublas-samples", str(args.cublas_samples)]
         for flag, val in (
             ("--bn", args.bn), ("--ns", args.ns), ("--gsm", args.gsm), ("--nw", args.nw),
-            ("--persistent", args.persistent), ("--overlap", args.overlap),
+            ("--persistent", args.persistent), ("--two-cta", args.two_cta),
+            ("--overlap", args.overlap),
             ("--split-epilogue", args.split_epilogue), ("--l1-no-alloc", args.l1_no_alloc),
             ("--tma-pipelined", args.tma_pipelined),
             ("--single-tmem", args.single_tmem),
@@ -579,8 +649,11 @@ def main():
             next_idx = max(resume, next_idx + (0 if next_idx in done else 1))
         else:
             next_idx += 1  # worker crashed before recording anything
+        publish_progress(jsonl, "benchmarking", min(next_idx, len(to_run)), len(to_run),
+                         f"benchmarking generated kernels (worker spawns: {n_spawns})")
 
     # ── Collect + summarize ─────────────────────────────────────────
+    publish_progress(jsonl, "collecting", len(to_run), len(to_run), "collecting results")
     results = {}
     with open(jsonl) as fh:
         for line in fh:
@@ -687,6 +760,7 @@ def main():
         print(f"wrote compat matrix: {compat_path} ({matrix['n_correct']}/{matrix['n_entries']} correct)")
     else:
         print("compat matrix skipped (correctness mode; pass --compat-out to write one)")
+    publish_progress(jsonl, "done", len(to_run), len(to_run), "done")
 
     sys.exit(1 if bad else 0)
 
