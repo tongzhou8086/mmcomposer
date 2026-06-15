@@ -5,7 +5,7 @@
                 // contract macros for the per-tier bits:
                 //   EPI_OUT_ROW                  this CTA's GMEM row base
                 //   EPI_OUT_COL_BASE             this CTA's GMEM column base
-                //   EPI_TMEM_EMPTY_ARRIVE(buf)   release the drained TMEM buffer
+                //   EPI_TMEM_FREE_ARRIVE(buf)    release the drained TMEM buffer
                 // EPILOGUE_TMA_PIPELINED picks the Paul-v6-style path:
                 // chunk BN into STORE_N=64 columns, stage each chunk into one
                 // of TMA_STORE_STAGES compact swizzled SMEM buffers, and
@@ -50,13 +50,13 @@
 
                         if (chunk == NUM_CHUNKS - 1) {
                             if (ew == 0 && elect_sync())
-                                EPI_TMEM_EMPTY_ARRIVE(buf);
+                                EPI_TMEM_FREE_ARRIVE(buf);
                         }
 #else
                         if (chunk == NUM_CHUNKS - 1) {
                             tcgen05_fence_before_thread_sync();
                             if (ew == 0 && elect_sync())
-                                EPI_TMEM_EMPTY_ARRIVE(buf);
+                                EPI_TMEM_FREE_ARRIVE(buf);
                         }
 
                         asm volatile("bar.sync 1, %0;" :: "n"(EPI_THREADS));
@@ -139,7 +139,7 @@
                         // longer needed.  Release before the split-1 GMEM store so
                         // the MMA warp can start the next tile earlier.
                         if (split == 1 && ew == 0 && elect_sync())
-                            EPI_TMEM_EMPTY_ARRIVE(buf);
+                            EPI_TMEM_FREE_ARRIVE(buf);
 
                         constexpr int CHUNKS = (BN / 2) / 8;
                         constexpr int STORES = BM * (BN / 2) / (EPI_THREADS * 8);
@@ -178,7 +178,7 @@
                     }
                     asm volatile("bar.sync 1, %0;" :: "n"(NUM_WARPS * 32));
                     if (ew == 0 && elect_sync())
-                        EPI_TMEM_EMPTY_ARRIVE(buf);
+                        EPI_TMEM_FREE_ARRIVE(buf);
                     constexpr int CHUNKS = BN / 8;
                     constexpr int STORES = BM * BN / (EPI_THREADS * 8);
                     #pragma unroll

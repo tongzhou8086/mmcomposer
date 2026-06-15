@@ -312,7 +312,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
         // cta_group::2 MMA into a two-buffer TMEM accumulator, and every CTA
         // drains its own BM x BN output half while the next cluster tile runs.
         __shared__ uint64_t tmem_full[2];
-        __shared__ uint64_t tmem_empty[2];
+        __shared__ uint64_t tmem_free_mbar[2];
         // Split mode stages one half-BN column panel at a time, reducing
         // epilogue SMEM enough to make room for one extra K-loop stage.
         constexpr int EPI_STAGE_COLS = BN;
@@ -331,10 +331,10 @@ __device__ __forceinline__ void matmul_cluster_impl(
             #pragma unroll
             for (int b = 0; b < 2; b++) {
                 mbarrier_init((uint32_t)__cvta_generic_to_shared(&tmem_full[b]), 1);
-                mbarrier_init((uint32_t)__cvta_generic_to_shared(&tmem_empty[b]), CTA_GROUP);
-                uint32_t empty_cta0 =
-                    ((uint32_t)__cvta_generic_to_shared(&tmem_empty[b])) & 0xFEFFFFFFu;
-                mbarrier_arrive_no_tx_cluster(empty_cta0);
+                mbarrier_init((uint32_t)__cvta_generic_to_shared(&tmem_free_mbar[b]), CTA_GROUP);
+                uint32_t tmem_free_mbar_cta0 =
+                    ((uint32_t)__cvta_generic_to_shared(&tmem_free_mbar[b])) & 0xFEFFFFFFu;
+                mbarrier_arrive_no_tx_cluster(tmem_free_mbar_cta0);
             }
             asm volatile("fence.mbarrier_init.release.cluster;");
         }
@@ -395,13 +395,14 @@ __device__ __forceinline__ void matmul_cluster_impl(
             }
         } else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {
             uint32_t smem_compute_full_phase[NS] = {};
-            uint32_t emp[2] = {};
+            uint32_t tmem_free_phase[2] = {};
             long gk = 0;
             for (int ti = 0; ti < num_my; ti++) {
                 int buf = ti & 1;
                 uint32_t d_tmem = taddr + buf * BN;
-                mbarrier_wait_phase((uint32_t)__cvta_generic_to_shared(&tmem_empty[buf]), emp[buf]);
-                emp[buf] ^= 1;
+                mbarrier_wait_phase((uint32_t)__cvta_generic_to_shared(&tmem_free_mbar[buf]),
+                                    tmem_free_phase[buf]);
+                tmem_free_phase[buf] ^= 1;
                 for (int k = 0; k < num_k; k++) {
                     int slot = gk % NS;
                     uint32_t smem_compute_full_mbar_addr =
@@ -423,7 +424,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
             // TMEM buffer with a CTA-0-masked cluster arrive.
 #define EPI_OUT_ROW                 local_m
 #define EPI_OUT_COL_BASE            base_n
-#define EPI_TMEM_EMPTY_ARRIVE(buf)  do { uint32_t _e = ((uint32_t)__cvta_generic_to_shared(&tmem_empty[buf])) & 0xFEFFFFFFu; mbarrier_arrive_no_tx_cluster(_e); } while (0)
+#define EPI_TMEM_FREE_ARRIVE(buf)   do { uint32_t _f = ((uint32_t)__cvta_generic_to_shared(&tmem_free_mbar[buf])) & 0xFEFFFFFFu; mbarrier_arrive_no_tx_cluster(_f); } while (0)
             constexpr int ROW_STRIPS    = BM / 32;
             constexpr int COL_GROUPS    = NUM_WARPS / ROW_STRIPS;
             constexpr int COLS_PER_WARP = BN / COL_GROUPS;
@@ -453,7 +454,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
                 // contract macros for the per-tier bits:
                 //   EPI_OUT_ROW                  this CTA's GMEM row base
                 //   EPI_OUT_COL_BASE             this CTA's GMEM column base
-                //   EPI_TMEM_EMPTY_ARRIVE(buf)   release the drained TMEM buffer
+                //   EPI_TMEM_FREE_ARRIVE(buf)    release the drained TMEM buffer
                 // EPILOGUE_TMA_PIPELINED picks the Paul-v6-style path:
                 // chunk BN into STORE_N=64 columns, stage each chunk into one
                 // of TMA_STORE_STAGES compact swizzled SMEM buffers, and
@@ -484,7 +485,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
                     }
                     asm volatile("bar.sync 1, %0;" :: "n"(NUM_WARPS * 32));
                     if (ew == 0 && elect_sync())
-                        EPI_TMEM_EMPTY_ARRIVE(buf);
+                        EPI_TMEM_FREE_ARRIVE(buf);
                     constexpr int CHUNKS = BN / 8;
                     constexpr int STORES = BM * BN / (EPI_THREADS * 8);
                     #pragma unroll
@@ -501,7 +502,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
             }
 #undef EPI_OUT_ROW
 #undef EPI_OUT_COL_BASE
-#undef EPI_TMEM_EMPTY_ARRIVE
+#undef EPI_TMEM_FREE_ARRIVE
         }
 
         __syncthreads();
