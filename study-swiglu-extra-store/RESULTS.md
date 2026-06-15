@@ -343,6 +343,8 @@ traffic ladder is therefore:
 
 Stage 1 remains the best store-only choice, so the main ladder is:
 
+![Store traffic ladder for 32768x4608x768](store_traffic_ladder_32768x4608x768.svg)
+
 | Shape | 0.5x half-only us | 1.0x base us | 1.5x extra-half us | 2.0x extra-full us | 2.0x / 0.5x |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `32768x4608x768` | 164.928 | 171.136 | 187.520 | 212.096 | 1.286x |
