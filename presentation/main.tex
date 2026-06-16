@@ -100,9 +100,8 @@
 \end{frame}
 
 \begin{frame}{The Big Picture: GEMM Dataflow on the SM}
-  One pass of data through the SM:
-  \textbf{HBM\,$\to$\,SMEM\,$\to$\,TMEM\,$\to$\,registers\,$\to$\,SMEM\,$\to$\,HBM},
-  each move done by a different engine.
+  Where data lives as it flows through one SM:
+  \textbf{HBM\,$\to$\,SMEM\,$\to$\,TMEM\,$\to$\,registers\,$\to$\,SMEM\,$\to$\,HBM}.
 
   \vspace{0.05cm}
   \begin{center}
@@ -119,42 +118,43 @@
                       rounded corners=2pt, inner sep=2pt}
       ]
       \node[draw, thick, rounded corners=5pt, fill=gray!4, densely dashed,
-            minimum width=12.9cm, minimum height=4.35cm] (sm) at (0,1.15) {};
+            minimum width=12.9cm, minimum height=4.05cm] (sm) at (0,1.15) {};
       \node[font=\scriptsize\bfseries, text=mmgray, anchor=north west,
             inner sep=3pt] at (sm.north west) {SM};
 
       \node[eng] (tma)  at (-5.25,1.3) {TMA\\engine};
       \node[mem] (smem) at (-2.05,1.3) {SMEM};
-      \node[eng] (tc)   at (1.25,2.55) {Tensor Core};
-      \node[mem] (tmem) at (4.65,2.55) {TMEM};
-      \node[eng, minimum width=2.95cm, minimum height=1.35cm] (cuda) at (4.65,0.2) {};
-      \node[font=\scriptsize] at (4.65,0.62) {CUDA cores};
+      \node[eng, minimum width=3.0cm, minimum height=1.35cm] (tc) at (4.5,2.4) {};
+      \node[font=\scriptsize] at (4.5,2.72) {Tensor Core};
       \node[draw, thick, fill=blue!10, font=\tiny, align=center,
-            minimum width=1.55cm, minimum height=0.44cm] (regs) at (4.65,-0.06) {registers};
+            minimum width=1.5cm, minimum height=0.44cm] (tmem) at (4.5,2.08) {TMEM};
+      \node[eng, minimum width=3.0cm, minimum height=1.35cm] (cuda) at (4.5,0.1) {};
+      \node[font=\scriptsize] at (4.5,0.42) {CUDA cores};
+      \node[draw, thick, fill=blue!10, font=\tiny, align=center,
+            minimum width=1.55cm, minimum height=0.44cm] (regs) at (4.5,-0.2) {registers};
 
-      \node[mem, fill=gray!12] (hbm) at (-5.25,-2.0) {HBM};
+      \node[mem, fill=gray!12] (hbm) at (-5.25,-1.6) {HBM};
 
       % forward: load -> MMA -> drain -> stage
       \draw[flow] ([xshift=-4pt]hbm.north) -- ([xshift=-4pt]tma.south);
       \draw[flow] ([yshift=5pt]tma.east) -- ([yshift=5pt]smem.west);
-      \draw[flow] (smem.north east) to[out=50,in=183] (tc.west);
-      \draw[flow] (tc.east) -- (tmem.west);
-      \draw[flow] (tmem.south) -- (cuda.north);
-      \draw[flow] (cuda.west) to[out=180,in=-60] (smem.south east);
+      \draw[flow] (smem.north east) to[out=45,in=180] (tc.west);
+      \draw[flow] (tc.south) -- (cuda.north);
+      \draw[flow] (cuda.west) to[out=180,in=-55] (smem.south east);
       % store back
       \draw[sflow] ([yshift=-6pt]smem.west) -- ([yshift=-6pt]tma.east);
       \draw[sflow] ([xshift=5pt]tma.south) -- ([xshift=5pt]hbm.north);
 
       \node[steplab] at (-3.55,1.78) {\textbf{1}\,load};
-      \node[steplab] at (-0.85,2.05) {\textbf{2}\,MMA};
-      \node[steplab] at (1.7,0.6)    {\textbf{3}\,drain \& stage};
+      \node[steplab] at (1.2,2.0)    {\textbf{2}\,MMA};
+      \node[steplab] at (1.2,0.5)    {\textbf{3}\,drain \& stage};
       \node[sstep]   at (-3.55,0.82) {\textbf{4}\,store};
     \end{tikzpicture}
   \end{center}
 
   \vspace{0.1cm}
-  {\footnotesize Green ellipses are \textbf{engines}, rectangles \textbf{storage};
-  step 3 is the CUDA-core epilogue --- drain TMEM into registers, then stage to SMEM.}
+  {\footnotesize Engines own their storage --- \textbf{TMEM} in the tensor core,
+  \textbf{registers} in the CUDA cores; \textbf{SMEM} is the shared hub.}
 \end{frame}
 
 \section{Orchestration}
@@ -174,9 +174,10 @@
 \end{frame}
 
 \begin{frame}{Operations and Containers}
-  Think of each operation as:
+  We model the kernel as \textbf{operations} connected by \textbf{containers}
+  that hold values:
 
-  \vspace{0.25cm}
+  \vspace{0.5cm}
   \begin{center}
     \begin{tikzpicture}[
         box/.style={draw, thick, rounded corners=2pt, minimum width=2.7cm, minimum height=0.9cm, align=center},
@@ -190,13 +191,10 @@
     \end{tikzpicture}
   \end{center}
 
-  \vspace{0.25cm}
+  \vspace{0.5cm}
   \begin{itemize}
-    \item An operation consumes one or more input values from containers.
-    \item It produces one output value into another container.
-    \item It can start only when its input values are ready and its output container is free.
-    \item Once an input has been fully drained, its container is free to reuse.
-    \item Once the output has been fully computed, it is ready to be consumed.
+    \item An operation \textbf{drains} input values from its input containers.
+    \item It \textbf{fills} the result into one output container.
   \end{itemize}
 \end{frame}
 
@@ -246,36 +244,6 @@
       \draw[signal, draw=mmsignal] (1.3,0) -- (2.1,0);
       \node[right] at (2.2,0) {\small synchronization signal};
     \end{tikzpicture}
-  \end{center}
-\end{frame}
-
-\begin{frame}{Dataflow Alone Is Not Enough}
-  The high-level dataflow is simple:
-
-  \vspace{0.3cm}
-  \begin{center}
-    \begin{tikzpicture}[
-        node/.style={draw, thick, rounded corners=2pt, minimum width=1.9cm, minimum height=0.75cm, align=center},
-        arrow/.style={-{Latex[length=2mm]}, thick}
-      ]
-      \node[node, fill=blue!8] (hbm0) {HBM};
-      \node[node, fill=teal!10, right=0.7cm of hbm0] (tma) {TMA\\load};
-      \node[node, fill=green!10, right=0.7cm of tma] (mma) {MMA};
-      \node[node, fill=orange!12, right=0.7cm of mma] (epi) {Epilogue};
-      \node[node, fill=blue!8, right=0.7cm of epi] (hbm1) {HBM};
-      \draw[arrow] (hbm0) -- (tma);
-      \draw[arrow] (tma) -- (mma);
-      \draw[arrow] (mma) -- (epi);
-      \draw[arrow] (epi) -- (hbm1);
-    \end{tikzpicture}
-  \end{center}
-
-  \vspace{0.3cm}
-  But this diagram hides the most important scheduling question:
-
-  \vspace{0.15cm}
-  \begin{center}
-    \textbf{Where is each value stored while it waits for the next operation?}
   \end{center}
 \end{frame}
 
@@ -721,18 +689,18 @@ else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {   // MMA warp
   \emph{TMEM data ready}; it fires only after all MMAs for this tile are done.
 \end{frame}
 
-\begin{frame}[fragile]{Epilogue Warps: Drain TMEM, Pipelined Store}
+\begin{frame}[fragile]{Epilogue Warps: Drain TMEM, Signal TMEM Free}
   \begin{lstlisting}[language=C,basicstyle=\ttfamily\footnotesize]
 else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
   mbarrier_wait_phase(tmem_full[buf], full[buf]);  // wait: TMEM data ready
   tcgen05_ld(...);                                 // drain TMEM -> registers
-  // pack registers -> SMEM store ring -> cp.async.bulk.tensor.2d (TMA store)
+  // ... epilogue: write the result out ...
   EPI_TMEM_FREE_ARRIVE(buf);                       // signal: TMEM buffer free
 }
   \end{lstlisting}
   \vspace{-0.2cm}
-  \footnotesize The store ring is the epilogue half of the SMEM partition; TMA
-  drains it to HBM asynchronously.
+  \footnotesize At this point the epilogue is just the TMEM \emph{consumer}; how it
+  writes the result out is a design choice we cover later.
 \end{frame}
 
 \section{2-CTA MMA}
@@ -839,6 +807,48 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
   \footnotesize Source: \code{webui/kernels/tier3\_cluster\_swizzle/kernel.cu}.
 \end{frame}
 
+\begin{frame}{2-CTA MMA: More Compute Stages}
+  Each CTA stores only \textbf{half} of B ($BN_{\text{local}} = BN/2$), so the
+  compute slot shrinks and \textbf{more pipeline stages fit} in the same SMEM.
+
+  \vspace{0.25cm}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.5\textwidth}
+    \begin{center}
+      \textbf{Single-CTA} \scriptsize(full B per CTA)\\[0.15cm]
+      \small
+      \begin{tabular}{cccc}
+        \toprule
+        $BN$ & B tile & slot & stages \\
+        \midrule
+        256 & 32\,KB & 48\,KB & 4 \\
+        512 & 64\,KB & 80\,KB & 2 \\
+        \bottomrule
+      \end{tabular}
+    \end{center}
+
+    \column{0.5\textwidth}
+    \begin{center}
+      \textbf{2-CTA} \scriptsize(half B per CTA)\\[0.15cm]
+      \small
+      \begin{tabular}{cccc}
+        \toprule
+        $BN$ & B tile & slot & stages \\
+        \midrule
+        256 & 16\,KB & 32\,KB & \textbf{7} \\
+        512 & 32\,KB & 48\,KB & \textbf{4} \\
+        \bottomrule
+      \end{tabular}
+    \end{center}
+  \end{columns}
+
+  \vspace{0.3cm}
+  \centering
+  {\footnotesize A tile is 16\,KB throughout. With the SMEM capacity
+  ($\approx$228\,KB), stages $= \lfloor\text{SMEM}/\text{slot}\rfloor$. 2-CTA fits
+  $\sim$2$\times$ the stages.}
+\end{frame}
+
 \begin{frame}{Tradeoff of Double TMEM Buffering}
   \small
   \begin{center}
@@ -853,12 +863,13 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
     \column{0.47\textwidth}
     \begin{center}
       \begin{tikzpicture}[
-          box/.style={draw, thick, rounded corners=1pt, minimum width=4.55cm, minimum height=2.45cm, align=center}
+          box/.style={draw, thick, rounded corners=1pt, minimum width=4.55cm, minimum height=2.85cm, align=center}
         ]
         \node[box, fill=teal!10] {
-          \textbf{$BN{=}256$}\\[0.18cm]
-          \textbf{MORE OVERLAP}\\[0.18cm]
-          double TMEM buffer\\[0.14cm]
+          \textbf{$BN{=}256$}\\[0.16cm]
+          \textbf{MORE OVERLAP}\\[0.14cm]
+          double TMEM buffer\\[0.1cm]
+          up to 7 compute stages\\[0.1cm]
           lower AI: 128 flop/B
         };
       \end{tikzpicture}
@@ -867,12 +878,13 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
     \column{0.47\textwidth}
     \begin{center}
       \begin{tikzpicture}[
-          box/.style={draw, thick, rounded corners=1pt, minimum width=4.55cm, minimum height=2.45cm, align=center}
+          box/.style={draw, thick, rounded corners=1pt, minimum width=4.55cm, minimum height=2.85cm, align=center}
         ]
         \node[box, fill=orange!12] {
-          \textbf{$BN{=}512$}\\[0.18cm]
-          \textbf{HIGHER AI}\\[0.18cm]
-          single TMEM buffer\\[0.14cm]
+          \textbf{$BN{=}512$}\\[0.16cm]
+          \textbf{HIGHER AI}\\[0.14cm]
+          single TMEM buffer\\[0.1cm]
+          up to 4 compute stages\\[0.1cm]
           delayed reuse: 171 flop/B
         };
       \end{tikzpicture}
@@ -991,8 +1003,9 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 \end{frame}
 
 \begin{frame}{Epilogue Concern 1: Coalesced Global Write}
-  Because each thread owns a \emph{row}, a direct register $\to$ HBM store makes
-  one warp scatter across many rows at once.
+  Each thread owns a \emph{row}, so storing registers straight to HBM is
+  row-strided. Instead we first fill one \textbf{$BM\times64$ chunk} in SMEM ---
+  the TMA store unit --- then let \textbf{TMA} write it out, coalesced.
 
   \vspace{0.3cm}
   \begin{columns}[T,onlytextwidth]
@@ -1022,22 +1035,13 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
     \end{center}
   \end{columns}
 
-  \vspace{0.35cm}
-  \begin{itemize}
-    \item Route each $BM \times 64$ chunk through an SMEM tile, then issue one
-      \textbf{TMA store}: TMA emits a coalesced 2D GMEM write \emph{regardless}
-      of the in-SMEM layout.
-    \item So GMEM coalescing is solved by the 64-column TMA box --- not by how
-      the threads wrote into SMEM.
-    \item But the register $\to$ SMEM write is \emph{not} free: it has its own
-      bank-conflict hazard (next).
-  \end{itemize}
 \end{frame}
 
 \begin{frame}{Epilogue Concern 2: Filling the $128\times64$ SMEM Buffer}
-  We fill it with \code{tcgen05.ld.x8} chunks (8 cols $\times$ 32 lanes). A naive
-  write collides on the \textbf{same banks}; the swizzle $n \oplus \text{(row \&
-  7)}$ spreads them.
+  We fill it \code{tcgen05.ld.x8} chunk by chunk. One warp store writes
+  \textbf{one int4 column} (one cell per lane --- the highlighted column, not the
+  whole row); naively those cells share \textbf{one bank}, so the swizzle
+  $n \oplus \text{(row \& 7)}$ spreads them.
 
   \vspace{0.05cm}
   \begin{columns}[T,onlytextwidth]
