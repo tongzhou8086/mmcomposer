@@ -54,34 +54,15 @@
 
 \begin{frame}{Talk Outline}
   \begin{itemize}
-    \item GPU execution background and the B200-specific pieces we rely on.
+    \item GEMM breakdown.
     \item The core idea: a GEMM kernel is an orchestration problem.
-    \item One remaining optimization the orchestration model does not imply: 2-CTA MMA.
     \item From diagram to code: how the synchronization actually looks.
-    \item MMComposer: what it generates, how to use it, and how we autotune it.
+    \item MMComposer: how to use it to generate GEMM kernels.
   \end{itemize}
 \end{frame}
 
 \section{Background}
 
-\begin{frame}{GPU Execution Model}
-  \begin{itemize}
-    \item A GPU hides latency by running many independent CTAs and warps.
-    \item Peak GEMM performance depends on keeping tensor cores fed while memory movement continues in the background.
-    \item HBM bandwidth is high, but moving every tile through HBM repeatedly is still too expensive.
-    \item The kernel must explicitly manage on-chip data movement, reuse, and synchronization.
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{B200 GPU Pieces Used by GEMM}
-  \begin{itemize}
-    \item \textbf{TMA}: bulk 2D tensor movement between HBM and shared memory.
-    \item \textbf{Shared memory}: staging area and ring buffer for A/B tiles and output-store buffers.
-    \item \textbf{\code{tcgen05.mma}}: tensor-core MMA instructions for the compute phase.
-    \item \textbf{TMEM}: tensor-memory accumulator storage used by the MMA path.
-    \item \textbf{Warp specialization}: separate warps are assigned to loading, MMA, and epilogue work.
-  \end{itemize}
-\end{frame}
 
 \begin{frame}{GEMM Breakdown}
   A GEMM kernel has two major phases: \textbf{compute} and \textbf{epilogue}.
@@ -173,7 +154,7 @@
   In this model, synchronization has two meanings:
 
   \begin{enumerate}
-    \item \textbf{Value-ready}: a container is full; its value can be consumed.
+    \item \textbf{Data-ready}: a container is full; data is ready to be consumed.
     \item \textbf{Resource-free}: a container is empty; it can be reused.
   \end{enumerate}
 
@@ -183,8 +164,8 @@
   waits overlap with useful work.
 
   \vspace{0.15cm}
-  For TMEM, value readiness is gated by a named completion signal:
-  \textbf{all-MMAs-done}. A single MMA finishing is not enough.
+  For TMEM, value readiness is gated by a completion condition: the
+  \textbf{TMEM data ready} signal is sent only after the final MMA finishes.
 
   \vspace{0.25cm}
   \begin{center}
@@ -194,7 +175,7 @@
       ]
       \draw[flow, draw=mmblue] (-4.6,0) -- (-3.8,0);
       \node[right] at (-3.7,0) {\small data/value flow};
-      \draw[signal, draw=mmgreen] (1.3,0) -- (2.1,0);
+      \draw[signal, draw=mmsignal] (1.3,0) -- (2.1,0);
       \node[right] at (2.2,0) {\small synchronization signal};
     \end{tikzpicture}
   \end{center}
@@ -231,63 +212,42 @@
 \end{frame}
 
 \begin{frame}{Add the Containers}
-  For the framework used in this talk, the main containers are:
+  For the synchronization model used in this talk, we group the kernel into
+  three producer/consumer operations:
 
   \begin{table}
     \centering
-    \small
+    \scriptsize
     \begin{tabular}{lll}
       \toprule
       Operation & Input container & Output container \\
       \midrule
-      TMA load & HBM A/B tiles & SMEM compute ring buffer \\
-      MMA & SMEM compute ring buffer & TMEM accumulator \\
-      Epilogue drain & TMEM accumulator & Registers \\
-      Epilogue pack & Registers & SMEM store ring buffer \\
-      TMA store & SMEM store ring buffer & HBM C tile \\
+      TMA warps & HBM A/B tiles & SMEM compute ring buffer \\
+      MMA warps & SMEM compute ring buffer & TMEM accumulator \\
+      Epilogue warps & TMEM accumulator & registers \\
       \bottomrule
     \end{tabular}
   \end{table}
 
   \vspace{0.2cm}
-  This is the concrete dataflow graph: operations connected by values, and
-  each value stored in an explicit container.
+  This is the abstraction used in the next graph. The epilogue's internal
+  pack and TMA-store staging are real, but they are not the main
+  warp-to-warp synchronization edges shown here.
 \end{frame}
 
-\begin{frame}[fragile]{Main Synchronization Pattern}
-  \small
-  \begin{verbatim}
-  +------+    +-----------+    +---------------------+
-  | HBM  | -> | TMA warps | -> | SMEM compute buffer |
-  +------+    +-----------+    +---------------------+
-                  |  SMEM full               ^
-                  v                           | SMEM free
-  +------+    +-----------+    +------+
-  | SMEM | -> | MMA warps | -> | TMEM |
-  +------+    +-----------+    +------+
-                  |  TMEM full*              ^
-                  |                           | TMEM free
-                  v                           |
-  +------+    +----------------+    +-----------+
-  | TMEM | -> | epilogue warps | -> | registers |
-  +------+    +----------------+    +-----------+
-  \end{verbatim}
-  \vspace{-0.2cm}
-  {* `TMEM full' is sent only after the final MMA finishes.}
-\end{frame}
 
 \begin{frame}{Main Synchronization Pattern: Graph View}
   \begin{center}
     \begin{tikzpicture}[
-        container/.style={draw, thick, rounded corners=2pt, minimum width=1.95cm, minimum height=0.85cm, align=center, font=\small},
+        container/.style={circle, draw, thick, minimum size=1.45cm, align=center, font=\small},
         op/.style={draw, thick, rounded corners=1pt, minimum width=2.25cm, minimum height=0.85cm, align=center, font=\small},
         flow/.style={-{Latex[length=2mm]}, very thick, draw=mmblue},
         signal/.style={-{Stealth[length=2.3mm]}, very thick, densely dashed},
-        siglabel/.style={font=\scriptsize\bfseries, inner sep=1.5pt, fill=white}
+        siglabel/.style={font=\scriptsize\bfseries, align=center, inner sep=1.5pt, fill=white}
       ]
       \node[container, fill=blue!7] (hbm1) at (-5.0,2.05) {HBM};
       \node[op, fill=teal!10] (tma) at (-1.55,2.05) {TMA warps};
-      \node[container, fill=teal!8, minimum width=2.7cm] (smem1) at (2.8,2.05) {SMEM compute\\buffer};
+      \node[container, fill=teal!8, minimum size=1.75cm] (smem1) at (2.8,2.05) {SMEM\\compute\\buffer};
 
       \node[container, fill=teal!8] (smem2) at (-5.0,0) {SMEM};
       \node[op, fill=green!10] (mma) at (-1.55,0) {MMA warps};
@@ -304,277 +264,323 @@
       \draw[flow] (tmem3) -- (epi);
       \draw[flow] (epi) -- (regs);
 
-      \draw[signal, draw=mmsignal] (tma.south) -- (mma.north);
-      \node[siglabel, text=mmsignal] at (-0.55,1.03) {SMEM full};
+      \draw[signal, draw=mmsignal] (-1.00,1.625) -- (-1.00,0.425);
+      \node[siglabel, text=mmsignal] at (-0.45,1.03) {data ready};
 
-      \draw[signal, draw=mmsignal] (mma.north west) -- (tma.south west);
-      \node[siglabel, text=mmsignal] at (-2.55,1.03) {SMEM free};
+      \draw[signal, draw=mmsignal] (-2.10,0.425) -- (-2.10,1.625);
+      \node[siglabel, text=mmsignal] at (-2.65,1.03) {buffer free};
 
-      \draw[signal, draw=mmsignal] (mma.south) -- (epi.north);
-      \node[siglabel, text=mmsignal] at (-0.42,-1.03) {TMEM full*};
+      \draw[signal, draw=mmsignal] (-1.00,-0.425) -- (-1.00,-1.625);
+      \node[siglabel, text=mmsignal] at (-0.42,-1.03) {data ready*};
 
-      \draw[signal, draw=mmsignal] (epi.north west) -- (mma.south west);
-      \node[siglabel, text=mmsignal] at (-2.58,-1.03) {TMEM free};
+      \draw[signal, draw=mmsignal] (-2.10,-1.625) -- (-2.10,-0.425);
+      \node[siglabel, text=mmsignal] at (-2.65,-1.03) {buffer free};
 
       \draw[flow] (-1.8,-3.05) -- (-0.6,-3.05);
       \node[font=\scriptsize, text=mmgray, right] at (-0.55,-3.05) {dataflow};
       \draw[signal, draw=mmsignal] (1.1,-3.05) -- (2.3,-3.05);
       \node[font=\scriptsize, text=mmgray, right] at (2.35,-3.05) {signal};
       \node[font=\scriptsize, text=mmgray, align=center] at (0,-3.55)
-        {* TMEM full is sent only after the final MMA finishes.};
+        {* TMEM data ready is sent only after the final MMA finishes.};
     \end{tikzpicture}
   \end{center}
 \end{frame}
 
-\begin{frame}{TMA Warp: Drain HBM, Fill SMEM}
+\begin{frame}{TMA Warps: Fill SMEM, Signal Data Ready}
   \begin{center}
     \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=2.25cm, align=center},
-        op/.style={draw, thick, rounded corners=1pt, minimum width=1.65cm, minimum height=1.2cm, align=center},
-        arrow/.style={-{Latex[length=2mm]}, very thick},
-        status/.style={font=\scriptsize, text=mmgray},
-        fillhbm/.style={fill=blue!25, draw=none},
-        fillsmem/.style={fill=teal!35, draw=none}
+        container/.style={circle, draw=black!25, thick, minimum size=1.45cm, align=center, font=\small, fill=black!4, text=black!45},
+        activecontainer/.style={circle, draw, thick, minimum size=1.45cm, align=center, font=\small},
+        op/.style={draw=black!25, thick, rounded corners=1pt, minimum width=2.25cm, minimum height=0.85cm, align=center, font=\small, fill=black!4, text=black!45},
+        activeop/.style={draw, thick, rounded corners=1pt, minimum width=2.25cm, minimum height=0.85cm, align=center, font=\small},
+        flow/.style={-{Latex[length=2mm]}, very thick, draw=black!25},
+        activeflow/.style={-{Latex[length=2mm]}, very thick, draw=mmblue},
+        signal/.style={-{Stealth[length=2.3mm]}, very thick, densely dashed, draw=black!25},
+        activesignal/.style={-{Stealth[length=2.3mm]}, very thick, densely dashed, draw=mmsignal},
+        siglabel/.style={font=\scriptsize\bfseries, align=center, inner sep=1.5pt, fill=white},
+        status/.style={font=\scriptsize, text=mmgray}
       ]
-      \node[container, fill=blue!6] (hbm) at (-4.4,0) {};
-      \node[op, fill=teal!10] (tma) at (0,0) {TMA\\warp};
-      \node[container, fill=teal!7] (smem) at (4.4,0) {};
-
-      \draw[arrow, draw=mmblue] (hbm) -- node[above]{drain} (tma);
-      \draw[arrow, draw=mmblue] (tma) -- node[above]{fill} (smem);
-
+      \node[activecontainer, fill=blue!4] (hbm1) at (-5.0,2.05) {};
       \begin{scope}
-        \clip (-4.4,0) circle (1.125cm);
-        \only<1>{\fill[fillhbm] (-5.525,-1.125) rectangle (-3.275,1.125);}
-        \only<2>{\fill[fillhbm] (-5.525,-1.125) rectangle (-3.275,0);}
+        \clip (-5.0,2.05) circle (0.725cm);
+        \only<1>{\fill[blue!25] (-5.725,1.325) rectangle (-4.275,2.775);}
+        \only<2>{\fill[blue!25] (-5.725,1.325) rectangle (-4.275,2.05);}
       \end{scope}
+      \node[activecontainer] at (hbm1) {};
+      \node[font=\small] at (hbm1) {HBM};
 
+      \node[activeop, fill=teal!10] (tma) at (-1.55,2.05) {TMA warps};
+
+      \node[activecontainer, fill=teal!4, minimum size=1.75cm] (smem1) at (2.8,2.05) {};
       \begin{scope}
-        \clip (4.4,0) circle (1.125cm);
-        \only<2>{\fill[fillsmem] (3.275,-1.125) rectangle (5.525,0);}
-        \only<3>{\fill[fillsmem] (3.275,-1.125) rectangle (5.525,1.125);}
+        \clip (2.8,2.05) circle (0.875cm);
+        \only<2>{\fill[teal!28] (1.925,1.175) rectangle (3.675,2.05);}
+        \only<3>{\fill[teal!28] (1.925,1.175) rectangle (3.675,2.925);}
       \end{scope}
+      \node[activecontainer, minimum size=1.75cm] at (smem1) {};
+      \node[font=\small, align=center] at (smem1) {SMEM\\compute\\buffer};
 
-      \node[align=center] at (hbm) {HBM\\tile};
-      \node[align=center] at (smem) {SMEM\\compute\\buffer};
+      \node[container] (smem2) at (-5.0,0) {SMEM};
+      \node[op] (mma) at (-1.55,0) {MMA warps};
+      \node[container] (tmem2) at (2.8,0) {TMEM};
 
-      \node[status, below=0.1cm of hbm] {
+      \node[container] (tmem3) at (-5.0,-2.05) {TMEM};
+      \node[op, minimum width=2.45cm] (epi) at (-1.55,-2.05) {epilogue warps};
+      \node[container] (regs) at (2.8,-2.05) {registers};
+
+      \draw[activeflow] (hbm1) -- node[above, font=\scriptsize, text=mmblue] {drain} (tma);
+      \draw[activeflow] (tma) -- node[above, font=\scriptsize, text=mmblue] {fill} (smem1);
+      \draw[flow] (smem2) -- (mma);
+      \draw[flow] (mma) -- (tmem2);
+      \draw[flow] (tmem3) -- (epi);
+      \draw[flow] (epi) -- (regs);
+
+      \only<1-2>{\draw[signal] (-1.00,1.625) -- (-1.00,0.425);}
+      \only<3>{
+        \draw[activesignal] (-1.00,1.625) -- (-1.00,0.425);
+        \node[siglabel, text=mmsignal] at (-0.45,1.03) {data ready};
+      }
+      \draw[signal] (-2.10,0.425) -- (-2.10,1.625);
+      \draw[signal] (-1.00,-0.425) -- (-1.00,-1.625);
+      \draw[signal] (-2.10,-1.625) -- (-2.10,-0.425);
+
+      \node[status] at (-5.0,1.08) {
         \only<1>{full}
-        \only<2>{half drained}
+        \only<2>{half full}
         \only<3>{empty}
       };
-      \node[status, below=0.1cm of smem] {
+      \node[status] at (2.8,0.93) {
         \only<1>{empty}
         \only<2>{half full}
         \only<3>{full}
       };
-
-      \node[align=center, text width=11cm] at (0,-2.1) {
-        \only<1>{The TMA warp can start: the HBM tile is ready and the SMEM output container is free.}
-        \only<2>{The input container is being drained while the output container is being filled.}
-        \only<3>{The HBM input is drained, and the SMEM compute buffer now contains the produced tile.}
-      };
     \end{tikzpicture}
   \end{center}
+
+  \vspace{-0.15cm}
+  \only<1>{The TMA operation can start: the HBM tile is ready, and the SMEM
+  compute slot is free.}
+  \only<2>{The TMA warps drain the HBM tile while filling the SMEM compute
+  slot.}
+  \only<3>{Once the HBM tile is drained and the SMEM slot is full, the TMA
+  warps send \textbf{compute data ready} to the MMA warps.}
 \end{frame}
 
-\begin{frame}{TMA Warp: Output Signal}
+\begin{frame}{MMA Warps: Signal Buffer Free and Data Ready}
   \begin{center}
     \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=2.5cm, align=center},
-        op/.style={draw, thick, rounded corners=1pt, minimum width=1.65cm, minimum height=1.0cm, align=center},
-        signal/.style={-{Stealth[length=2.4mm]}, very thick, densely dashed},
-        fillsmem/.style={fill=teal!35, draw=none}
+        container/.style={circle, draw=black!25, thick, minimum size=1.45cm, align=center, font=\small, fill=black!4, text=black!45},
+        activecontainer/.style={circle, draw, thick, minimum size=1.45cm, align=center, font=\small},
+        op/.style={draw=black!25, thick, rounded corners=1pt, minimum width=2.25cm, minimum height=0.85cm, align=center, font=\small, fill=black!4, text=black!45},
+        activeop/.style={draw, thick, rounded corners=1pt, minimum width=2.25cm, minimum height=0.85cm, align=center, font=\small},
+        flow/.style={-{Latex[length=2mm]}, very thick, draw=black!25},
+        activeflow/.style={-{Latex[length=2mm]}, very thick, draw=mmblue},
+        signal/.style={-{Stealth[length=2.3mm]}, very thick, densely dashed, draw=black!25},
+        activesignal/.style={-{Stealth[length=2.3mm]}, very thick, densely dashed, draw=mmsignal},
+        siglabel/.style={font=\scriptsize\bfseries, align=center, inner sep=1.5pt, fill=white},
+        status/.style={font=\scriptsize, text=mmgray}
       ]
-      \node[container, fill=teal!7] (smem) at (0,0) {};
+      \node[container] (hbm1) at (-5.0,2.05) {HBM};
+      \node[op] (tma) at (-1.55,2.05) {TMA warps};
+      \node[container, minimum size=1.75cm] (smem1) at (2.8,2.05) {SMEM\\compute\\buffer};
+
+      \node[activecontainer, fill=teal!4] (smem2) at (-5.0,0) {};
       \begin{scope}
-        \clip (0,0) circle (1.25cm);
-        \fill[fillsmem] (-1.25,-1.25) rectangle (1.25,1.25);
+        \clip (-5.0,0) circle (0.725cm);
+        \only<1>{\fill[teal!28] (-5.725,-0.725) rectangle (-4.275,0.725);}
+        \only<2>{\fill[teal!28] (-5.725,-0.725) rectangle (-4.275,0);}
       \end{scope}
-      \node[align=center] at (smem) {SMEM\\compute\\buffer};
-      \node[op, fill=green!10] (mma) at (4.1,0) {MMA\\warp};
-      \draw[signal, draw=mmblue, text=mmblue] (smem) -- node[above]{value-ready} (mma);
+      \node[activecontainer] at (smem2) {};
+      \node[font=\small] at (smem2) {SMEM};
 
-      \node[align=center, text width=9.5cm] at (0,-2.0) {
-        Once the SMEM compute buffer is full, it sends one outward signal:
-        the tile is ready for the MMA warp to consume.
-      };
-    \end{tikzpicture}
-  \end{center}
-\end{frame}
+      \node[activeop, fill=green!10] (mma) at (-1.55,0) {MMA warps};
 
-\begin{frame}{MMA Warp: Drain SMEM, Fill TMEM}
-  \begin{center}
-    \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=2.25cm, align=center},
-        op/.style={draw, thick, rounded corners=1pt, minimum width=1.65cm, minimum height=1.2cm, align=center},
-        arrow/.style={-{Latex[length=2mm]}, very thick},
-        status/.style={font=\scriptsize, text=mmgray},
-        fillsmem/.style={fill=teal!35, draw=none},
-        filltmem/.style={fill=green!35, draw=none}
-      ]
-      \node[container, fill=teal!7] (smem) at (-4.4,0) {};
-      \node[op, fill=green!10] (mma) at (0,0) {MMA\\warp};
-      \node[container, fill=green!7] (tmem) at (4.4,0) {};
-
-      \draw[arrow, draw=mmblue] (smem) -- node[above]{drain} (mma);
-      \draw[arrow, draw=mmblue] (mma) -- node[above]{fill} (tmem);
-
+      \node[activecontainer, fill=green!4] (tmem2) at (2.8,0) {};
       \begin{scope}
-        \clip (-4.4,0) circle (1.125cm);
-        \only<1>{\fill[fillsmem] (-5.525,-1.125) rectangle (-3.275,1.125);}
-        \only<2>{\fill[fillsmem] (-5.525,-1.125) rectangle (-3.275,0);}
+        \clip (2.8,0) circle (0.725cm);
+        \only<2>{\fill[green!28] (2.075,-0.725) rectangle (3.525,0);}
+        \only<3-4>{\fill[green!28] (2.075,-0.725) rectangle (3.525,0.725);}
       \end{scope}
+      \node[activecontainer] at (tmem2) {};
+      \node[font=\small] at (tmem2) {TMEM};
 
-      \begin{scope}
-        \clip (4.4,0) circle (1.125cm);
-        \only<2>{\fill[filltmem] (3.275,-1.125) rectangle (5.525,0);}
-        \only<3>{\fill[filltmem] (3.275,-1.125) rectangle (5.525,1.125);}
-      \end{scope}
+      \node[container] (tmem3) at (-5.0,-2.05) {TMEM};
+      \node[op, minimum width=2.45cm] (epi) at (-1.55,-2.05) {epilogue warps};
+      \node[container] (regs) at (2.8,-2.05) {registers};
 
-      \node[align=center] at (smem) {SMEM\\compute\\buffer};
-      \node[align=center] at (tmem) {TMEM\\buffer};
+      \draw[flow] (hbm1) -- (tma);
+      \draw[flow] (tma) -- (smem1);
+      \draw[activeflow] (smem2) -- node[above, font=\scriptsize, text=mmblue] {drain} (mma);
+      \draw[activeflow] (mma) -- node[above, font=\scriptsize, text=mmblue] {fill} (tmem2);
+      \draw[flow] (tmem3) -- (epi);
+      \draw[flow] (epi) -- (regs);
 
-      \node[status, below=0.1cm of smem] {
+      \draw[signal] (-1.00,1.625) -- (-1.00,0.425);
+      \only<1-2,4>{\draw[signal] (-2.10,0.425) -- (-2.10,1.625);}
+      \only<3>{
+        \draw[activesignal] (-2.10,0.425) -- (-2.10,1.625);
+        \node[siglabel, text=mmsignal] at (-2.65,1.03) {buffer free};
+      }
+      \only<1-3>{\draw[signal] (-1.00,-0.425) -- (-1.00,-1.625);}
+      \only<4>{
+        \draw[activesignal] (-1.00,-0.425) -- (-1.00,-1.625);
+        \node[siglabel, text=mmsignal] at (-0.42,-1.03) {data ready*};
+      }
+      \draw[signal] (-2.10,-1.625) -- (-2.10,-0.425);
+
+      \node[status] at (-5.0,-0.98) {
         \only<1>{full}
-        \only<2>{half drained}
-        \only<3>{empty}
+        \only<2>{half full}
+        \only<3-4>{empty}
       };
-      \node[status, below=0.1cm of tmem] {
+      \node[status] at (2.8,-0.98) {
         \only<1>{empty}
         \only<2>{half full}
-        \only<3>{full}
-      };
-
-      \node[align=center, text width=11cm] at (0,-2.1) {
-        \only<1>{The MMA warp can start: the SMEM tile is ready and the TMEM output container is free.}
-        \only<2>{MMA drains the SMEM compute buffer while filling the TMEM accumulator.}
-        \only<3>{The SMEM input is empty, and the TMEM output is full.}
+        \only<3-4>{full}
       };
     \end{tikzpicture}
   \end{center}
+
+  \vspace{-0.15cm}
+  \only<1>{The MMA operation can start: compute data is ready in SMEM, and the
+  TMEM accumulator buffer is free.}
+  \only<2>{The MMA warps drain the SMEM compute buffer while filling TMEM.}
+  \only<3>{Once the SMEM input is drained, the MMA warps send
+  \textbf{compute buffer free} back to TMA.}
+  \only<4>{After the final MMA for this output tile, the MMA warps send
+  \textbf{TMEM data ready} to the epilogue warps.\\[-0.05cm]
+  \footnotesize * data ready is sent only after the final MMA finishes.}
 \end{frame}
 
-\begin{frame}{MMA Warp: Output and Reuse Signals}
+\begin{frame}{Epilogue Warps: Drain TMEM, Signal Buffer Free}
   \begin{center}
     \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=2.35cm, align=center},
-        op/.style={draw, thick, rounded corners=1pt, minimum width=1.75cm, minimum height=1.0cm, align=center},
-        siglabel/.style={font=\small\bfseries, inner sep=2pt, fill=white},
-        signal/.style={-{Stealth[length=2.4mm]}, very thick, densely dashed},
-        fillsmem/.style={fill=teal!35, draw=none},
-        filltmem/.style={fill=green!35, draw=none}
+        container/.style={circle, draw=black!25, thick, minimum size=1.45cm, align=center, font=\small, fill=black!4, text=black!45},
+        activecontainer/.style={circle, draw, thick, minimum size=1.45cm, align=center, font=\small},
+        op/.style={draw=black!25, thick, rounded corners=1pt, minimum width=2.25cm, minimum height=0.85cm, align=center, font=\small, fill=black!4, text=black!45},
+        activeop/.style={draw, thick, rounded corners=1pt, minimum width=2.45cm, minimum height=0.85cm, align=center, font=\small},
+        flow/.style={-{Latex[length=2mm]}, very thick, draw=black!25},
+        activeflow/.style={-{Latex[length=2mm]}, very thick, draw=mmblue},
+        signal/.style={-{Stealth[length=2.3mm]}, very thick, densely dashed, draw=black!25},
+        activesignal/.style={-{Stealth[length=2.3mm]}, very thick, densely dashed, draw=mmsignal},
+        siglabel/.style={font=\scriptsize\bfseries, align=center, inner sep=1.5pt, fill=white},
+        status/.style={font=\scriptsize, text=mmgray}
       ]
-      \node[container, fill=teal!7] (smem) at (-1.9,0) {SMEM\\compute\\buffer};
-      \node[container, fill=green!7] (tmem) at (1.9,0) {};
+      \node[container] (hbm1) at (-5.0,2.05) {HBM};
+      \node[op] (tma) at (-1.55,2.05) {TMA warps};
+      \node[container, minimum size=1.75cm] (smem1) at (2.8,2.05) {SMEM\\compute\\buffer};
+
+      \node[container] (smem2) at (-5.0,0) {SMEM};
+      \node[op] (mma) at (-1.55,0) {MMA warps};
+      \node[container] (tmem2) at (2.8,0) {TMEM};
+
+      \node[activecontainer, fill=green!4] (tmem3) at (-5.0,-2.05) {};
       \begin{scope}
-        \clip (1.9,0) circle (1.175cm);
-        \fill[filltmem] (0.725,-1.175) rectangle (3.075,1.175);
+        \clip (-5.0,-2.05) circle (0.725cm);
+        \only<1>{\fill[green!28] (-5.725,-2.775) rectangle (-4.275,-1.325);}
+        \only<2>{\fill[green!28] (-5.725,-2.775) rectangle (-4.275,-2.05);}
       \end{scope}
-      \node[align=center] at (tmem) {TMEM\\buffer};
+      \node[activecontainer] at (tmem3) {};
+      \node[font=\small] at (tmem3) {TMEM};
 
-      \node[op, fill=teal!10] (tma) at (-6.15,0) {TMA\\warp};
-      \node[op, fill=orange!12] (epi) at (6.15,0) {Epilogue\\warps};
-      \draw[signal, draw=mmgreen] (smem) -- (tma);
-      \draw[signal, draw=mmblue] (tmem) -- (epi);
-      \node[siglabel, text=mmgreen] at (-4.15,0.75) {resource-free};
-      \node[siglabel, text=mmblue] at (4.15,0.75) {all-MMAs-done};
+      \node[activeop, fill=orange!12] (epi) at (-1.55,-2.05) {epilogue warps};
 
-      \node[align=center, text width=10.5cm] at (0,-2.05) {
-        The final MMA state emits two signals: the drained SMEM slot can be reused
-        by the TMA warp, and the TMEM tile becomes ready only after all MMAs finish.
-      };
-    \end{tikzpicture}
-  \end{center}
-\end{frame}
-
-\begin{frame}{Epilogue Warps: Drain TMEM, Fill Registers}
-  \begin{center}
-    \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=2.25cm, align=center},
-        op/.style={draw, thick, rounded corners=1pt, minimum width=1.85cm, minimum height=1.2cm, align=center},
-        arrow/.style={-{Latex[length=2mm]}, very thick},
-        signal/.style={-{Stealth[length=2.4mm]}, very thick, densely dashed},
-        siglabel/.style={font=\small\bfseries, inner sep=2pt, fill=white},
-        status/.style={font=\scriptsize, text=mmgray},
-        filltmem/.style={fill=green!35, draw=none},
-        fillregs/.style={fill=orange!35, draw=none}
-      ]
-      \node[container, fill=green!7] (tmem) at (-4.4,0) {};
-      \node[op, fill=orange!12] (epi) at (0,0) {Epilogue\\warps};
-      \node[container, fill=orange!8] (regs) at (4.4,0) {};
-
-      \draw[arrow, draw=mmblue] (tmem) -- node[above]{drain} (epi);
-      \draw[arrow, draw=mmblue] (epi) -- node[above]{fill} (regs);
-
+      \node[activecontainer, fill=orange!4] (regs) at (2.8,-2.05) {};
       \begin{scope}
-        \clip (-4.4,0) circle (1.125cm);
-        \only<1>{\fill[filltmem] (-5.525,-1.125) rectangle (-3.275,1.125);}
-        \only<2>{\fill[filltmem] (-5.525,-1.125) rectangle (-3.275,0);}
+        \clip (2.8,-2.05) circle (0.725cm);
+        \only<2>{\fill[orange!28] (2.075,-2.775) rectangle (3.525,-2.05);}
+        \only<3>{\fill[orange!28] (2.075,-2.775) rectangle (3.525,-1.325);}
       \end{scope}
+      \node[activecontainer] at (regs) {};
+      \node[font=\small] at (regs) {registers};
 
-      \begin{scope}
-        \clip (4.4,0) circle (1.125cm);
-        \only<2>{\fill[fillregs] (3.275,-1.125) rectangle (5.525,0);}
-        \only<3>{\fill[fillregs] (3.275,-1.125) rectangle (5.525,1.125);}
-      \end{scope}
+      \draw[flow] (hbm1) -- (tma);
+      \draw[flow] (tma) -- (smem1);
+      \draw[flow] (smem2) -- (mma);
+      \draw[flow] (mma) -- (tmem2);
+      \draw[activeflow] (tmem3) -- node[above, font=\scriptsize, text=mmblue] {drain} (epi);
+      \draw[activeflow] (epi) -- node[above, font=\scriptsize, text=mmblue] {fill} (regs);
 
-      \node[align=center] at (tmem) {TMEM\\buffer};
-      \node[align=center] at (regs) {Register\\buffer};
-
-      \node[status, below=0.1cm of tmem] {
-        \only<1>{full}
-        \only<2>{half drained}
-        \only<3>{empty}
-      };
-      \node[status, below=0.1cm of regs] {
-        \only<1>{empty}
-        \only<2>{half full}
-        \only<3>{full}
-      };
-
-      \node[op, fill=green!10] (mma) at (0,1.75) {MMA\\warps};
-      \only<1>{
-        \draw[signal, draw=mmblue] (mma) -- (epi);
-        \node[siglabel, text=mmblue] at (2.15,1.0) {all-MMAs-done};
+      \draw[signal] (-1.00,1.625) -- (-1.00,0.425);
+      \draw[signal] (-2.10,0.425) -- (-2.10,1.625);
+      \draw[signal] (-1.00,-0.425) -- (-1.00,-1.625);
+      \only<1-2>{\draw[signal] (-2.10,-1.625) -- (-2.10,-0.425);}
+      \only<3>{
+        \draw[activesignal] (-2.10,-1.625) -- (-2.10,-0.425);
+        \node[siglabel, text=mmsignal] at (-2.65,-1.03) {buffer free};
       }
 
-      \node[align=center, text width=11cm] at (0,-2.1) {
-        \only<1>{The epilogue can start only after all MMAs are done and the register output container is free.}
-        \only<2>{The epilogue drains the final TMEM tile while filling registers.}
-        \only<3>{After the drain, TMEM is empty and the values are now in registers.}
+      \node[status] at (-5.0,-3.03) {
+        \only<1>{full}
+        \only<2>{half full}
+        \only<3>{empty}
+      };
+      \node[status] at (2.8,-3.03) {
+        \only<1>{empty}
+        \only<2>{half full}
+        \only<3>{full}
       };
     \end{tikzpicture}
   \end{center}
+
+  \vspace{-0.15cm}
+  \only<1>{The epilogue can start: TMEM data is ready, and the register
+  destination is available.}
+  \only<2>{The epilogue warps drain TMEM while filling registers.}
+  \only<3>{Once TMEM is drained, the epilogue warps send
+  \textbf{TMEM buffer free} back to the MMA warps.}
 \end{frame}
 
-\begin{frame}{Epilogue Warps: TMEM Reuse Signal}
+\begin{frame}{Using Multiple Buffers}
+  \small
+  The single-container graph is the dependency for one slot. Real kernels
+  replicate the same ready/free protocol across multiple slots.
+
+  \vspace{0.05cm}
   \begin{center}
     \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=2.35cm, align=center},
-        op/.style={draw, thick, rounded corners=1pt, minimum width=1.8cm, minimum height=1.0cm, align=center},
-        signal/.style={-{Stealth[length=2.4mm]}, very thick, densely dashed},
-        siglabel/.style={font=\small\bfseries, inner sep=2pt, fill=white},
-        fillregs/.style={fill=orange!35, draw=none}
+        slot/.style={draw, thick, rounded corners=1pt, minimum width=1.05cm, minimum height=0.62cm, align=center, font=\scriptsize},
+        label/.style={font=\small\bfseries, align=right},
+        note/.style={font=\scriptsize, text=mmgray, align=left, anchor=west},
+        flow/.style={-{Latex[length=2mm]}, thick, draw=mmblue},
+        signal/.style={-{Stealth[length=2mm]}, thick, densely dashed, draw=mmsignal}
       ]
-      \node[container, fill=green!7] (tmem) at (-2.3,0) {TMEM\\buffer};
-      \node[container, fill=orange!8] (regs) at (2.3,0) {};
-      \begin{scope}
-        \clip (2.3,0) circle (1.175cm);
-        \fill[fillregs] (1.125,-1.175) rectangle (3.475,1.175);
-      \end{scope}
-      \node[align=center] at (regs) {Register\\buffer};
+      \node[label] at (-4.75,0.92) {SMEM\\compute ring};
+      \node[slot, fill=teal!10] (s0) at (-2.75,0.92) {slot 0};
+      \node[slot, fill=teal!10] (s1) at (-1.55,0.92) {slot 1};
+      \node[slot, fill=teal!18] (s2) at (-0.35,0.92) {slot 2};
+      \node[slot, draw=black!35, text=black!60] (sd) at (0.85,0.92) {$\cdots$};
+      \node[slot, fill=teal!18] (sn) at (2.05,0.92) {$NS{-}1$};
+      \draw[flow] (-1.55,0.60) -- (-1.55,0.09)
+        node[below, font=\scriptsize] {MMA drain};
+      \draw[flow] (-0.35,1.75) -- (-0.35,1.24)
+        node[midway, right, font=\scriptsize] {TMA fill};
 
-      \node[op, fill=green!10] (mma) at (-5.9,0) {MMA\\warps};
-      \draw[signal, draw=mmgreen] (tmem) -- (mma);
-      \node[siglabel, text=mmgreen] at (-4.1,0.75) {resource-free};
-
-      \node[align=center, text width=10.5cm] at (0,-2.05) {
-        Once TMEM has been fully drained, the epilogue sends a resource-free
-        signal back to the MMA warps. SMEM staging is intentionally omitted here.
-      };
+      \node[label] at (-4.75,-1.35) {TMEM\\accumulator};
+      \node[slot, fill=green!12, minimum width=1.30cm] (t0) at (-2.45,-1.35) {buf 0};
+      \node[slot, fill=green!22, minimum width=1.30cm] (t1) at (-0.82,-1.35) {buf 1};
+      \draw[flow] (-2.45,-1.66) -- (-2.45,-2.17)
+        node[below, font=\scriptsize] {epilogue drain};
+      \draw[flow] (-0.82,-0.52) -- (-0.82,-1.03)
+        node[midway, right, font=\scriptsize] {MMA fill};
     \end{tikzpicture}
   \end{center}
+
+  \vspace{-0.18cm}
+  \begin{table}
+    \centering
+    \scriptsize
+    \begin{tabular}{lll}
+      \toprule
+      Container & Buffering & Effect \\
+      \midrule
+      SMEM compute ring & $NS$ slots &
+        MMA consumes one slot while TMA fills the next. \\
+      TMEM accumulator & 2 buffers &
+        Epilogue drains the previous output while MMA produces the next. \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
 \end{frame}
 
 \begin{frame}{Deriving the Warp Roles}
@@ -585,9 +591,10 @@
       \toprule
       Worker & Drains & Fills & Key signal \\
       \midrule
-      TMA warp & HBM tile & SMEM compute ring & tile ready \\
-      MMA warp & SMEM compute ring & TMEM & SMEM free / all-MMAs-done \\
-      Epilogue warp & TMEM & registers & TMEM free \\
+      TMA warp & HBM tile & SMEM compute ring & compute data ready \\
+      MMA warp & SMEM compute ring & TMEM &
+        \begin{tabular}[c]{@{}l@{}}compute buffer free\\TMEM data ready\end{tabular} \\
+      Epilogue warp & TMEM & registers & TMEM buffer free \\
       TMA store path & SMEM store ring & HBM output & store slot free \\
       \bottomrule
     \end{tabular}
@@ -631,11 +638,36 @@
 
     \column{0.46\textwidth}
     \begin{center}
-      \begin{tikzpicture}[box/.style={draw, thick, align=center, font=\scriptsize}]
-        \node[box, fill=blue!10, minimum width=1.4cm, minimum height=2.0cm] (a) {A\\$2BM\times BK$};
-        \node[box, fill=teal!12, minimum width=1.0cm, minimum height=0.95cm, right=1.4cm of a.north east, anchor=north west] (b0) {B half\\CTA 0};
-        \node[box, fill=teal!20, minimum width=1.0cm, minimum height=0.95cm, below=2pt of b0] (b1) {B half\\CTA 1};
-        \node[box, fill=green!12, minimum width=1.0cm, minimum height=2.0cm, right=0.5cm of b0.north east, anchor=north west] (c) {$2BM$\\$\times BN$};
+      \begin{tikzpicture}[
+          lab/.style={align=center, font=\scriptsize},
+          bhlab/.style={align=center, font=\tiny},
+          dim/.style={Stealth-Stealth, thin, black!60},
+          dimlab/.style={font=\tiny, text=black!70}
+        ]
+        % Fixed-coordinate geometry:
+        % A width = B height = BK, and B total width = output width = BN.
+        \draw[thick, fill=blue!10]  (0,0) rectangle (0.85,1.60);
+        \draw[thick, fill=green!12] (1.10,0) rectangle (3.50,1.60);
+        \draw[thick, fill=teal!12]  (1.10,1.85) rectangle (2.30,2.70);
+        \draw[thick, fill=teal!20]  (2.30,1.85) rectangle (3.50,2.70);
+
+        \node[lab] at (0.425,0.80) {A};
+        \node[lab] at (2.30,0.80) {output};
+        \node[bhlab] at (1.70,2.275) {B\\CTA 0};
+        \node[bhlab] at (2.90,2.275) {B\\CTA 1};
+
+        \draw[dim] (0,-0.16) -- (0.85,-0.16)
+            node[midway, below, dimlab] {$BK$};
+        \draw[dim] (-0.16,0) -- (-0.16,1.60)
+            node[midway, left, dimlab] {$2BM$};
+        \draw[dim] (1.10,-0.16) -- (3.50,-0.16)
+            node[midway, below, dimlab] {$BN$};
+        \draw[dim] (3.66,0) -- (3.66,1.60)
+            node[midway, right, dimlab] {$2BM$};
+        \draw[dim] (1.10,2.86) -- (3.50,2.86)
+            node[midway, above, dimlab] {$BN$};
+        \draw[dim] (3.66,1.85) -- (3.66,2.70)
+            node[midway, right, dimlab] {$BK$};
       \end{tikzpicture}
     \end{center}
   \end{columns}
@@ -758,51 +790,59 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
   The mbarriers \emph{are} the dashed signal arrows from the diagrams.
 \end{frame}
 
-\begin{frame}[fragile]{TMA Warp: Fill SMEM, Signal Ready}
-  \begin{lstlisting}[language=C]
+\begin{frame}[fragile]{TMA Warp: Fill SMEM, Signal Compute Data Ready}
+  \begin{lstlisting}[language=C,basicstyle=\ttfamily\footnotesize]
 if (warp_id == 0 && elect_sync()) {            // TMA-load warp
   for (int k = 0; k < num_k; k++) {
     int slot = gk % NS;
+    // wait: compute buffer free
     mbarrier_wait_phase(smem_compute_free_mbar[slot],
-                        smem_compute_free_phase[slot]); // wait: SMEM free
+                        smem_compute_free_phase[slot]);
     tma_2d_load_g2(A_base(slot), A_tmap, ...);        // drain HBM -> fill A
     tma_2d_load_g2(B_base(slot), B_tmap, ...);        //              fill B
+    // signal: compute data ready
     mbarrier_arrive_expect_tx(smem_compute_full_mbar[slot],
-                              SLOT_BYTES);            // signal: SMEM full
+                              SLOT_BYTES);
     gk++;
   }
 }
   \end{lstlisting}
   \vspace{-0.2cm}
-  \footnotesize Wait on \emph{resource-free}, fill, then send \emph{value-ready}.
+  \footnotesize Wait for the output slot to be free, fill it, then signal
+  that the compute data is ready to consume.
 \end{frame}
 
-\begin{frame}[fragile]{MMA Warp: Consume SMEM, Signal All-MMAs-Done}
-  \begin{lstlisting}[language=C]
+\begin{frame}[fragile]{MMA Warp: Compute Buffer Free, TMEM Data Ready}
+  \begin{lstlisting}[language=C,basicstyle=\ttfamily\footnotesize]
 else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {   // MMA warp
   mbarrier_wait_phase(tmem_free_mbar[buf],
-                      tmem_free_phase[buf]);        // wait: TMEM free
+                      tmem_free_phase[buf]);        // wait: TMEM buffer free
   for (int k = 0; k < num_k; k++) {
     int slot = gk % NS;
+    // wait: compute data ready
     mbarrier_wait_phase(smem_compute_full_mbar[slot],
-                        smem_compute_full_phase[slot]); // wait: SMEM full
+                        smem_compute_full_phase[slot]);
     issue_mma_chain(d_tmem, A_base(slot), B_base(slot), ...);
+    // signal: compute buffer free
     tcgen05_commit_mcast_g2(smem_compute_free_mbar[slot],
-                            cta_mask);              // signal: SMEM free
+                            cta_mask);
     gk++;
   }
-  tcgen05_commit_mcast_g2(tmem_full[buf], cta_mask);   // signal: all-MMAs-done
+  tcgen05_commit_mcast_g2(tmem_full[buf], cta_mask); // signal: TMEM data ready
 }
   \end{lstlisting}
+  \vspace{-0.2cm}
+  \footnotesize \code{tmem\_full} is the concrete mbarrier for
+  \emph{TMEM data ready}; it fires only after all MMAs for this tile are done.
 \end{frame}
 
 \begin{frame}[fragile]{Epilogue Warps: Drain TMEM, Pipelined Store}
-  \begin{lstlisting}[language=C]
+  \begin{lstlisting}[language=C,basicstyle=\ttfamily\footnotesize]
 else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
-  mbarrier_wait_phase(tmem_full[buf], full[buf]);  // wait: all-MMAs-done
+  mbarrier_wait_phase(tmem_full[buf], full[buf]);  // wait: TMEM data ready
   tcgen05_ld(...);                                 // drain TMEM -> registers
   // pack registers -> SMEM store ring -> cp.async.bulk.tensor.2d (TMA store)
-  EPI_TMEM_FREE_ARRIVE();                           // signal: TMEM free
+  EPI_TMEM_FREE_ARRIVE(buf);                       // signal: TMEM buffer free
 }
   \end{lstlisting}
   \vspace{-0.2cm}
