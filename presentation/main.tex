@@ -845,7 +845,7 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
   \vspace{0.3cm}
   \centering
   {\footnotesize A tile is 16\,KB throughout. With the SMEM capacity
-  ($\approx$228\,KB), stages $= \lfloor\text{SMEM}/\text{slot}\rfloor$. 2-CTA fits
+  ($\approx$227\,KB), stages $= \lfloor\text{SMEM}/\text{slot}\rfloor$. 2-CTA fits
   $\sim$2$\times$ the stages.}
 \end{frame}
 
@@ -1218,7 +1218,7 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
       \node[seg, fill=teal!12, minimum width=6.0cm] (comp) at (0,0)
         {compute ring\\ \scriptsize $NS$ slots $\times$ (A + B) tiles};
       \node[seg, fill=orange!14, minimum width=3.0cm, right=2pt of comp] (epi)
-        {epilogue ring\\ \scriptsize up to 4 $\times$ 16\,KB};
+        {epilogue ring\\ \scriptsize store slots $\times$ buffer};
     \end{tikzpicture}
   \end{center}
 
@@ -1226,8 +1226,8 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \begin{itemize}
     \item \textbf{Compute ring}: $NS$ pipeline slots, each holding one A tile and
       one B tile for the MMA stage.
-    \item \textbf{Epilogue ring}: the TMA store buffers. MMComposer exposes up to
-      \textbf{4} store buffers, each \textbf{16\,KB}.
+    \item \textbf{Epilogue ring}: store slots, each a TMA store buffer holding one
+      $BM\times64$ bf16 chunk: $128\cdot64\cdot2 = 16$\,KB.
     \item Both rings share one per-SM SMEM budget, so larger tiles or deeper
       pipelines on one side leave less room for the other.
   \end{itemize}
@@ -1253,7 +1253,7 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \end{table}
 
   \vspace{0.15cm}
-  Budget constraint (per SM, B200 $\approx$ 228\,KB):
+  Budget constraint (per SM, B200 $\approx$ 227\,KB):
   \[
     \underbrace{NS \times \text{slot}}_{\text{compute ring}}
     \;+\;
@@ -1263,64 +1263,105 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 
   \footnotesize Example: $BN{=}256$, $NS{=}5 \Rightarrow 160$\,KB compute ring;
   with $E{=}2$ store buffers, $+32$\,KB $= 192$\,KB total.
-  % TODO(tong): confirm the exact per-SM SMEM cap used (228 KB?).
+\end{frame}
+
+\begin{frame}{Common Partitions for $BM{=}128$ (empirical)}
+  A handful of splits work well in practice --- each fills $\approx$224\,KB of the
+  $\approx$227\,KB budget:
+
+  \vspace{0.3cm}
+  \begin{center}
+    \begin{tikzpicture}[font=\small]
+      % row 1: BN=256, 6 compute + 2 store
+      \foreach \i in {0,...,5} \draw[fill=teal!30, draw=white, line width=0.6pt]
+        (0.9*\i,1.12) rectangle (0.9*\i+0.9,1.68);
+      \foreach \i in {0,1} \draw[fill=orange!45, draw=white, line width=0.6pt]
+        (5.4+0.45*\i,1.12) rectangle (5.4+0.45*\i+0.45,1.68);
+      \node[anchor=east] at (-0.15,1.4) {$BN{=}256$};
+      \node[anchor=west, font=\scriptsize] at (6.5,1.4) {$6{\times}32 + 2{\times}16$\,KB};
+      % row 2: BN=256, 5 compute + 4 store
+      \foreach \i in {0,...,4} \draw[fill=teal!30, draw=white, line width=0.6pt]
+        (0.9*\i,-0.28) rectangle (0.9*\i+0.9,0.28);
+      \foreach \i in {0,...,3} \draw[fill=orange!45, draw=white, line width=0.6pt]
+        (4.5+0.45*\i,-0.28) rectangle (4.5+0.45*\i+0.45,0.28);
+      \node[anchor=east] at (-0.15,0) {$BN{=}256$};
+      \node[anchor=west, font=\scriptsize] at (6.5,0) {$5{\times}32 + 4{\times}16$\,KB};
+      % row 3: BN=512, 4 compute (48 KB) + 2 store
+      \foreach \i in {0,...,3} \draw[fill=teal!30, draw=white, line width=0.6pt]
+        (1.35*\i,-1.68) rectangle (1.35*\i+1.35,-1.12);
+      \foreach \i in {0,1} \draw[fill=orange!45, draw=white, line width=0.6pt]
+        (5.4+0.45*\i,-1.68) rectangle (5.4+0.45*\i+0.45,-1.12);
+      \node[anchor=east] at (-0.15,-1.4) {$BN{=}512$};
+      \node[anchor=west, font=\scriptsize] at (6.5,-1.4) {$4{\times}48 + 2{\times}16$\,KB};
+    \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.25cm}
+  {\footnotesize
+  \tikz\fill[teal!30](0,0)rectangle(0.26,0.26); compute slot
+  ($BN{=}256$: 32\,KB, $BN{=}512$: 48\,KB) \quad
+  \tikz\fill[orange!45](0,0)rectangle(0.26,0.26); 16\,KB store buffer ---
+  fewer/larger compute slots trade for more store buffers.}
 \end{frame}
 
 \section{Performance}
 
-\begin{frame}{Performance vs cuBLAS (B200, BF16)}
-  \begin{center}
-    \small Top autotuned config per shape --- MMComposer averages
-    \textbf{$\sim$100\% of cuBLAS} (range 96--106\%) across 20 shapes.
+\begin{frame}{Performance: Square GEMMs vs cuBLAS}
+  \begin{center}\small
+    MMComposer averages \textbf{$\sim$100\% of cuBLAS} (96--106\% across 20
+    shapes). Each top config \emph{is} an SMEM partition.
   \end{center}
 
-  \vspace{0.05cm}
-  {\scriptsize
-  \setlength{\tabcolsep}{3.5pt}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.4\textwidth}
-    \centering \textbf{Square ($M{=}N{=}K$)}\\[0.12cm]
-    \begin{tabular}{rrrr}
+  \vspace{0.1cm}
+  \begin{center}\small
+    \setlength{\tabcolsep}{6pt}
+    \begin{tabular}{rrrrrrr}
       \toprule
-      shape & cuBLAS & MMC & \% \\
+      shape & cuBLAS & MMC & \% & $BN$ & $NS$ & store \\
       \midrule
-      $4096^3$  & 1382 & 1354 &  98 \\
-      $5120^3$  & 1432 & 1373 &  96 \\
-      $6144^3$  & 1475 & 1447 &  98 \\
-      $7168^3$  & 1435 & 1397 &  97 \\
-      $8192^3$  & 1420 & 1453 & 102 \\
-      $9216^3$  & 1422 & 1426 & 100 \\
-      $10240^3$ & 1398 & 1390 &  99 \\
-      $11264^3$ & 1414 & 1440 & 102 \\
-      $12288^3$ & 1477 & 1472 & 100 \\
+      $4096^3$  & 1382 & 1354 &  98 & 256 & 6 & 1 \\
+      $5120^3$  & 1432 & 1373 &  96 & 512 & 4 & 2 \\
+      $6144^3$  & 1475 & 1447 &  98 & 512 & 4 & 2 \\
+      $7168^3$  & 1435 & 1397 &  97 & 256 & 5 & 1 \\
+      $8192^3$  & 1420 & 1453 & 102 & 512 & 4 & 2 \\
+      $9216^3$  & 1422 & 1426 & 100 & 512 & 4 & 2 \\
+      $10240^3$ & 1398 & 1390 &  99 & 512 & 3 & 1 \\
+      $11264^3$ & 1414 & 1440 & 102 & 512 & 3 & 2 \\
+      $12288^3$ & 1477 & 1472 & 100 & 512 & 4 & 2 \\
       \bottomrule
     \end{tabular}
+  \end{center}
 
-    \column{0.6\textwidth}
-    \centering \textbf{Rectangular ($M{\times}N{\times}K$)}\\[0.12cm]
-    \begin{tabular}{rrrr}
+  \vspace{0.15cm}
+  {\footnotesize TFLOPS (B200, BF16). \textbf{$BN$ / $NS$ / store} is the SMEM
+  partition: $NS$ compute slots of a $BN$-wide tile $+$ \emph{store} TMA buffers.}
+\end{frame}
+
+\begin{frame}{Performance: Rectangular GEMMs vs cuBLAS}
+  \begin{center}\footnotesize
+    \setlength{\tabcolsep}{6pt}
+    \begin{tabular}{rrrrrrr}
       \toprule
-      shape & cuBLAS & MMC & \% \\
+      shape ($M{\times}N{\times}K$) & cuBLAS & MMC & \% & $BN$ & $NS$ & store \\
       \midrule
-      $2048{\times}36864{\times}12288$ & 1517 & 1480 &  98 \\
-      $2048{\times}49152{\times}12288$ & 1366 & 1390 & 102 \\
-      $4096{\times}12288{\times}4096$  & 1486 & 1458 &  98 \\
-      $4096{\times}16384{\times}4096$  & 1512 & 1529 & 101 \\
-      $8192{\times}24576{\times}8192$  & 1490 & 1507 & 101 \\
-      $8192{\times}32768{\times}8192$  & 1404 & 1458 & 104 \\
-      $16384{\times}4608{\times}768$   & 1467 & 1432 &  98 \\
-      $32768{\times}4608{\times}768$   & 1461 & 1423 &  97 \\
-      $32768{\times}9216{\times}768$   & 1428 & 1415 &  99 \\
-      $32768{\times}12288{\times}768$  & 1321 & 1401 & 106 \\
-      $65536{\times}2304{\times}768$   & 1460 & 1424 &  98 \\
+      $2048{\times}36864{\times}12288$ & 1517 & 1480 &  98 & 512 & 4 & 2 \\
+      $2048{\times}49152{\times}12288$ & 1366 & 1390 & 102 & 512 & 4 & 1 \\
+      $4096{\times}12288{\times}4096$  & 1486 & 1458 &  98 & 256 & 6 & 1 \\
+      $4096{\times}16384{\times}4096$  & 1512 & 1529 & 101 & 256 & 5 & 2 \\
+      $8192{\times}24576{\times}8192$  & 1490 & 1507 & 101 & 512 & 4 & 2 \\
+      $8192{\times}32768{\times}8192$  & 1404 & 1458 & 104 & 512 & 3 & 2 \\
+      $16384{\times}4608{\times}768$   & 1467 & 1432 &  98 & 256 & 5 & 1 \\
+      $32768{\times}4608{\times}768$   & 1461 & 1423 &  97 & 256 & 5 & 1 \\
+      $32768{\times}9216{\times}768$   & 1428 & 1415 &  99 & 256 & 6 & 1 \\
+      $32768{\times}12288{\times}768$  & 1321 & 1401 & 106 & 256 & 6 & 1 \\
+      $65536{\times}2304{\times}768$   & 1460 & 1424 &  98 & 256 & 5 & 1 \\
       \bottomrule
     \end{tabular}
-  \end{columns}
-  }
+  \end{center}
 
-  \vspace{0.12cm}
-  {\scriptsize TFLOPS on B200 (BF16). cuBLAS = vendor reference; MMC = MMComposer
-  top autotuned config.}
+  \vspace{0.15cm}
+  {\footnotesize Wide/short LLM-style shapes. \textbf{$BN$ / $NS$ / store} is the
+  same SMEM partition as the square case --- autotuned per shape.}
 \end{frame}
 
 
