@@ -127,8 +127,10 @@
       \node[mem] (smem) at (-2.05,1.3) {SMEM};
       \node[eng] (tc)   at (1.25,2.55) {Tensor Core};
       \node[mem] (tmem) at (4.65,2.55) {TMEM};
-      \node[eng] (cuda) at (4.65,0.25) {CUDA cores};
-      \node[mem] (regs) at (1.25,0.25) {registers};
+      \node[eng, minimum width=2.95cm, minimum height=1.35cm] (cuda) at (4.65,0.2) {};
+      \node[font=\scriptsize] at (4.65,0.62) {CUDA cores};
+      \node[draw, thick, fill=blue!10, font=\tiny, align=center,
+            minimum width=1.55cm, minimum height=0.44cm] (regs) at (4.65,-0.06) {registers};
 
       \node[mem, fill=gray!12] (hbm) at (-5.25,-2.0) {HBM};
 
@@ -138,23 +140,21 @@
       \draw[flow] (smem.north east) to[out=50,in=183] (tc.west);
       \draw[flow] (tc.east) -- (tmem.west);
       \draw[flow] (tmem.south) -- (cuda.north);
-      \draw[flow] (cuda.west) -- (regs.east);
-      \draw[flow] (regs.north west) to[out=150,in=-55] (smem.south east);
+      \draw[flow] (cuda.west) to[out=180,in=-60] (smem.south east);
       % store back
       \draw[sflow] ([yshift=-6pt]smem.west) -- ([yshift=-6pt]tma.east);
       \draw[sflow] ([xshift=5pt]tma.south) -- ([xshift=5pt]hbm.north);
 
       \node[steplab] at (-3.55,1.78) {\textbf{1}\,load};
       \node[steplab] at (-0.85,2.05) {\textbf{2}\,MMA};
-      \node[steplab] at (5.15,1.4)   {\textbf{3}\,drain};
-      \node[steplab] at (-0.5,0.6)   {\textbf{4}\,stage};
-      \node[sstep]   at (-3.55,0.82) {\textbf{5}\,store};
+      \node[steplab] at (1.7,0.6)    {\textbf{3}\,drain \& stage};
+      \node[sstep]   at (-3.55,0.82) {\textbf{4}\,store};
     \end{tikzpicture}
   \end{center}
 
   \vspace{0.1cm}
-  {\footnotesize Green ellipses are \textbf{engines}; rectangles are
-  \textbf{storage}. Each numbered step routes through the engine that performs it.}
+  {\footnotesize Green ellipses are \textbf{engines}, rectangles \textbf{storage};
+  step 3 is the CUDA-core epilogue --- drain TMEM into registers, then stage to SMEM.}
 \end{frame}
 
 \section{Orchestration}
