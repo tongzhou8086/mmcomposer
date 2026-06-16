@@ -133,11 +133,34 @@ srunpy study-swiglu-extra-store/bench_extra_store.py --variants swiglu-out-fast-
 
 Default controlled-study timing is `do_bench warmup=1000ms rep=1000ms`.
 
-The shareable fused sources are also saved as:
+The fastest shareable dual-B kernel from this study is the `NS=6`,
+`TMA_STORE_STAGES=2` variant:
+
+```text
+study-swiglu-extra-store/fused_matmul_swiglu_out_fast_dual_b_ns6_s2.cu
+study-swiglu-extra-store/host_fused_matmul_swiglu_out_fast_dual_b_ns6_s2.py
+```
+
+Run it directly with:
+
+```bash
+srunpy study-swiglu-extra-store/host_fused_matmul_swiglu_out_fast_dual_b_ns6_s2.py
+```
+
+The host builds the five TMA descriptors once after tensor allocation and
+reuses the same launch arguments for correctness and `do_bench` timing. If
+tensor pointers, shape, strides, or TMA box dimensions change, rebuild the
+descriptors before launching again.
+
+The older `fused_matmul_swiglu_dual_b.cu` and
+`fused_matmul_swiglu_out_fast_dual_b_s2.cu` files are `NS=5` variants. They
+are useful historical artifacts, but the measured best dual-B source is the
+`ns6_s2` file above.
+
+Other shareable fused sources are also saved as:
 
 ```text
 study-swiglu-extra-store/fused_matmul_swiglu.cu
-study-swiglu-extra-store/fused_matmul_swiglu_dual_b.cu
 ```
 
 ## STORE_N=128 Debug Artifact
