@@ -1163,7 +1163,7 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \[
     \underbrace{NS \times \text{slot}}_{\text{compute ring}}
     \;+\;
-    \underbrace{E \times 16\,\text{KB}}_{\text{epilogue ring},\ E\le 4}
+    \underbrace{E \times 16\,\text{KB}}_{\text{epilogue ring}}
     \;\le\; S_{\text{SMEM}}
   \]
 
@@ -1210,8 +1210,6 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   fewer/larger compute slots trade for more store buffers.}
 \end{frame}
 
-\section{Performance}
-
 \begin{frame}{Autotuning: Configuration Search Space}
   Autotune sweeps these parameters and benchmarks every \emph{valid} combo:
 
@@ -1234,9 +1232,33 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
     \item A \textbf{static checker} prunes combos whose SMEM exceeds
       \textbf{227\,KB} ($NS \times \text{slot}(BN) + \text{store}\times16
       \le 227$) before benchmarking; the fastest survivor wins.
-    \item Plus knobs \emph{beyond this talk}: CTA-swizzle factor
-      $\{1,2,4,8,16\}$, persistent grid, epilogue overlap, L1 no-allocate,
-      \ldots
+    \item The framework fixes everything else; the one knob it leaves open is the
+      \textbf{CTA-swizzle factor} $\{1,2,4,8,16\}$ (an L2-reuse block ordering,
+      not covered here).
+  \end{itemize}
+\end{frame}
+
+\section{Implementation \& Performance}
+
+\begin{frame}[plain]
+  \begin{center}
+    \vspace{1.8cm}
+    {\usebeamercolor[fg]{title}\Large\bfseries Implementation and Performance Results}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Implementation Details Worth Noting}
+  \textbf{Warp layout --- deliberately not a power of two.} Each CTA launches
+  \[
+    \underbrace{1}_{\text{TMA}} + \underbrace{1}_{\text{MMA}}
+    + \underbrace{4 \text{ or } 8}_{\text{epilogue}}
+    \;=\; 6 \text{ or } 10 \text{ warps.}
+  \]
+  \begin{itemize}
+    \item The \textbf{TMA} and \textbf{MMA} warps are fixed --- one each.
+    \item The \textbf{epilogue} warp count $\in \{4, 8\}$ is \textbf{autotuned};
+      more warps give the TMEM drain and SMEM write more parallelism.
+    \item So the CTA is sized to the work, not rounded up to a power of two.
   \end{itemize}
 \end{frame}
 
@@ -1320,6 +1342,58 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 
   \vspace{0.2cm}
   \centering\small The optimum is shape-dependent and empirical --- hence autotune.
+\end{frame}
+
+\section{Adding Epilogue Fusions}
+
+\begin{frame}[plain]
+  \begin{center}
+    \vspace{1.8cm}
+    {\usebeamercolor[fg]{title}\Large\bfseries Adding Epilogue Fusions}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Adding Epilogue Fusions}
+  A custom epilogue fusion plugs into the framework \textbf{without touching the
+  compute pipeline} --- only the epilogue's drain$\to$store loop changes.
+
+  \vspace{0.3cm}
+  \textbf{Case study: fused SwiGLU.} One GEMM produces two projections side by
+  side in TMEM (\emph{left} and \emph{gate}); the epilogue writes out both and
+  the gated result:
+  \[
+    \text{SwiGLU} = \text{left} \;\odot\; \mathrm{SiLU}(\text{gate}),
+    \qquad \mathrm{SiLU}(g) = g\,\sigma(g).
+  \]
+  \begin{itemize}
+    \item Loop over \emph{pairs} of column chunks (a left chunk $+$ its gate chunk).
+    \item Per pair: load both into registers, then \textbf{three} stores ---
+      left, gate, and SwiGLU.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Fused SwiGLU: the Epilogue Loop}
+  Only the epilogue changes; \code{stage\_and\_store} is the canonical
+  swizzled-write $+$ TMA-store helper:
+  \begin{lstlisting}[language=C, basicstyle=\ttfamily\scriptsize]
+for (int p = 0; p < (BN/64)/2; p++) {          // loop over chunk PAIRS
+  for (int n = 0; n < 8; n++) {                // load both projections
+    tcgen05_ld_x8(tmem + p*64        + n*8, left[n]);
+    tcgen05_ld_x8(tmem + (p+HALF)*64 + n*8, gate[n]);
+  }
+  tcgen05_wait_ld();
+
+  stage_and_store(left, C, p*64);              // (1) store left
+  stage_and_store(gate, C, (p+HALF)*64);       // (2) store gate
+
+  for (int n = 0; n < 8; n++)                  // (3) fused SwiGLU math
+    swig[n] = left[n] * silu_fast(gate[n]);    //     ex2.approx + rcp.approx
+  stage_and_store(swig, D, p*64);              //     store SwiGLU -> D
+}
+  \end{lstlisting}
+  \vspace{-0.15cm}
+  {\footnotesize \code{stage\_and\_store} = the same store step as the canonical
+  epilogue; fusion just adds the math and an extra output tensor \code{D}.}
 \end{frame}
 
 
