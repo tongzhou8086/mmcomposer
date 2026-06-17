@@ -970,35 +970,6 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
   neighboring threads' outputs.
 \end{frame}
 
-\begin{frame}{Epilogue Design: Two Separate Concerns}
-  Storing the result tile raises two \emph{independent} problems:
-
-  \vspace{0.35cm}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.5\textwidth}
-    \begin{center}\textbf{1. Coalesced global write}\end{center}
-    \begin{itemize}
-      \item A direct register $\to$ HBM store is row-strided $\Rightarrow$
-        uncoalesced.
-      \item \textbf{Design choice}: make the TMA store unit a $128\times 64$
-        tile --- the 64 contiguous columns give one coalesced GMEM write.
-    \end{itemize}
-
-    \column{0.5\textwidth}
-    \begin{center}\textbf{2. Populating the SMEM tile}\end{center}
-    \begin{itemize}
-      \item Fill that $128\times 64$ SMEM buffer from TMEM with
-        \code{tcgen05.ld}.
-      \item Each lane writes its own row $\Rightarrow$ bank conflicts; an
-        \textbf{XOR swizzle} makes the write conflict-free.
-    \end{itemize}
-  \end{columns}
-
-  \vspace{0.4cm}
-  \centering
-  \small Concern 1 is about HBM bandwidth; concern 2 is about on-chip SMEM banks.
-\end{frame}
-
 \begin{frame}{Epilogue Concern 1: Coalesced Global Write}
   Each thread owns a \emph{row}, so storing registers straight to HBM is
   row-strided. Instead we first fill one \textbf{$BM\times64$ chunk} in SMEM ---
@@ -1086,85 +1057,38 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 \end{frame}
 
 
-\begin{frame}{Epilogue Design: Staged TMA Store}
-  \begin{center}
-    \small Phases 2--3: once the store tile is regular, TMA can drain it asynchronously.
-  \end{center}
-
-  \vspace{0.25cm}
-  \begin{center}
-    \begin{tikzpicture}[
-        stage/.style={draw, thick, rounded corners=1pt, minimum width=1.75cm, minimum height=0.78cm, align=center, font=\small},
-        wide/.style={draw, thick, rounded corners=1pt, minimum width=2.35cm, minimum height=0.78cm, align=center, font=\small},
-        arrow/.style={-{Latex[length=2mm]}, very thick, draw=mmblue}
-      ]
-      \node[stage, fill=green!10] (tmem) at (-4.55,0) {TMEM};
-      \node[stage, fill=blue!8] (regs) at (-2.45,0) {registers};
-      \node[wide, fill=orange!14] (smem) at (0.05,0) {SMEM\\store ring};
-      \node[stage, fill=teal!12] (tma) at (2.65,0) {TMA\\store};
-      \node[stage, fill=gray!10] (hbm) at (4.75,0) {HBM};
-
-      \draw[arrow] (tmem) -- (regs);
-      \draw[arrow] (regs) -- (smem);
-      \draw[arrow] (smem) -- (tma);
-      \draw[arrow] (tma) -- (hbm);
-
-      \node[draw, thick, fill=orange!8, minimum width=0.78cm, minimum height=0.42cm] at (-0.86,-1.02) {};
-      \node[draw, thick, fill=orange!18, minimum width=0.78cm, minimum height=0.42cm] at (0.05,-1.02) {};
-      \node[draw, thick, fill=orange!8, minimum width=0.78cm, minimum height=0.42cm] at (0.96,-1.02) {};
-      \node[font=\small, text=mmgray] at (0.05,-1.48) {each buffer = $BM \times 64$ BF16};
-    \end{tikzpicture}
-  \end{center}
-
-  \vspace{0.25cm}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.48\textwidth}
-    \begin{center}
-      \textbf{Why stage through SMEM?}\\[0.12cm]
-      Convert fragment-style TMEM drains into a regular store tile.
-    \end{center}
-
-    \column{0.48\textwidth}
-    \begin{center}
-      \textbf{Why TMA store?}\\[0.12cm]
-      One natural store unit is a 64-column BF16 chunk.
-    \end{center}
-  \end{columns}
-\end{frame}
-
 \begin{frame}{Epilogue Design: Multiple Store Buffers}
-  Within one 64-column chunk the two phases run \textbf{in order}, not interleaved:
+  With $\ge 2$ store buffers, one chunk's \textbf{TMA store overlaps the next
+  chunk's SMEM write}:
 
-  \vspace{0.25cm}
+  \vspace{0.3cm}
   \begin{center}
     \begin{tikzpicture}[
-        ph/.style={draw, thick, rounded corners=2pt, align=center, font=\scriptsize, minimum height=1.05cm, text width=2.4cm},
-        buf/.style={draw, thick, minimum width=0.66cm, minimum height=0.66cm, font=\scriptsize},
-        arrow/.style={-{Latex[length=2mm]}, very thick, draw=mmblue}
+        wr/.style={draw, fill=orange!25, minimum height=0.5cm, font=\tiny, anchor=west, inner sep=1pt, align=center},
+        st/.style={draw, fill=teal!18, minimum height=0.5cm, font=\tiny, anchor=west, inner sep=1pt, align=center},
+        lane/.style={font=\scriptsize, anchor=east}
       ]
-      \node[ph, fill=blue!8] (load) {\textbf{Phase 1}\\ 8$\times$\,\code{ld.x8}\\ $\to$ registers};
-      \node[ph, fill=orange!12, right=0.9cm of load] (store) {\textbf{Phase 2}\\ swizzled write\\ $+$ TMA issue};
-      \node[buf, fill=orange!8, right=0.9cm of store] (b0) {b0};
-      \node[buf, fill=orange!22, right=0.1cm of b0] (b1) {b1};
-      \node[buf, fill=orange!8, right=0.1cm of b1] (b2) {b2};
-      \node[ph, fill=teal!12, right=0.9cm of b2, text width=1.15cm, minimum height=0.66cm] (tma) {TMA\\$\to$ HBM};
-      \draw[arrow] (load) -- node[above, font=\tiny]{then} (store);
-      \draw[arrow] (store) -- node[above, font=\tiny]{grab} (b0);
-      \draw[arrow] (b2) -- (tma);
-      \node[font=\tiny, text=mmgray, below=0.04cm of load] {no buffer};
-      \node[font=\tiny, text=mmgray, below=0.04cm of b1] {$128\times64$ each};
+      \node[lane] at (-0.1,0.55)  {buffer 0};
+      \node[lane] at (-0.1,-0.55) {buffer 1};
+      \node[wr, minimum width=1.5cm] at (0.1,0.55) {write $c_0$};
+      \node[st, minimum width=2.9cm] at (1.6,0.55) {TMA store $c_0 \to$ HBM};
+      \node[wr, minimum width=1.5cm] at (4.5,0.55) {write $c_2$};
+      \node[wr, minimum width=1.5cm] at (1.6,-0.55) {write $c_1$};
+      \node[st, minimum width=2.9cm] at (3.1,-0.55) {TMA store $c_1 \to$ HBM};
+      \draw[-{Latex[length=2mm]}, thick] (0,-1.15) -- (6.4,-1.15) node[right, font=\scriptsize]{time};
+      \draw[densely dashed, draw=mmsignal] (1.6,0.95) -- (1.6,-1.0);
+      \draw[densely dashed, draw=mmsignal] (3.1,0.95) -- (3.1,-1.0);
+      \node[font=\scriptsize, text=mmsignal, align=center] at (2.35,1.35)
+        {write $c_1$ runs while\\ TMA drains $c_0$};
     \end{tikzpicture}
   \end{center}
 
-  \vspace{0.15cm}
+  \vspace{0.2cm}
   \begin{itemize}
-    \item Phase 1 reads the whole chunk into registers --- it touches only TMEM
-      and registers, so it needs \emph{no} store buffer.
-    \item Phase 2 is the only consumer of the store ring: it grabs a free
-      $128\times64$ buffer, writes it (swizzled), and hands it to TMA.
-    \item So \textbf{multiple buffering pipelines only Phase 2}: while TMA drains
-      earlier buffers to HBM, later chunks write into others. Phase 2 waits
-      (ready/free) only when no buffer is free.
+    \item The TMA store is \textbf{async}: once issued, the epilogue moves to the
+      next chunk's write.
+    \item With $N$ buffers ($N \in \{1,2,3,4\}$) it fills a free one while TMA
+      drains earlier ones --- stalling only when all $N$ are in flight.
   \end{itemize}
 \end{frame}
 
@@ -1191,22 +1115,6 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \end{frame}
 
 \section{Tile Sizes and Shared Memory}
-
-\begin{frame}{Framework Choice: Disjoint SMEM}
-  There are several valid ways to share on-chip storage between compute and
-  epilogue. This talk uses one concrete framework:
-
-  \begin{itemize}
-    \item Compute uses a dedicated SMEM ring buffer for A/B tiles.
-    \item The epilogue uses a \textbf{pipelined TMA store}: it packs results into
-      a separate SMEM store ring buffer and lets TMA push tiles to HBM.
-    \item The number of TMA store pipeline stages is a tunable parameter.
-  \end{itemize}
-
-  \vspace{0.2cm}
-  Consequence: shared memory splits into \textbf{two} rings, and 2-CTA tile
-  sizes set how big each one is.
-\end{frame}
 
 \begin{frame}{Partitioning Shared Memory}
   \begin{center}
