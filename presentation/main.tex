@@ -1298,5 +1298,29 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   same SMEM partition as the square case --- autotuned per shape.}
 \end{frame}
 
+\begin{frame}{Why More Buffers Doesn't Always Help}
+  The autotuned configs rarely max out the buffer counts (store mostly 1--2, not
+  4) --- something we would not have predicted before seeing the numbers. Some
+  intuition (\emph{hypotheses}, not proven):
+
+  \vspace{0.25cm}
+  \textbf{Compute ring (more $NS$)}
+  \begin{itemize}
+    \item Once the pipeline hides load/MMA latency, extra stages add nothing.
+  \end{itemize}
+
+  \vspace{0.15cm}
+  \textbf{Epilogue ring (more store buffers)}
+  \begin{itemize}
+    \item If the epilogue is already fast relative to compute, the extra
+      store$\leftrightarrow$write overlap buys little.
+    \item More TMA stores in flight $=$ more memory parallelism that may contend
+      with the TMA \emph{loads} feeding the compute pipeline.
+  \end{itemize}
+
+  \vspace{0.2cm}
+  \centering\small The optimum is shape-dependent and empirical --- hence autotune.
+\end{frame}
+
 
 \end{document}
