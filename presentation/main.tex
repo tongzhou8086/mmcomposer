@@ -1286,6 +1286,27 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \end{itemize}
 \end{frame}
 
+\begin{frame}{Implementation: Folding Store into the Epilogue}
+  The design has four stages, but the implementation \textbf{merges the last
+  two}: the epilogue warps also issue the TMA store --- no dedicated store warp,
+  no producer/consumer handshake.
+
+  \begin{itemize}
+    \item \textbf{Leaner code, simpler synchronization} --- at the cost of a
+      slightly less ``clean'' design.
+    \item \textbf{No performance loss}: issuing a store is a few instructions (the
+      transfer is async), and the epilogue is store-bound, so a dedicated issue
+      warp would not raise TMA throughput.
+  \end{itemize}
+
+  \vspace{0.25cm}
+  \emph{Why not also merge TMA-load with MMA, then?} Warp specialization pays off
+  only when two roles have heavy, \emph{independent} async work to overlap. TMA
+  load and MMA do --- overlapping them keeps the tensor cores fed. The store
+  \emph{issue} is a handful of instructions gated by the same SMEM buffer and HBM
+  bandwidth, so giving it its own warp buys nothing.
+\end{frame}
+
 \begin{frame}{Performance: Square GEMMs vs cuBLAS}
   \begin{center}\small
     MMComposer averages \textbf{$\sim$100\% of cuBLAS} (96--106\% across 20
