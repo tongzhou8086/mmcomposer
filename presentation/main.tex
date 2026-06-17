@@ -1450,25 +1450,27 @@ for (int p = 0; p < (BN/64)/2; p++) {          // loop over chunk PAIRS
     \text{store}{=}2$
   \end{center}
 
-  \vspace{0.2cm}
+  \vspace{0.15cm}
   \begin{center}\small
     \begin{tabular}{lrr}
       \toprule
-       & TFLOPS & time \\
+       & time & TFLOPS \\
       \midrule
-      cuBLAS (GEMM only)                  & 1406 & 165\,$\mu$s \\
-      fused SwiGLU ($1.5\times$ store)    & 1250 & 185\,$\mu$s \\
+      cuBLAS GEMM (matmul only)              & 165\,$\mu$s & 1406 \\
+      unfused: GEMM $+$ separate SwiGLU      & $\sim$245\,$\mu$s & --- \\
+      \quad\scriptsize ($165 + {\sim}80$\,$\mu$s activation) & & \\
+      \textbf{fused SwiGLU} (one kernel)     & \textbf{185}\,$\mu$s & 1250 \\
       \bottomrule
     \end{tabular}
   \end{center}
 
-  \vspace{0.3cm}
+  \vspace{0.2cm}
   \begin{itemize}
-    \item Despite \textbf{$1.5\times$ the store traffic} (left $+$ gate $+$
-      SwiGLU) and the SwiGLU math, it is only \textbf{$\sim$12\% slower} ---
-      $89\%$ of a pure cuBLAS GEMM.
-    \item The SwiGLU math is essentially \textbf{free}; the gap is almost
-      entirely the \textbf{extra store}.
+    \item vs the \textbf{unfused two-kernel} path ($\sim$245\,$\mu$s), fusion is
+      \textbf{$\sim$1.3$\times$ faster} ($\sim$60\,$\mu$s saved).
+    \item vs a \textbf{pure cuBLAS GEMM} (165\,$\mu$s), only $\sim$12\% slower
+      despite $1.5\times$ store $+$ SwiGLU math --- the math is \textbf{free}, so
+      the gap is just the extra store.
   \end{itemize}
 \end{frame}
 
