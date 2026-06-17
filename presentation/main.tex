@@ -197,6 +197,46 @@
   \end{itemize}
 \end{frame}
 
+\begin{frame}{The Three Operations}
+  The whole kernel is just \textbf{three} such operations:
+
+  \vspace{0.35cm}
+  \begin{center}
+    \begin{tikzpicture}[
+        mem/.style={draw, thick, rounded corners=2pt, minimum width=1.9cm, minimum height=0.8cm, align=center, font=\small, fill=blue!8},
+        omem/.style={draw, thick, rounded corners=2pt, minimum width=1.9cm, minimum height=0.8cm, align=center, font=\small, fill=orange!12},
+        op/.style={draw, thick, rounded corners=2pt, minimum width=2.3cm, minimum height=0.8cm, align=center, font=\small, fill=green!10},
+        arrow/.style={-{Latex[length=2mm]}, thick},
+        lbl/.style={font=\scriptsize, text=mmgray}
+      ]
+      \node[mem] (h1) at (-4.3,1.65) {HBM};
+      \node[op]  (o1) at (-0.3,1.65) {TMA load};
+      \node[omem] (s1) at (3.7,1.65) {SMEM};
+      \draw[arrow] (h1) -- node[above,lbl]{drain} (o1);
+      \draw[arrow] (o1) -- node[above,lbl]{fill} (s1);
+
+      \node[mem] (s2) at (-4.3,0) {SMEM};
+      \node[op]  (o2) at (-0.3,0) {MMA};
+      \node[omem] (t2) at (3.7,0) {TMEM};
+      \draw[arrow] (s2) -- (o2);
+      \draw[arrow] (o2) -- (t2);
+
+      \node[mem] (t3) at (-4.3,-1.65) {TMEM};
+      \node[op]  (o3) at (-0.3,-1.65) {epilogue};
+      \node[omem] (h3) at (3.7,-1.65) {HBM};
+      \draw[arrow] (t3) -- (o3);
+      \draw[arrow] (o3) -- (h3);
+    \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.2cm}
+  \begin{itemize}
+    \item \textbf{TMA load} --- drain HBM tiles, fill the SMEM compute buffer.
+    \item \textbf{MMA} --- drain SMEM, accumulate into TMEM.
+    \item \textbf{Epilogue} (collectively) --- drain TMEM, write the result to HBM.
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{When Can an Operation Start?}
   An operation is schedulable only when both conditions are true:
 
