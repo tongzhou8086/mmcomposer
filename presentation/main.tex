@@ -197,43 +197,50 @@
   \end{itemize}
 \end{frame}
 
-\begin{frame}{The Three Operations}
-  The whole kernel is just \textbf{three} such operations:
+\begin{frame}{The Four Operations}
+  The whole kernel is just \textbf{four} such operations:
 
-  \vspace{0.35cm}
+  \vspace{0.15cm}
   \begin{center}
-    \begin{tikzpicture}[
-        mem/.style={draw, thick, rounded corners=2pt, minimum width=1.9cm, minimum height=0.8cm, align=center, font=\small, fill=blue!8},
-        omem/.style={draw, thick, rounded corners=2pt, minimum width=1.9cm, minimum height=0.8cm, align=center, font=\small, fill=orange!12},
-        op/.style={draw, thick, rounded corners=2pt, minimum width=2.3cm, minimum height=0.8cm, align=center, font=\small, fill=green!10},
+    \begin{tikzpicture}[scale=0.9, transform shape,
+        mem/.style={draw, thick, rounded corners=2pt, minimum width=1.8cm, minimum height=0.72cm, align=center, font=\small, fill=blue!8},
+        omem/.style={draw, thick, rounded corners=2pt, minimum width=1.8cm, minimum height=0.72cm, align=center, font=\small, fill=orange!12},
+        op/.style={draw, thick, rounded corners=2pt, minimum width=2.3cm, minimum height=0.72cm, align=center, font=\small, fill=green!10},
         arrow/.style={-{Latex[length=2mm]}, thick},
         lbl/.style={font=\scriptsize, text=mmgray}
       ]
-      \node[mem] (h1) at (-4.3,1.65) {HBM};
-      \node[op]  (o1) at (-0.3,1.65) {Input tile\\load};
-      \node[omem] (s1) at (3.7,1.65) {SMEM};
+      \node[mem] (h1) at (-4.3,1.9) {HBM};
+      \node[op]  (o1) at (-0.3,1.9) {Input tile load};
+      \node[omem] (s1) at (3.7,1.9) {SMEM};
       \draw[arrow] (h1) -- node[above,lbl]{drain} (o1);
       \draw[arrow] (o1) -- node[above,lbl]{fill} (s1);
 
-      \node[mem] (s2) at (-4.3,0) {SMEM};
-      \node[op]  (o2) at (-0.3,0) {MMA};
-      \node[omem] (t2) at (3.7,0) {TMEM};
+      \node[mem] (s2) at (-4.3,0.63) {SMEM};
+      \node[op]  (o2) at (-0.3,0.63) {MMA};
+      \node[omem] (t2) at (3.7,0.63) {TMEM};
       \draw[arrow] (s2) -- (o2);
       \draw[arrow] (o2) -- (t2);
 
-      \node[mem] (t3) at (-4.3,-1.65) {TMEM};
-      \node[op]  (o3) at (-0.3,-1.65) {epilogue};
-      \node[omem] (h3) at (3.7,-1.65) {HBM};
+      \node[mem] (t3) at (-4.3,-0.63) {TMEM};
+      \node[op]  (o3) at (-0.3,-0.63) {Epilogue};
+      \node[omem] (s3) at (3.7,-0.63) {SMEM};
       \draw[arrow] (t3) -- (o3);
-      \draw[arrow] (o3) -- (h3);
+      \draw[arrow] (o3) -- (s3);
+
+      \node[mem] (s4) at (-4.3,-1.9) {SMEM};
+      \node[op]  (o4) at (-0.3,-1.9) {Store};
+      \node[omem] (h4) at (3.7,-1.9) {HBM};
+      \draw[arrow] (s4) -- (o4);
+      \draw[arrow] (o4) -- (h4);
     \end{tikzpicture}
   \end{center}
 
-  \vspace{0.2cm}
+  \vspace{0.15cm}
   \begin{itemize}
-    \item \textbf{Input tile load} --- drain HBM tiles, fill the SMEM compute buffer.
+    \item \textbf{Input tile load} --- drain HBM, fill the SMEM compute buffer.
     \item \textbf{MMA} --- drain SMEM, accumulate into TMEM.
-    \item \textbf{Epilogue} --- drain TMEM, write the result to HBM.
+    \item \textbf{Epilogue} --- drain TMEM, stage the result into SMEM.
+    \item \textbf{Store} --- drain the SMEM store buffer, write to HBM.
   \end{itemize}
 \end{frame}
 
