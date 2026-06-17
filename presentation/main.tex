@@ -64,10 +64,7 @@
 \begin{frame}[plain]
   \begin{center}
     \vspace{1.8cm}
-    {\usebeamercolor[fg]{title}\Large\bfseries Design}
-
-    \vspace{0.35cm}
-    {\large High-Level Design}
+    {\usebeamercolor[fg]{title}\Large\bfseries High-Level Design}
   \end{center}
 \end{frame}
 
@@ -1173,13 +1170,14 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 
 \begin{frame}[fragile]{Epilogue Design: From Design to Code}
   The whole epilogue is one loop over the $BN/64$ store chunks:
-  \begin{lstlisting}[language=C, basicstyle=\ttfamily\footnotesize]
+  \begin{lstlisting}[language=C, basicstyle=\ttfamily\scriptsize]
 for (int chunk = 0; chunk < BN/64; chunk++) {
   // Phase 1: load all 64 cols of this chunk into registers
   for (int n = 0; n < 8; n++)            // 8 x tcgen05.ld.x8
     tcgen05_ld_x8(tmem_row + chunk*64 + n*8, reg[n]);
   tcgen05_wait_ld();
-  wait_for_store_buffer();               // grab a free 128x64 buffer
+  if (elect) tma_wait_group<TMA_STORE_STAGES-1>();  // a buffer is free
+  bar.sync;                              // ... visible to all warps
   // Phase 2: conflict-free SMEM write, then the TMA store
   for (int n = 0; n < 8; n++) {
     int swz = n ^ (row & 7);             // XOR swizzle: distinct banks
@@ -1266,8 +1264,8 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \end{frame}
 
 \begin{frame}{Common Partitions for $BM{=}128$ (empirical)}
-  A handful of splits work well in practice --- each fills $\approx$224\,KB of the
-  $\approx$227\,KB budget:
+  Each split below is the \textbf{maximum} that fits in $\approx$227\,KB; the
+  config actually used is chosen by autotune per shape:
 
   \vspace{0.3cm}
   \begin{center}
@@ -1278,21 +1276,21 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
       \foreach \i in {0,1} \draw[fill=orange!45, draw=white, line width=0.6pt]
         (5.4+0.45*\i,1.12) rectangle (5.4+0.45*\i+0.45,1.68);
       \node[anchor=east] at (-0.15,1.4) {$BN{=}256$};
-      \node[anchor=west, font=\scriptsize] at (6.5,1.4) {$6{\times}32 + 2{\times}16$\,KB};
+      \node[anchor=west, font=\scriptsize] at (6.5,1.4) {up to $6{\times}32 + 2{\times}16$\,KB};
       % row 2: BN=256, 5 compute + 4 store
       \foreach \i in {0,...,4} \draw[fill=teal!30, draw=white, line width=0.6pt]
         (0.9*\i,-0.28) rectangle (0.9*\i+0.9,0.28);
       \foreach \i in {0,...,3} \draw[fill=orange!45, draw=white, line width=0.6pt]
         (4.5+0.45*\i,-0.28) rectangle (4.5+0.45*\i+0.45,0.28);
       \node[anchor=east] at (-0.15,0) {$BN{=}256$};
-      \node[anchor=west, font=\scriptsize] at (6.5,0) {$5{\times}32 + 4{\times}16$\,KB};
+      \node[anchor=west, font=\scriptsize] at (6.5,0) {up to $5{\times}32 + 4{\times}16$\,KB};
       % row 3: BN=512, 4 compute (48 KB) + 2 store
       \foreach \i in {0,...,3} \draw[fill=teal!30, draw=white, line width=0.6pt]
         (1.35*\i,-1.68) rectangle (1.35*\i+1.35,-1.12);
       \foreach \i in {0,1} \draw[fill=orange!45, draw=white, line width=0.6pt]
         (5.4+0.45*\i,-1.68) rectangle (5.4+0.45*\i+0.45,-1.12);
       \node[anchor=east] at (-0.15,-1.4) {$BN{=}512$};
-      \node[anchor=west, font=\scriptsize] at (6.5,-1.4) {$4{\times}48 + 2{\times}16$\,KB};
+      \node[anchor=west, font=\scriptsize] at (6.5,-1.4) {up to $4{\times}48 + 2{\times}16$\,KB};
     \end{tikzpicture}
   \end{center}
 
@@ -1305,6 +1303,34 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \end{frame}
 
 \section{Performance}
+
+\begin{frame}{Autotuning: Configuration Search Space}
+  Autotune sweeps these parameters and benchmarks every \emph{valid} combo:
+
+  \begin{table}
+    \centering\small
+    \begin{tabular}{ll}
+      \toprule
+      Parameter (covered in this talk) & Candidate values \\
+      \midrule
+      $BM$ (tile rows)               & $\{128\}$ \\
+      $BN$ (tile cols)               & $\{256,\ 512\}$ \\
+      compute slots ($NS$)           & $\{2,3,4,5,6\}$ \\
+      epilogue slots (store buffers) & $\{1,2,3,4\}$ \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \vspace{0.1cm}
+  \begin{itemize}
+    \item A \textbf{static checker} prunes combos whose SMEM exceeds
+      \textbf{227\,KB} ($NS \times \text{slot}(BN) + \text{store}\times16
+      \le 227$) before benchmarking; the fastest survivor wins.
+    \item Plus knobs \emph{beyond this talk}: CTA-swizzle factor
+      $\{1,2,4,8,16\}$, persistent grid, epilogue overlap, L1 no-allocate,
+      \ldots
+  \end{itemize}
+\end{frame}
 
 \begin{frame}{Performance: Square GEMMs vs cuBLAS}
   \begin{center}\small
