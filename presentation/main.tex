@@ -1354,8 +1354,8 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \end{frame}
 
 \begin{frame}{Adding Epilogue Fusions}
-  A custom epilogue fusion plugs into the framework \textbf{without touching the
-  compute pipeline} --- only the epilogue's drain$\to$store loop changes.
+  A custom epilogue fusion is almost entirely an \textbf{epilogue} change --- the
+  compute pipeline is reused, with at most a minor TMA-load tweak.
 
   \vspace{0.3cm}
   \textbf{Case study: fused SwiGLU.} One GEMM produces two projections side by
@@ -1369,6 +1369,9 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
     \item Loop over \emph{pairs} of column chunks (a left chunk $+$ its gate chunk).
     \item Per pair: load both into registers, then \textbf{three} stores ---
       left, gate, and SwiGLU.
+    \item \emph{Dual-B}: left and gate are \emph{separate} weight matrices; with
+      2-CTA on, each CTA loads its half from a different one --- a tiny load
+      change, with \textbf{no measured performance impact}.
   \end{itemize}
 \end{frame}
 
@@ -1394,6 +1397,34 @@ for (int p = 0; p < (BN/64)/2; p++) {          // loop over chunk PAIRS
   \vspace{-0.15cm}
   {\footnotesize \code{stage\_and\_store} = the same store step as the canonical
   epilogue; fusion just adds the math and an extra output tensor \code{D}.}
+\end{frame}
+
+\begin{frame}{Fused SwiGLU: Almost Free}
+  \begin{center}\small
+    $M{=}32768,\ N{=}4608,\ K{=}768$; \quad $BM{=}128,\ BN{=}256,\ NS{=}6,\
+    \text{store}{=}2$
+  \end{center}
+
+  \vspace{0.2cm}
+  \begin{center}\small
+    \begin{tabular}{lrr}
+      \toprule
+       & TFLOPS & time \\
+      \midrule
+      cuBLAS (GEMM only)                  & 1406 & 165\,$\mu$s \\
+      fused SwiGLU ($1.5\times$ store)    & 1250 & 185\,$\mu$s \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+
+  \vspace{0.3cm}
+  \begin{itemize}
+    \item Despite \textbf{$1.5\times$ the store traffic} (left $+$ gate $+$
+      SwiGLU) and the SwiGLU math, it is only \textbf{$\sim$12\% slower} ---
+      $89\%$ of a pure cuBLAS GEMM.
+    \item The SwiGLU math is essentially \textbf{free}; the gap is almost
+      entirely the \textbf{extra store}.
+  \end{itemize}
 \end{frame}
 
 
