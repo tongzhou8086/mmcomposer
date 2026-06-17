@@ -39,7 +39,7 @@
   bgcolor=mmlight
 }
 
-\title{How to Design a High Performance GEMM Kernel (on B200)?}
+\title{How to Design a High Performance GEMM Kernel (on Blackwell)?}
 \author{}
 \date{\today}
 
@@ -53,22 +53,16 @@
 
 \begin{frame}{Talk Outline}
   \begin{itemize}
-    \item The big picture: GEMM dataflow across an SM.
-    \item The core idea: a GEMM kernel is an \emph{orchestration} problem
-      --- containers, signals, and warp roles.
-    \item Key pieces: 2-CTA MMA, epilogue design (TMEM layout $+$ swizzle), and
-      SMEM partitioning.
-    \item From diagram to code, then performance vs cuBLAS (autotuned).
-    \item Adding epilogue fusions: a fused-SwiGLU case study.
+    \item GEMM breakdown
+    \item The main synchronization pattern
+    \item 2-CTA MMA
+    \item Epilogue design
+    \item Implementation and performance results
+    \item Adding a custom epilogue fusion
   \end{itemize}
 \end{frame}
 
-\begin{frame}[plain]
-  \begin{center}
-    \vspace{1.8cm}
-    {\usebeamercolor[fg]{title}\Large\bfseries High-Level Design}
-  \end{center}
-\end{frame}
+
 
 \section{Background}
 
@@ -91,7 +85,7 @@
     \textbf{Epilogue}
     \begin{itemize}
       \item Load TMEM into registers.
-      \item Apply optional operations such as ReLU or SwiGLU.
+      \item Apply optional epilogue fusion operations.
       \item Pack registers into shared memory.
       \item Store the final result to HBM.
     \end{itemize}
@@ -156,6 +150,13 @@
   \textbf{registers} in the CUDA cores; \textbf{SMEM} is the shared hub.}
 \end{frame}
 
+
+\begin{frame}[plain]
+  \begin{center}
+    \vspace{1.8cm}
+    {\usebeamercolor[fg]{title}\Large\bfseries High-Level Design of GEMM kernel}
+  \end{center}
+\end{frame}
 \section{Orchestration}
 
 \begin{frame}{The Core Idea: Orchestration}
@@ -168,8 +169,7 @@
 
   \vspace{0.35cm}
   The kernel is a dataflow schedule over hardware units, warp roles, and
-  on-chip containers. Performance depends on keeping values flowing while
-  reusing scarce containers at the right time.
+  on-chip containers. 
 \end{frame}
 
 \begin{frame}{Operations and Containers}
