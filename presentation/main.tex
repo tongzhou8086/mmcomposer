@@ -53,10 +53,13 @@
 
 \begin{frame}{Talk Outline}
   \begin{itemize}
-    \item GEMM breakdown.
-    \item The core idea: a GEMM kernel is an orchestration problem.
-    \item From diagram to code: how the synchronization actually looks.
-    \item Performance: how this design measures up to cuBLAS, with auto-tuning.
+    \item The big picture: GEMM dataflow across an SM.
+    \item The core idea: a GEMM kernel is an \emph{orchestration} problem
+      --- containers, signals, and warp roles.
+    \item Key pieces: 2-CTA MMA, epilogue design (TMEM layout $+$ swizzle), and
+      SMEM partitioning.
+    \item From diagram to code, then performance vs cuBLAS (autotuned).
+    \item Adding epilogue fusions: a fused-SwiGLU case study.
   \end{itemize}
 \end{frame}
 
@@ -1424,6 +1427,15 @@ for (int p = 0; p < (BN/64)/2; p++) {          // loop over chunk PAIRS
     \item The SwiGLU math is essentially \textbf{free}; the gap is almost
       entirely the \textbf{extra store}.
   \end{itemize}
+\end{frame}
+
+\begin{frame}{Acknowledgements}
+  \vspace{1.4cm}
+  \begin{center}
+    \large
+    Thanks to \textbf{Haidong} and \textbf{Gaoyuan} for the discussions and
+    feedback that shaped this material.
+  \end{center}
 \end{frame}
 
 
