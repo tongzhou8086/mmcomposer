@@ -210,7 +210,7 @@
         lbl/.style={font=\scriptsize, text=mmgray}
       ]
       \node[mem] (h1) at (-4.3,1.65) {HBM};
-      \node[op]  (o1) at (-0.3,1.65) {TMA load};
+      \node[op]  (o1) at (-0.3,1.65) {Input tile\\load};
       \node[omem] (s1) at (3.7,1.65) {SMEM};
       \draw[arrow] (h1) -- node[above,lbl]{drain} (o1);
       \draw[arrow] (o1) -- node[above,lbl]{fill} (s1);
@@ -231,9 +231,9 @@
 
   \vspace{0.2cm}
   \begin{itemize}
-    \item \textbf{TMA load} --- drain HBM tiles, fill the SMEM compute buffer.
+    \item \textbf{Input tile load} --- drain HBM tiles, fill the SMEM compute buffer.
     \item \textbf{MMA} --- drain SMEM, accumulate into TMEM.
-    \item \textbf{Epilogue} (collectively) --- drain TMEM, write the result to HBM.
+    \item \textbf{Epilogue} --- drain TMEM, write the result to HBM.
   \end{itemize}
 \end{frame}
 
@@ -285,31 +285,6 @@
     \end{tikzpicture}
   \end{center}
 \end{frame}
-
-\begin{frame}{Add the Containers}
-  For the synchronization model used in this talk, we group the kernel into
-  three producer/consumer operations:
-
-  \begin{table}
-    \centering
-    \scriptsize
-    \begin{tabular}{lll}
-      \toprule
-      Operation & Input container & Output container \\
-      \midrule
-      TMA warps & HBM A/B tiles & SMEM compute ring buffer \\
-      MMA warps & SMEM compute ring buffer & TMEM accumulator \\
-      Epilogue warps & TMEM accumulator & registers \\
-      \bottomrule
-    \end{tabular}
-  \end{table}
-
-  \vspace{0.2cm}
-  This is the abstraction used in the next graph. The epilogue's internal
-  pack and TMA-store staging are real, but they are not the main
-  warp-to-warp synchronization edges shown here.
-\end{frame}
-
 
 \begin{frame}{Main Synchronization Pattern: Graph View}
   \begin{center}
