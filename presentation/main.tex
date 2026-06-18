@@ -1382,8 +1382,7 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
       with the expected byte count (\code{arrive.expect\_tx}, software) and
       \emph{continues without blocking}. The TMA \emph{engine} credits bytes as
       the data lands; once the count is met the hardware \textbf{auto-flips the
-      barrier's phase} --- the data-ready signal, no polling.
-    \item An \textbf{$NS$-deep} SMEM ring lets loads run ahead of the MMA.
+      barrier's phase}.
   \end{itemize}
 \end{frame}
 
