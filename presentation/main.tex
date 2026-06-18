@@ -1365,22 +1365,35 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \section{Implementation and Performance}
 \sectionslide{toc:impl}{Implementation and Performance}
 
-\begin{frame}{Implementation: One Canonical Configuration}
-  There is no single fixed kernel. \textbf{MMComposer} is a CUDA matmul
-  \emph{generator} --- it composes many implementations from a space of knobs
-  (warp specialization, 2-CTA, persistent grid, epilogue mode, tile sizes, \dots).
+\begin{frame}{MMComposer: One Generator, Many Kernels}
+  \textbf{MMComposer} is a CUDA GEMM kernel \emph{generator}: pick a point in a
+  space of design knobs and it splices hand-tuned fragments into a complete,
+  compilable kernel --- one tool, many matmul implementations.
 
-  \vspace{0.25cm}
-  This talk presents \textbf{one canonical, highly-pipelined point} in that space:
-  \begin{itemize}
-    \item \textbf{2-CTA MMA} on, \textbf{persistent grid} on,
-    \item \textbf{overlapped epilogue} on, \textbf{TMA-store pipeline} on.
-  \end{itemize}
+  \vspace{0.15cm}
+  The design built up in this talk is \textbf{one specific combo} of those knobs:
+  \vspace{0.1cm}
+  \begin{center}\small
+    \setlength{\tabcolsep}{8pt}
+    \begin{tabular}{ll}
+      \toprule
+      Knob & This talk's (canonical) choice \\
+      \midrule
+      Warp specialization            & on \\
+      2-CTA MMA                      & on \\
+      Persistent grid                & on \\
+      Epilogue                       & overlapped (pipelined) \\
+      TMA store                      & pipelined, multi-buffer \\
+      Tile size / stages / epi-warps & autotuned per shape \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
 
-  \vspace{0.25cm}
-  The generated code is plain CUDA for the B200 (\code{sm\_100a}), bf16 in / fp32
-  accumulate: a \textbf{$\sim$280-line} core kernel plus $\sim$270 lines of
-  reusable PTX intrinsic wrappers (TMA, \code{tcgen05}, mbarriers).
+  \vspace{0.1cm}
+  \footnotesize Generated as plain CUDA for the B200 (\code{sm\_100a}), bf16 in /
+  fp32 accumulate --- a $\sim$280-line core kernel plus $\sim$270 lines of reusable
+  PTX intrinsic wrappers. Other combos (sequential epilogue, no 2-CTA,
+  \code{cp.async} load, plain \code{int4} store) remain generable.
 \end{frame}
 
 \begin{frame}{Implementation Details Worth Noting}
