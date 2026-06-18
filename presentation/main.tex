@@ -283,7 +283,7 @@
     \item \textbf{Overlap} the engines --- TMA, tensor cores, CUDA cores run
       \textbf{asynchronously}, so none sits idle.
     \item \textbf{Synchronize} only when needed, on specific \emph{events} --- a
-      value is ready before it is read, a container is free before it is reused.
+      value is ready to be consumed, a container is free to be reused.
   \end{itemize}
 
   \vspace{0.2cm}
@@ -347,7 +347,7 @@
       \draw[arrow] (o3) -- (s3);
 
       \node[mem] (s4) at (-4.3,-1.9) {SMEM};
-      \node[op]  (o4) at (-0.3,-1.9) {Store};
+      \node[op]  (o4) at (-0.3,-1.9) {Output tile store};
       \node[omem] (h4) at (3.7,-1.9) {HBM};
       \draw[arrow] (s4) -- (o4);
       \draw[arrow] (o4) -- (h4);
@@ -359,7 +359,7 @@
     \item \textbf{Input tile load} --- drain HBM, fill the SMEM compute buffer.
     \item \textbf{MMA} --- drain SMEM, accumulate into TMEM.
     \item \textbf{Epilogue} --- drain TMEM, stage the result into SMEM.
-    \item \textbf{Store} --- drain the SMEM store buffer, write to HBM.
+    \item \textbf{Output tile store} --- drain the SMEM store buffer, write to HBM.
   \end{itemize}
 \end{frame}
 
@@ -381,8 +381,8 @@
   store-buffer pipelining.
 \end{frame}
 
-\begin{frame}{Two Signals}
-  In this model, synchronization has two meanings:
+\begin{frame}{When to Synchronize?}
+  In this model, synchronization happens on two kinds of events:
 
   \begin{enumerate}
     \item \textbf{Data-ready}: a container is full; data is ready to be consumed.
