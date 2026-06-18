@@ -1382,7 +1382,7 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
       with the expected byte count (\code{arrive.expect\_tx}, software) and
       \emph{continues without blocking}. The TMA \emph{engine} credits bytes as
       the data lands; once the count is met the hardware \textbf{auto-flips the
-      barrier's phase}.
+      barrier's phase}
   \end{itemize}
 \end{frame}
 
@@ -1399,8 +1399,8 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
     \item \textbf{2-CTA} --- only \textbf{rank 0} issues, but the tensor cores on
       \textbf{both} ranks compute (the instruction spans $M = 2\times128$ across
       the cluster).
-    \item \textbf{Async completion signal.} Partial sums accumulate in TMEM
-      (double-buffered). The lane issues the MMAs then \code{tcgen05.commit} and
+    \item \textbf{Async completion signal.} Partial sums accumulate in TMEM.
+      The lane issues the MMAs then \code{tcgen05.commit} and
       \emph{continues without blocking}; once all the MMAs finish, the hardware
       \textbf{auto-flips the barrier's phase} --- signalling ``TMEM data ready.''
   \end{itemize}
@@ -1409,7 +1409,8 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \begin{frame}{Implementation: Signals via mbarrier}
   Each ready/free signal is one \code{mbarrier}. A producer issues or arms it and
   moves on; the \textbf{hardware auto-flips the phase} once the relevant work
-  completes, and the consumer's \code{mbarrier\_wait\_phase} unblocks on the flip:
+  completes. The consumer blocks in \code{mbarrier\_wait\_phase}, which spins on
+  \code{try\_wait.parity} until that flip:
 
   \vspace{0.15cm}
   \begin{columns}[T,onlytextwidth]
