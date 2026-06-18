@@ -1366,15 +1366,17 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \sectionslide{toc:impl}{Implementation and Performance}
 
 \begin{frame}{Implementation: TMA Loading}
-  Every K-step, the TMA warp issues one bulk-tensor copy per operand
-  (\code{cp.async.bulk.tensor.2d}, the \code{cta\_group::2} cluster form):
+  Every K-step, a \textbf{single elected lane} in the TMA warp issues one
+  bulk-tensor copy per operand (\code{cp.async.bulk.tensor.2d}, the
+  \code{cta\_group::2} cluster form):
   \begin{itemize}
     \item \textbf{A tile} --- $BM\times BK = 128\times64$ bf16 $=16$\,KB, one
       descriptor copy.
     \item \textbf{B tile} --- $BN_{\text{local}}\times BK$, issued in $64$-column
       chunks; each CTA loads only its own $BN/2$ columns.
     \item SMEM destinations use the \textbf{128-byte swizzle}
-      (\code{SWIZZLE\_128B}), so the subsequent MMA reads SMEM
+      (\code{SWIZZLE\_128B}) --- one atom is $128$\,B $= 64$ bf16, which fixes the
+      inner load box to $64$ --- so the subsequent MMA reads SMEM
       bank-conflict-free.
     \item A per-slot \code{mbarrier} tallies the expected bytes
       (\code{expect\_tx}); its arrival is the data-ready signal, and an
@@ -1383,18 +1385,21 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \end{frame}
 
 \begin{frame}{Implementation: MMA Issue}
-  The MMA warp drives the tensor core with a single instruction
+  The MMA warp drives the tensor core with one instruction
   (\code{tcgen05.mma.cta\_group::2.kind::f16}):
   \begin{itemize}
-    \item \textbf{One thread, one instruction} --- an elected lane issues it;
+    \item \textbf{Shape} --- $N$ width is $64$, $128$, or $256$ (the max); $K=16$
+      for bf16. So a $128\times256$ tile over $BK=64$ is \textbf{4 K-chained
+      MMAs} ($64/16$).
+    \item \textbf{One thread, one warp} --- a single elected lane issues each MMA;
       operands are named by \textbf{SMEM matrix descriptors}, not staged through
       registers.
-    \item \textbf{$K$ chained} --- $BK=64$ is covered by $4$ back-to-back MMAs of
-      $MMA\_K=16$.
-    \item \textbf{Accumulate in TMEM} --- partial sums stay in TMEM
-      (double-buffered) and never touch registers until the epilogue.
-    \item \textbf{Fully async} --- \code{tcgen05.commit} signals an \code{mbarrier}
-      on completion; the issuing warp moves on without blocking.
+    \item \textbf{2-CTA} --- only \textbf{rank 0} issues, but the tensor cores on
+      \textbf{both} ranks compute (the instruction spans $M = 2\times128$ across
+      the cluster).
+    \item \textbf{TMEM accumulate, fully async} --- partial sums stay in TMEM
+      (double-buffered) until the epilogue; \code{tcgen05.commit} signals an
+      \code{mbarrier} on completion, so the issuing warp never blocks.
   \end{itemize}
 \end{frame}
 
