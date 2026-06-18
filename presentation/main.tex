@@ -6,6 +6,7 @@
 \usepackage[T1]{fontenc}
 \usepackage{amsmath}
 \usepackage{booktabs}
+\usepackage{graphicx}
 \usepackage{listings}
 \usepackage{minted}
 \usepackage{tikz}
@@ -89,6 +90,30 @@
       \item Pack registers into shared memory.
       \item Store the final result to HBM.
     \end{itemize}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{The B200 Streaming Multiprocessor (SM)}
+  \begin{columns}[c,onlytextwidth]
+    \column{0.44\textwidth}
+    \begin{center}
+      \includegraphics[height=0.80\textheight]{images/b200_arch.png}
+    \end{center}
+
+    \column{0.56\textwidth}
+    The pieces this talk relies on:
+    \begin{itemize}
+      \item \textbf{TMA} (Tensor Memory Accelerator) --- bulk
+        HBM\,$\leftrightarrow$\,SMEM tile moves.
+      \item \textbf{256\,KB L1 / shared memory} --- the compute and store rings.
+      \item \textbf{5th-gen Tensor Cores} $+$ \textbf{64\,KB TMEM} --- the MMA
+        and its accumulator.
+      \item \textbf{CUDA cores} $+$ \textbf{register file} --- run the epilogue.
+    \end{itemize}
+
+    \vspace{0.2cm}
+    {\footnotesize Four sub-partitions per SM, each with its own warp scheduler,
+    registers, TMEM, and CUDA / tensor cores.}
   \end{columns}
 \end{frame}
 
