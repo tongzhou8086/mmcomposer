@@ -108,8 +108,9 @@
       \draw[blk] (0,3.1) rectangle (2.8,4.5);
       \draw[hl]  (0.7,3.1) rectangle (1.4,4.5);
       \node[dim] at (1.4,4.8) {$B\;[K\times N]$};
-      % BK sub-chunks along K (dashed) in the A band
+      % BK sub-chunks along K (dashed): vertical in the A band, horizontal in the B band
       \foreach \x in {-1.675,-1.25,-0.825} \draw[densely dashed, black!40] (\x,1.4) -- (\x,2.1);
+      \foreach \y in {3.45,3.8,4.15} \draw[densely dashed, black!40] (0.7,\y) -- (1.4,\y);
       \draw[{Latex}-{Latex}, mmgray] (-2.1,2.32) -- (-1.675,2.32);
       \node[dim] at (-1.89,2.55) {$BK$};
       % BM, BN on the C tile
