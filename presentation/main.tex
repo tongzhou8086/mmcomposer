@@ -1407,10 +1407,9 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \end{frame}
 
 \begin{frame}{Implementation: Signals via mbarrier}
-  Every wait is \code{mbarrier\_wait\_phase(mbar, phase)} --- internally a
-  \code{try\_wait.parity} spin on a 64-bit SMEM word that flips a local
-  \textbf{phase bit} each round. The \emph{signal} (an arrive) differs by what
-  async work must finish first:
+  Each ready/free signal is one \code{mbarrier}. A producer issues or arms it and
+  moves on; the \textbf{hardware auto-flips the phase} once the relevant work
+  completes, and the consumer's \code{mbarrier\_wait\_phase} unblocks on the flip:
 
   \vspace{0.15cm}
   \begin{columns}[T,onlytextwidth]
@@ -1418,19 +1417,18 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
     \textbf{Data-ready (``full'')}
     \begin{itemize}
       \item TMA\,$\to$\,SMEM: \code{mbarrier\_arrive\_expect\_tx(.., SLOT\_BYTES)}
-        --- flips once the copy engine has delivered all the bytes.
-      \item MMA\,$\to$\,TMEM: \code{tcgen05\_commit\_mcast\_g2} on
-        \code{tmem\_full} --- arrives when the MMA group completes.
+        --- flips once the bytes land.
+      \item MMA\,$\to$\,TMEM: \code{tcgen05\_commit\_mcast\_g2(tmem\_full)} ---
+        flips once the MMAs finish.
     \end{itemize}
 
     \column{0.5\textwidth}
     \textbf{Resource-free}
     \begin{itemize}
-      \item MMA\,$\to$\,SMEM slot: \code{tcgen05\_commit\_mcast\_g2} on the
-        free mbar --- rides on \code{commit}, so it fires only after the MMA's
-        SMEM reads.
-      \item Epilogue\,$\to$\,TMEM: \code{EPI\_TMEM\_FREE\_ARRIVE} --- a plain
-        \code{mbarrier.arrive}.
+      \item MMA\,$\to$\,SMEM slot: \code{tcgen05\_commit\_mcast\_g2(free\_mbar)}
+        --- flips after the MMA's SMEM reads.
+      \item Epilogue\,$\to$\,TMEM: \code{EPI\_TMEM\_FREE\_ARRIVE} --- flips once
+        the epilogue has drained TMEM.
     \end{itemize}
   \end{columns}
 
