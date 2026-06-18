@@ -142,31 +142,6 @@
   \end{itemize}
 \end{frame}
 
-\begin{frame}{GEMM Breakdown}
-  A GEMM kernel has two major phases: \textbf{compute} and \textbf{epilogue}.
-
-  \vspace{0.35cm}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.48\textwidth}
-    \textbf{Compute}
-    \begin{itemize}
-      \item Fetch A/B tiles.
-      \item Stage tiles in shared memory.
-      \item Issue MMA instructions.
-      \item Accumulate results in TMEM.
-    \end{itemize}
-
-    \column{0.48\textwidth}
-    \textbf{Epilogue}
-    \begin{itemize}
-      \item Load TMEM into registers.
-      \item Apply optional epilogue fusion operations.
-      \item Pack registers into shared memory.
-      \item Store the final result to HBM.
-    \end{itemize}
-  \end{columns}
-\end{frame}
-
 \begin{frame}{The B200 Streaming Multiprocessor (SM)}
   \begin{columns}[c,onlytextwidth]
     \column{0.44\textwidth}
@@ -261,12 +236,6 @@
     \item Likewise the input load uses \textbf{TMA}, but \code{cp.async} is also
       async and would work --- TMA load is just more B200-native.
   \end{itemize}
-
-  \vspace{0.2cm}
-  \begin{center}
-    The whole framework is about \textbf{pipelining}: keep every engine busy by
-    overlapping. Keep results correct by synchronizations.
-  \end{center}
 
   \vspace{0.15cm}
   It is a \textbf{canonical default} that empirically performs well across most
