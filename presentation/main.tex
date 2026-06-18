@@ -106,8 +106,8 @@
       \item \textbf{TMA} (Tensor Memory Accelerator) --- bulk
         HBM\,$\leftrightarrow$\,SMEM tile moves.
       \item \textbf{256\,KB L1 / shared memory} --- the compute and store rings.
-      \item \textbf{5th-gen Tensor Cores} $+$ \textbf{64\,KB TMEM} --- the MMA
-        and its accumulator.
+      \item \textbf{5th-gen Tensor Cores} $+$ \textbf{256\,KB TMEM}
+        (4 sub-partitions $\times$ 64\,KB each) --- the MMA and its accumulator.
       \item \textbf{CUDA cores} $+$ \textbf{register file} --- run the epilogue.
     \end{itemize}
 
