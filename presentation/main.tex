@@ -167,6 +167,40 @@
   \end{columns}
 \end{frame}
 
+\begin{frame}{Threads, Warps, CTAs, Clusters}
+  The GPU execution hierarchy this talk leans on:
+  \begin{itemize}
+    \item A \textbf{warp} --- 32 threads issued together; the unit of scheduling.
+    \item A \textbf{CTA} (thread block) --- several warps sharing one SM's shared
+      memory.
+    \item A \textbf{cluster} --- a few CTAs on neighbouring SMs that can read each
+      other's SMEM. We use \textbf{2-CTA} clusters.
+  \end{itemize}
+
+  \vspace{0.25cm}
+  \textbf{Warp specialization.} Rather than every warp doing the same work, we
+  give warps \emph{different roles} --- a load warp, an MMA warp, epilogue warps
+  --- so the independent hardware units (TMA engine, tensor cores, CUDA cores)
+  can all stay busy at once. That overlap is the whole game.
+\end{frame}
+
+\begin{frame}{TMA: Asynchronous Bulk Copy}
+  The \textbf{Tensor Memory Accelerator} is a dedicated engine for moving whole
+  tiles between HBM and SMEM.
+  \begin{itemize}
+    \item \textbf{One descriptor, one instruction} --- a single thread launches a
+      copy of a 2D tile; no per-element address math or per-thread loads.
+    \item \textbf{Asynchronous} --- the engine runs the transfer while the warps
+      race ahead; completion is signalled separately (an \code{mbarrier}).
+    \item \textbf{Layout-aware} --- lands the tile already \textbf{swizzled} in
+      SMEM, and can \textbf{multicast} one copy to several CTAs.
+  \end{itemize}
+
+  \vspace{0.2cm}
+  It is the B200-native way to feed the tensor cores; \code{cp.async} is the
+  older, more manual alternative.
+\end{frame}
+
 \begin{frame}{The Tensor Core MMA (\code{tcgen05})}
   Blackwell's tensor cores are driven by a single \textbf{asynchronous}
   instruction, \code{tcgen05.mma}: one issue computes a whole tile MMA (not
@@ -187,6 +221,40 @@
   tile), larger won't fit --- TMEM has only 128 rows. Need more rows?
   \textbf{2-CTA MMA} has two CTAs jointly cover $M = 256$ --- each still
   holding 128.
+\end{frame}
+
+\begin{frame}{TMEM: Tensor Memory}
+  A separate on-chip memory, new in Blackwell, dedicated to \textbf{MMA
+  accumulators}.
+  \begin{itemize}
+    \item \textbf{$128 \times 512$ per SM} ($128$ lanes $\times$ $512$ cols
+      $\times\,4$\,B $= 256$\,KB) --- holds the FP32 partial sums.
+    \item The MMA writes results \textbf{here, not into registers}; the epilogue
+      reads them back with \code{tcgen05.ld}.
+    \item Keeping large accumulators off the register file frees registers and
+      lets tiles be big.
+  \end{itemize}
+
+  \vspace{0.2cm}
+  Together with the MMA's $128$-row M-atom, this $128$-row layout is what
+  \textbf{fixes $BM = 128$}.
+\end{frame}
+
+\begin{frame}{mbarrier and Async Pipelining}
+  The async units (TMA, tensor cores) run on their own; warps coordinate with
+  them through \textbf{mbarriers} --- lightweight shared-memory barriers ---
+  instead of blocking.
+  \begin{itemize}
+    \item A producer \textbf{signals} when its output is ready; a consumer
+      \textbf{waits} on that signal and signals back when the buffer is free.
+    \item With several buffers, the producer fills the next while the consumer
+      drains the current --- the stages \textbf{overlap} rather than run in
+      sequence.
+  \end{itemize}
+
+  \vspace{0.2cm}
+  Overlapping the stages this way --- load, MMA, epilogue in flight at once,
+  synchronised only on these signals --- is what the rest of the talk builds on.
 \end{frame}
 
 \begin{frame}{The Big Picture: GEMM Dataflow on the SM}
