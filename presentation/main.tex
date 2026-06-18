@@ -1403,6 +1403,37 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \end{itemize}
 \end{frame}
 
+\begin{frame}{Implementation: Signals via mbarrier}
+  Both signal types are the \emph{same} primitive --- an \code{mbarrier}: a
+  64-bit SMEM word holding a \textbf{phase bit} and a pending-arrival count.
+  A waiter calls \code{try\_wait.parity}; once the round's arrivals are in, the
+  phase \textbf{flips} and the next round begins. Each side tracks its own phase
+  bit, flipped every iteration.
+
+  \vspace{0.2cm}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.5\textwidth}
+    \textbf{Data-ready (``full'')}\\[2pt]
+    Arrival is driven by the \emph{async unit}, so the flip means the data
+    physically landed:
+    \begin{itemize}
+      \item \textbf{TMA}: arm with \code{arrive.expect\_tx} for \code{SLOT\_BYTES};
+        the copy engine credits bytes as they land
+        (\code{complete\_tx::bytes}).
+      \item \textbf{MMA}: \code{tcgen05.commit} arrives when the MMA completes.
+    \end{itemize}
+
+    \column{0.5\textwidth}
+    \textbf{Resource-free}\\[2pt]
+    A plain \code{mbarrier.arrive} (no bytes) from the consumer once it is done:
+    \begin{itemize}
+      \item MMA arrives ``SMEM slot free''; the epilogue arrives ``TMEM free''.
+      \item Free barriers are \textbf{pre-armed} at init, so round 0 already
+        sees the buffers as free.
+    \end{itemize}
+  \end{columns}
+\end{frame}
+
 \begin{frame}{Implementation: Warp Layout}
   \textbf{Warp layout --- deliberately not a power of two.} Each CTA launches
   \[
