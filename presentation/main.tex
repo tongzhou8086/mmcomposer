@@ -1105,6 +1105,57 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 \section{Epilogue Design}
 \sectionslide{toc:epi}{Pipelining the Epilogue}
 
+\begin{frame}{Epilogue: Getting the Tile Out of TMEM}
+  The MMA leaves a full output tile sitting in \textbf{TMEM}. To reach HBM it has
+  to pass through \textbf{registers} --- but the tile dwarfs them.
+
+  \vspace{0.3cm}
+  \begin{center}
+  \begin{tikzpicture}[font=\small]
+    \node[draw, thick, fill=green!10, minimum width=4.0cm, minimum height=2.6cm,
+          align=center] (tmem)
+      {TMEM accumulator\\[3pt] $128\times256$, fp32\\[3pt] \textbf{128\,KB}\\[3pt]
+       {\scriptsize(256\,KB if double-buffered)}};
+    \node[draw, thick, fill=blue!8, minimum width=1.9cm, minimum height=1.0cm,
+          align=center, right=3.0cm of tmem] (regs)
+      {Registers\\[2pt] \textbf{$\sim$64\,KB}};
+    \draw[-{Latex[length=2.5mm]}, very thick, draw=mmblue]
+      (tmem) -- node[above, font=\large]{\textbf{?}} (regs);
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.25cm}
+  \begin{center}
+    \emph{How do we move a 128\,KB tile out through registers that can't hold it?}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Epilogue: Drain in 64-Column Strips}
+  Don't move the whole tile at once --- \textbf{slice it into 64-column strips}
+  and stream them one at a time.
+
+  \vspace{0.3cm}
+  \begin{center}
+  \begin{tikzpicture}[font=\small]
+    \foreach \i in {0,1,2,3} {
+      \node[draw, thick, fill=green!10, minimum width=1.0cm, minimum height=2.4cm]
+        (s\i) at (\i*1.0,0) {};
+    }
+    \node[font=\scriptsize] at (1.5,1.55) {$128\times256$ TMEM tile};
+    \node[font=\scriptsize] at (1.5,-1.55) {4 strips of 64 cols \;(8 if $BN{=}512$)};
+    \node[draw, thick, fill=blue!8, minimum width=2.2cm, minimum height=1.1cm,
+          align=center, right=2.6cm of s3] (regs)
+      {Registers\\[2pt] $128\times64$\\[2pt] \textbf{16\,KB} (bf16)};
+    \draw[-{Latex[length=2.5mm]}, very thick, draw=mmblue] (s3.east) -- (regs.west);
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.25cm}
+  Each strip is $128\times64 = 16$\,KB once packed to bf16 --- it fits
+  comfortably. Per strip: \code{tcgen05.ld} $\to$ pack $\to$ stage in SMEM
+  $\to$ TMA store, then reuse the registers for the next.
+\end{frame}
+
 \begin{frame}{Epilogue Design: Three Phases}
   So far we have shown only the first phase of the epilogue. In full it has
   \textbf{three}:
