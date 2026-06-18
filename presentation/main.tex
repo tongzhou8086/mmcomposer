@@ -1365,6 +1365,54 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \section{Implementation and Performance}
 \sectionslide{toc:impl}{Implementation and Performance}
 
+\begin{frame}{Implementation: TMA Loading}
+  Every K-step, the TMA warp issues one bulk-tensor copy per operand
+  (\code{cp.async.bulk.tensor.2d}, the \code{cta\_group::2} cluster form):
+  \begin{itemize}
+    \item \textbf{A tile} --- $BM\times BK = 128\times64$ bf16 $=16$\,KB, one
+      descriptor copy.
+    \item \textbf{B tile} --- $BN_{\text{local}}\times BK$, issued in $64$-column
+      chunks; each CTA loads only its own $BN/2$ columns.
+    \item SMEM destinations use the \textbf{128-byte swizzle}
+      (\code{SWIZZLE\_128B}), so the subsequent MMA reads SMEM
+      bank-conflict-free.
+    \item A per-slot \code{mbarrier} tallies the expected bytes
+      (\code{expect\_tx}); its arrival is the data-ready signal, and an
+      \textbf{$NS$-deep} SMEM ring lets loads run ahead of compute.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Implementation: MMA Issue}
+  The MMA warp drives the tensor core with a single instruction
+  (\code{tcgen05.mma.cta\_group::2.kind::f16}):
+  \begin{itemize}
+    \item \textbf{One thread, one instruction} --- an elected lane issues it;
+      operands are named by \textbf{SMEM matrix descriptors}, not staged through
+      registers.
+    \item \textbf{$K$ chained} --- $BK=64$ is covered by $4$ back-to-back MMAs of
+      $MMA\_K=16$.
+    \item \textbf{Accumulate in TMEM} --- partial sums stay in TMEM
+      (double-buffered) and never touch registers until the epilogue.
+    \item \textbf{Fully async} --- \code{tcgen05.commit} signals an \code{mbarrier}
+      on completion; the issuing warp moves on without blocking.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Implementation: Warp Layout}
+  \textbf{Warp layout --- deliberately not a power of two.} Each CTA launches
+  \[
+    \underbrace{1}_{\text{TMA}} + \underbrace{1}_{\text{MMA}}
+    + \underbrace{4 \text{ or } 8}_{\text{epilogue}}
+    \;=\; 6 \text{ or } 10 \text{ warps.}
+  \]
+  \begin{itemize}
+    \item The \textbf{TMA} and \textbf{MMA} warps are fixed --- one each.
+    \item The \textbf{epilogue} warp count $\in \{4, 8\}$ is \textbf{autotuned};
+      more warps give the TMEM drain and SMEM write more parallelism.
+    \item So the CTA is sized to the work, not rounded up to a power of two.
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{MMComposer: One Generator, Many Kernels}
   \textbf{MMComposer} is a CUDA GEMM kernel \emph{generator}: pick a point in a
   space of design knobs and it splices hand-tuned fragments into a complete,
@@ -1394,21 +1442,6 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   fp32 accumulate --- a $\sim$280-line core kernel plus $\sim$270 lines of reusable
   PTX intrinsic wrappers. Other combos (sequential epilogue, no 2-CTA,
   \code{cp.async} load, plain \code{int4} store) remain generable.
-\end{frame}
-
-\begin{frame}{Implementation Details Worth Noting}
-  \textbf{Warp layout --- deliberately not a power of two.} Each CTA launches
-  \[
-    \underbrace{1}_{\text{TMA}} + \underbrace{1}_{\text{MMA}}
-    + \underbrace{4 \text{ or } 8}_{\text{epilogue}}
-    \;=\; 6 \text{ or } 10 \text{ warps.}
-  \]
-  \begin{itemize}
-    \item The \textbf{TMA} and \textbf{MMA} warps are fixed --- one each.
-    \item The \textbf{epilogue} warp count $\in \{4, 8\}$ is \textbf{autotuned};
-      more warps give the TMEM drain and SMEM write more parallelism.
-    \item So the CTA is sized to the work, not rounded up to a power of two.
-  \end{itemize}
 \end{frame}
 
 \begin{frame}{Benchmark Setup}
