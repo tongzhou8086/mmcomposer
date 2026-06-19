@@ -1216,7 +1216,7 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 
 \begin{frame}{Epilogue Concern 2: Filling the $128\times64$ SMEM Buffer}
   We fill it \code{tcgen05.ld.x8} chunk by chunk. One warp store writes
-  \textbf{one int4 column} (one cell per lane --- the highlighted column, not the
+  \textbf{one 16-byte column} (one cell per lane --- the highlighted column, not the
   whole row); naively those cells share \textbf{one bank}, so the swizzle
   $n \oplus \text{(row \& 7)}$ spreads them.
 
@@ -1260,7 +1260,7 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
   \end{columns}
 
   \vspace{0.05cm}
-  {\footnotesize Cell $= c \oplus r =$ bank group; each is one \code{int4} $=$
+  {\footnotesize Cell $= c \oplus r =$ bank group; each is one 16-byte store $=$
   \textbf{4 banks} (8 cells $=$ 32 banks) $=$ the \code{SWIZZLE\_128B} atom.
   Shown is one phase (lanes 0--7); A warp writes 32 rows and a 128-bit store issues as 4 identical phases.}
 \end{frame}
