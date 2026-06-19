@@ -1106,8 +1106,9 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 \sectionslide{toc:epi}{Pipelining the Epilogue}
 
 \begin{frame}{Epilogue: Getting the Tile Out of TMEM}
-  The MMA leaves a full output tile sitting in \textbf{TMEM}. To reach HBM it has
-  to pass through \textbf{registers} --- but the tile dwarfs them.
+  The MMA leaves a full output tile in \textbf{TMEM}. To reach HBM it must pass
+  through \textbf{registers} (for the downcast and any math) --- but tying up
+  registers for the \emph{whole} tile would wreck occupancy.
 
   \vspace{0.3cm}
   \begin{center}
@@ -1116,17 +1117,18 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
           align=center] (tmem)
       {TMEM accumulator\\[3pt] $128\times256$, fp32\\[3pt] \textbf{128\,KB}\\[3pt]
        {\scriptsize(256\,KB if double-buffered)}};
-    \node[draw, thick, fill=blue!8, minimum width=1.9cm, minimum height=1.0cm,
+    \node[draw, thick, fill=blue!8, minimum width=2.2cm, minimum height=1.2cm,
           align=center, right=3.0cm of tmem] (regs)
-      {Registers\\[2pt] \textbf{$\sim$64\,KB}};
+      {Registers\\[2pt] {\scriptsize shared across warps}};
     \draw[-{Latex[length=2.5mm]}, very thick, draw=mmblue]
       (tmem) -- node[above, font=\large]{\textbf{?}} (regs);
   \end{tikzpicture}
   \end{center}
 
-  \vspace{0.25cm}
+  \vspace{0.2cm}
   \begin{center}
-    \emph{How do we move a 128\,KB tile out through registers that can't hold it?}
+    \emph{How do we drain a 128\,KB tile while keeping the register footprint
+    small?}
   \end{center}
 \end{frame}
 
@@ -1146,12 +1148,13 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
     }
     \node[font=\scriptsize] at (0.75,1.45) {$128\times256$ tile};
     % per-strip pipeline
-    \node[b, fill=blue!8, minimum width=1.7cm] (reg) at (4.7,0)
-      {registers\\$128\times64$\\\textbf{16\,KB} bf16};
-    \node[b, fill=orange!12, minimum width=1.2cm] (sm) at (7.6,0) {SMEM\\stage};
-    \node[b, fill=gray!12, minimum width=1.0cm] (hb) at (10.2,0) {HBM};
+    \node[b, fill=blue!8, minimum width=1.8cm] (reg) at (4.7,0)
+      {registers\\$128\times64$\\\textbf{32\,KB} fp32};
+    \node[b, fill=orange!12, minimum width=1.5cm] (sm) at (7.7,0)
+      {SMEM buf\\\textbf{16\,KB} bf16};
+    \node[b, fill=gray!12, minimum width=1.0cm] (hb) at (10.3,0) {HBM};
     \draw[ar] (s3.east) -- node[above]{\code{tcgen05.ld}} (reg.west);
-    \draw[ar] (reg) -- node[above]{pack} (sm);
+    \draw[ar] (reg) -- node[above]{downcast} (sm);
     \draw[ar] (sm) -- node[above]{TMA store} (hb);
     % register reuse loop
     \draw[ar, dashed] (reg.south) to[out=-90,in=-90,looseness=0.9] (s2.south);
@@ -1159,9 +1162,15 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
   \end{tikzpicture}
   \end{center}
 
-  \vspace{0.15cm}
-  Each strip is just \textbf{16\,KB} (bf16) --- it fits comfortably, and the
-  \textbf{same registers are reused} for every strip (8 strips if $BN{=}512$).
+  \vspace{0.1cm}
+  A strip loads as $128\times64$ \textbf{fp32 (32\,KB)}, then downcasts to a
+  \textbf{bf16 (16\,KB)} SMEM store buffer --- and the \textbf{same registers are
+  reused} for every strip (8 strips if $BN{=}512$).
+
+  \vspace{0.05cm}
+  {\footnotesize By default the register buffer = one full strip ($32$\,KB easily
+  fits the $256$\,KB register file). Only a \emph{register/math-bound} epilogue
+  needs to shrink it (sub-strips, more rounds) --- usually unnecessary.}
 \end{frame}
 
 \begin{frame}{Epilogue Design: Three Phases}
