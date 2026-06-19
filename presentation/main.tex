@@ -323,7 +323,7 @@
   \begin{itemize}
     \item Many choices are illustrative, not mandatory. The epilogue here uses a
       \textbf{TMA store} --- chosen to show \emph{store pipelining} --- but a
-      plain vectorized \code{int4} global store works just as well.
+      plain vectorized 16-byte global store works just as well.
     \item Likewise the input load uses \textbf{TMA}, but \code{cp.async} is also
       async and would work --- TMA load is just more B200-native.
   \end{itemize}
@@ -1568,7 +1568,7 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \footnotesize Generated as plain CUDA for the B200 (\code{sm\_100a}), bf16 in /
   fp32 accumulate --- a $\sim$280-line core kernel plus $\sim$270 lines of reusable
   PTX intrinsic wrappers. Other combos (sequential epilogue, no 2-CTA,
-  \code{cp.async} load, plain \code{int4} store) remain generable.
+  \code{cp.async} load, plain 16-byte store) remain generable.
 \end{frame}
 
 \begin{frame}{Benchmark Setup}
