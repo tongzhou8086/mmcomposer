@@ -1105,74 +1105,6 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 \section{Epilogue Design}
 \sectionslide{toc:epi}{Pipelining the Epilogue}
 
-\begin{frame}{Epilogue: Getting the Tile Out of TMEM}
-  The MMA leaves a full output tile in \textbf{TMEM}. To reach HBM it must pass
-  through \textbf{registers} (for the downcast and any math) --- but tying up
-  registers for the \emph{whole} tile would wreck occupancy.
-
-  \vspace{0.3cm}
-  \begin{center}
-  \begin{tikzpicture}[font=\small]
-    \node[draw, thick, fill=green!10, minimum width=4.0cm, minimum height=2.6cm,
-          align=center] (tmem)
-      {TMEM accumulator\\[3pt] $128\times256$, fp32\\[3pt] \textbf{128\,KB}\\[3pt]
-       {\scriptsize(256\,KB if double-buffered)}};
-    \node[draw, thick, fill=blue!8, minimum width=2.2cm, minimum height=1.2cm,
-          align=center, right=3.0cm of tmem] (regs)
-      {Registers\\[2pt] {\scriptsize shared across warps}};
-    \draw[-{Latex[length=2.5mm]}, very thick, draw=mmblue]
-      (tmem) -- node[above, font=\large]{\textbf{?}} (regs);
-  \end{tikzpicture}
-  \end{center}
-
-  \vspace{0.2cm}
-  \begin{center}
-    \emph{How do we drain a 128\,KB tile while keeping the register footprint
-    small?}
-  \end{center}
-\end{frame}
-
-\begin{frame}{Epilogue: Drain in 64-Column Strips}
-  Don't move the whole tile at once --- \textbf{slice it into 64-column strips}
-  and stream them one at a time.
-
-  \vspace{0.25cm}
-  \begin{center}
-  \begin{tikzpicture}[font=\scriptsize, scale=0.85, transform shape,
-      b/.style={draw, thick, rounded corners=1pt, align=center, minimum height=1.05cm},
-      ar/.style={-{Latex[length=2mm]}, very thick, draw=mmblue}]
-    % TMEM tile sliced into 4 strips
-    \foreach \i in {0,1,2,3} {
-      \node[draw, thick, fill=green!10, minimum width=0.5cm, minimum height=2.0cm]
-        (s\i) at (\i*0.5,0) {};
-    }
-    \node[font=\scriptsize] at (0.75,1.45) {$128\times256$ tile};
-    % per-strip pipeline
-    \node[b, fill=blue!8, minimum width=1.8cm] (reg) at (4.7,0)
-      {registers\\$128\times64$\\\textbf{32\,KB} fp32};
-    \node[b, fill=orange!12, minimum width=1.5cm] (sm) at (7.7,0)
-      {SMEM buf\\\textbf{16\,KB} bf16};
-    \node[b, fill=gray!12, minimum width=1.0cm] (hb) at (10.3,0) {HBM};
-    \draw[ar] (s3.east) -- node[above]{\code{tcgen05.ld}} (reg.west);
-    \draw[ar] (reg) -- node[above]{downcast} (sm);
-    \draw[ar] (sm) -- node[above]{TMA store} (hb);
-    % register reuse loop
-    \draw[ar, dashed] (reg.south) to[out=-90,in=-90,looseness=0.9] (s2.south);
-    \node[font=\scriptsize, text=mmblue] at (2.85,-1.95) {reuse for next strip};
-  \end{tikzpicture}
-  \end{center}
-
-  \vspace{0.1cm}
-  A strip loads as $128\times64$ \textbf{fp32 (32\,KB)}, then downcasts to a
-  \textbf{bf16 (16\,KB)} SMEM store buffer --- and the \textbf{same registers are
-  reused} for every strip (8 strips if $BN{=}512$).
-
-  \vspace{0.05cm}
-  {\footnotesize By default the register buffer = one full strip ($32$\,KB easily
-  fits the $256$\,KB register file). Only a \emph{register/math-bound} epilogue
-  needs to shrink it (sub-strips, more rounds) --- usually unnecessary.}
-\end{frame}
-
 \begin{frame}{Epilogue Design: Three Phases}
   So far we have shown only the first phase of the epilogue. In full it has
   \textbf{three}:
@@ -1253,38 +1185,33 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 \end{frame}
 
 \begin{frame}{Epilogue Concern 1: Coalesced Global Write}
-  Each thread owns a \emph{row}, so storing registers straight to HBM is
-  row-strided. Instead we first fill one \textbf{$BM\times64$ chunk} in SMEM ---
-  the TMA store unit --- then let \textbf{TMA} write it out, coalesced.
+  Each thread owns a \emph{row}, so a single column written straight to HBM lands
+  threads $N$ apart --- \textbf{uncoalesced}. Instead, slice the tile into
+  \textbf{$128\times64$ chunks}; fill one in SMEM, then let \textbf{TMA} write the
+  whole chunk out --- \textbf{coalesced}.
 
-  \vspace{0.3cm}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.5\textwidth}
-    \begin{center}
-      \textbf{\textcolor{red!70!black}{Direct store}}\\[0.2cm]
-      \begin{tikzpicture}[seg/.style={draw, minimum width=0.34cm, minimum height=0.34cm, fill=red!20}]
-        \draw[-{Latex[length=1.6mm]}, thick] (-0.1,0) -- (5.0,0) node[right]{\scriptsize HBM addr};
-        \foreach \i in {0,...,4} {
-          \node[seg] at (0.95*\i + 0.2, 0.5) {};
-          \node[font=\scriptsize] at (0.95*\i + 0.2, 0.95) {T\i};
-        }
-      \end{tikzpicture}\\[0.15cm]
-      {\scriptsize threads land $N$ apart\\ $\Rightarrow$ \textbf{uncoalesced}}
-    \end{center}
-    \column{0.5\textwidth}
-    \begin{center}
-      \textbf{\textcolor{green!45!black}{Via SMEM staging}}\\[0.2cm]
-      \begin{tikzpicture}[seg/.style={draw, minimum width=0.34cm, minimum height=0.34cm, fill=green!25}]
-        \draw[-{Latex[length=1.6mm]}, thick] (-0.1,0) -- (3.4,0) node[right]{\scriptsize HBM addr};
-        \foreach \i in {0,...,4} {
-          \node[seg] at (0.37*\i + 0.25, 0.5) {};
-          \node[font=\scriptsize] at (0.37*\i + 0.25, 0.95) {T\i};
-        }
-      \end{tikzpicture}\\[0.15cm]
-      {\scriptsize contiguous addresses\\ $\Rightarrow$ \textbf{coalesced}}
-    \end{center}
-  \end{columns}
-
+  \vspace{0.35cm}
+  \begin{center}
+  \begin{tikzpicture}[font=\scriptsize, scale=0.95, transform shape,
+      ar/.style={-{Latex[length=2mm]}, very thick, draw=mmblue}]
+    % accumulator tile sliced into 4 chunks
+    \foreach \i in {0,1,2,3} {
+      \node[draw=black!40, fill=teal!12, minimum width=0.85cm, minimum height=2.0cm]
+        (c\i) at (\i*0.87,0) {64};
+    }
+    \node[draw=mmblue, very thick, minimum width=0.85cm, minimum height=2.0cm] at (3*0.87,0) {};
+    \node[font=\scriptsize] at (1.3,1.5) {$128\times256$ tile, sliced into 4 chunks};
+    % one chunk -> SMEM buffer (wide)
+    \node[draw, thick, fill=green!20, minimum width=2.4cm, minimum height=2.0cm,
+          align=center] (sm) at (5.7,0) {SMEM buffer\\$128\times64$};
+    \draw[ar] (c3.east) -- node[above]{one chunk} (sm.west);
+    \node[text=green!45!black, align=center] at (5.7,-1.55)
+      {64 contiguous cols / row\\$\Rightarrow$ \textbf{coalesced}};
+    % single-column reference (uncoalesced)
+    \node[draw=red!60, fill=red!20, minimum width=0.14cm, minimum height=2.0cm] (sc) at (8.4,0) {};
+    \node[text=red!70!black, align=center] at (8.4,-1.55) {1 col direct\\$\Rightarrow$ \textbf{strided}};
+  \end{tikzpicture}
+  \end{center}
 \end{frame}
 
 \begin{frame}{Epilogue Concern 2: Filling the $128\times64$ SMEM Buffer}
