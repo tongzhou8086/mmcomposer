@@ -10,7 +10,7 @@
 \usepackage{listings}
 \usepackage{minted}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,overlay-beamer-styles}
 
 \definecolor{mmblue}{RGB}{20,82,143}
 \definecolor{mmteal}{RGB}{14,116,144}
@@ -869,6 +869,95 @@
     \end{tabular}
   \end{table}
 \end{frame}
+\begin{frame}{The Full Picture: One Pipelined SM}
+  \begin{center}
+  \begin{tikzpicture}[font=\scriptsize, scale=0.9, transform shape,
+      eng/.style={ellipse, draw, thick, align=center, minimum width=1.9cm, minimum height=1.0cm},
+      buf/.style={draw, thick, rounded corners=1pt, minimum width=0.85cm, minimum height=0.65cm, align=center},
+      off/.style={fill=black!4, draw=black!30, text=black!45},
+      lab/.style={font=\tiny, text=mmgray},
+      fl/.style={-{Latex[length=2mm]}, very thick, draw=mmblue},
+      floff/.style={-{Latex[length=2mm]}, very thick, draw=black!25}]
+    \draw[draw=mmgray, thick, dashed, rounded corners=5pt] (-5.7,-2.5) rectangle (5.8,2.5);
+    \node[font=\scriptsize\bfseries, text=mmgray, anchor=north west] at (-5.65,2.45) {one SM};
+    \node[draw, thick, fill=gray!12, minimum width=1.1cm, minimum height=1.0cm] (hbm) at (-6.9,0) {HBM};
+    % TMA: busy in every step
+    \node[eng, fill=teal!12] (tma) at (-4.3,0) {TMA\\engine};
+    % compute buffers (top)
+    \node[font=\scriptsize, text=mmgray] at (-1.9,2.05) {SMEM compute};
+    \node[buf, fill=teal!18] (c0) at (-2.45,1.35) {c0};
+    \node[buf, fill=teal!8] (c1) at (-1.35,1.35) {c1};
+    % store buffers (bottom): used from step 3
+    \node[font=\scriptsize, text=mmgray] at (-1.9,-2.05) {SMEM store};
+    \node[buf, alt=<3->{fill=orange!20}{off}] (e0) at (-2.45,-1.35) {e0};
+    \node[buf, alt=<3->{fill=orange!8}{off}] (e1) at (-1.35,-1.35) {e1};
+    % tensor core + TMEM: busy from step 2
+    \node[eng, minimum width=2.4cm, minimum height=1.25cm, alt=<2->{fill=green!12}{off}] (tc) at (3.7,1.35) {};
+    \node[font=\scriptsize, alt=<2->{}{text=black!45}] at (3.7,1.68) {Tensor Core};
+    \node[draw, thick, font=\tiny, minimum width=1.5cm, minimum height=0.4cm, alt=<2->{fill=green!8}{off}] at (3.7,1.05) {TMEM};
+    % CUDA cores + registers: busy from step 3
+    \node[eng, minimum width=2.4cm, minimum height=1.25cm, alt=<3->{fill=orange!12}{off}] (cuda) at (3.7,-1.35) {};
+    \node[font=\scriptsize, alt=<3->{}{text=black!45}] at (3.7,-1.02) {CUDA cores};
+    \node[draw, thick, font=\tiny, minimum width=1.5cm, minimum height=0.4cm, alt=<3->{fill=orange!8}{off}] at (3.7,-1.65) {registers};
+    % flows
+    \draw[fl] (hbm) -- node[lab]{load} (tma);
+    \draw[fl] (tma.north) to[out=90,in=180] node[pos=0.6,above,font=\tiny,text=mmgray]{fill} (c1.west);
+    \draw[alt=<2->{fl}{floff}] (c0.east) to[out=0,in=180] node[pos=0.5,above,font=\tiny,text=mmgray]{MMA} (tc.west);
+    \draw[alt=<3->{fl}{floff}] (tc.south) -- node[right,font=\tiny,text=mmgray]{drain} (cuda.north);
+    \draw[alt=<3->{fl}{floff}] (cuda.west) to[out=180,in=0] node[pos=0.5,below,font=\tiny,text=mmgray]{stage} (e1.east);
+    \draw[alt=<3->{fl}{floff}] (e0.west) to[out=180,in=-90] node[pos=0.4,below,font=\tiny,text=mmgray]{store} (tma.south);
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.1cm}
+  \small
+  \only<1>{\textbf{The pipeline fills:} only the TMA engine runs --- loading the
+  first compute buffer. The MMA and CUDA cores wait.}%
+  \only<2>{\textbf{The MMA joins:} once a compute buffer is ready, the tensor core
+  reads it into TMEM --- two engines now overlap, while the CUDA cores still wait.}%
+  \only<3>{\textbf{Steady state:} all three engines run at once --- the pipeline
+  is full. The two buffers per stage are what make this possible; the timeline
+  next shows that overlap over time.}
+\end{frame}
+
+\begin{frame}{Pipeline Timeline: the Overlap}
+  \begin{center}
+  \begin{tikzpicture}[font=\scriptsize, scale=0.95, transform shape,
+      lane/.style={font=\small\bfseries, anchor=east, text=mmgray},
+      blk/.style={draw, thick, rounded corners=1pt, minimum width=1.5cm, minimum height=0.9cm, align=center}]
+    \node[lane] at (-3.7,1.5) {TMA load};
+    \node[lane] at (-3.7,0.3) {MMA};
+    \node[lane] at (-3.7,-0.9) {epilogue};
+    % TMA lane: tiles 0..3 into alternating compute buffers c0/c1
+    \only<1->{\foreach \c/\t/\b/\f in {0/0/c0/teal!20, 1/1/c1/teal!9, 2/2/c0/teal!20, 3/3/c1/teal!9}
+      {\node[blk, fill=\f] at (-2.6+1.6*\c,1.5) {tile \t\\{\scriptsize $\to$ \b}};}}
+    % MMA lane: one step behind, into alternating TMEM buffers T0/T1
+    \only<2->{\foreach \c/\t/\b/\f in {1/0/T0/green!20, 2/1/T1/green!9, 3/2/T0/green!20}
+      {\node[blk, fill=\f] at (-2.6+1.6*\c,0.3) {tile \t\\{\scriptsize $\to$ \b}};}}
+    % epilogue lane: one more step behind, into alternating store buffers e0/e1
+    \only<3->{\foreach \c/\t/\b/\f in {2/0/e0/orange!22, 3/1/e1/orange!10}
+      {\node[blk, fill=\f] at (-2.6+1.6*\c,-0.9) {tile \t\\{\scriptsize $\to$ \b}};}}
+    % steady-state highlight
+    \only<3->{
+      \draw[draw=mmsignal, very thick, dashed, rounded corners=3pt]
+        (-2.6+1.6*2-0.83,2.05) rectangle (-2.6+1.6*2+0.83,-1.45);
+      \node[font=\scriptsize\bfseries, text=mmsignal] at (-2.6+1.6*2,2.35) {all 3 overlap};
+    }
+    \draw[-{Latex[length=2mm]}, thick, draw=mmgray] (-3.5,-1.85) -- (5.3,-1.85) node[right]{time};
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.1cm}
+  \small
+  \only<1>{Loads stream in, alternating between the two compute buffers
+  \code{c0}/\code{c1}.}%
+  \only<2>{The MMA consumes one compute buffer while the TMA fills the other ---
+  the two \textbf{overlap}.}%
+  \only<3>{At steady state \textbf{all three engines run at once}. Every hand-off
+  is \textbf{double-buffered}, so each stage always has a free output buffer ---
+  exactly the ``input ready \emph{and} output free'' condition, met continuously.}
+\end{frame}
+
 
 \begin{frame}{From Diagram to Code}
   We now connect the container diagram to the real kernel. Each warp role maps
