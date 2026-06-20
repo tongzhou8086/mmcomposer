@@ -1232,7 +1232,7 @@ tcgen05.commit.cta_group::2.mbarrier::arrive::one
 
 \begin{frame}{Epilogue: Load the Whole 64-Column Chunk}
   The fix starts here: drain not one column but a whole \textbf{64-column chunk}
-  --- one slice of TMEM --- into registers ($8\times$ \code{tcgen05.ld}). Thread
+  --- one slice of TMEM --- into registers with \code{tcgen05.ld}. Thread
   $t$ now holds all 64 of its row's outputs.
 
   \vspace{0.2cm}
