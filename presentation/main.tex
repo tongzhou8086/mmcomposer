@@ -216,7 +216,7 @@
   \small One \textbf{descriptor} names the tensor's dims + strides and the box's
   $(x,y)$, height, and width. The engine runs \textbf{async} (completion via an
   \code{mbarrier}), lands the tile \textbf{swizzled}, and can \textbf{multicast}
-  to several CTAs. (\code{cp.async} is the older, manual alternative.)
+  to several CTAs. (\code{cp.async} is the older, per-thread (SIMT) alternative.)
   TMA boxes can be \textbf{1D--5D}; matmul uses the \textbf{2D} form shown here.
 \end{frame}
 
