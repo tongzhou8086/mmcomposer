@@ -217,6 +217,7 @@
   $(x,y)$, height, and width. The engine runs \textbf{async} (completion via an
   \code{mbarrier}), lands the tile \textbf{swizzled}, and can \textbf{multicast}
   to several CTAs. (\code{cp.async} is the older, manual alternative.)
+  TMA boxes can be \textbf{1D--5D}; matmul uses the \textbf{2D} form shown here.
 \end{frame}
 
 \begin{frame}{The Tensor Core MMA (\code{tcgen05})}
