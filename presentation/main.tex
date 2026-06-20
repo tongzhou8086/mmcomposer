@@ -292,9 +292,9 @@
 
   \vspace{0.5cm}
   \small \textbf{Common operations:} \code{init(N)} sets the arrival count;
-  \code{arrive} (optionally \code{.expect\_tx(bytes)}) checks in; and
-  \code{try\_wait.parity} blocks until the \textbf{phase flips} --- which the
-  hardware does once both counts reach zero.
+  \code{arrive} checks a thread in (count\,$-1$); \code{arrive.expect\_tx(bytes)}
+  checks in \emph{and} arms the byte count; \code{try\_wait.parity} blocks until
+  the \textbf{phase flips} --- which the hardware does once both counts reach zero.
 \end{frame}
 
 \begin{frame}{The Big Picture: GEMM Dataflow on the SM}
