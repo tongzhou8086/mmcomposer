@@ -202,42 +202,58 @@
 \end{frame}
 
 \begin{frame}{The Tensor Core MMA (\code{tcgen05})}
-  Blackwell's tensor cores are driven by a single \textbf{asynchronous}
-  instruction, \code{tcgen05.mma}: one issue computes a whole tile MMA (not
-  per-thread FMAs). It reads A and B from SMEM and \textbf{accumulates into TMEM}.
+  One \code{tcgen05.mma} computes a whole output tile --- reading A, B from SMEM
+  and \textbf{accumulating into TMEM}. Its shape is \textbf{fixed by hardware}:
 
-  \vspace{0.25cm}
-  Its tile shape is \textbf{fixed by the hardware} (bf16 inputs):
-  \begin{itemize}
-    \item \textbf{M-atom $= 128$} --- one instruction processes exactly 128 rows
-      of A.
-    \item $N$ up to $256$; $K = 16$ (chained to cover $BK$).
-    \item the accumulator lives in \textbf{TMEM --- a $128\times512$ array}, so
-      only \textbf{128 rows} are available.
-  \end{itemize}
+  \vspace{0.3cm}
+  \begin{center}
+  \begin{tikzpicture}[font=\scriptsize, scale=0.95, transform shape,
+      d/.style={draw, thick, fill=green!12}]
+    % M = 128 measure
+    \draw[{Latex[length=2mm]}-{Latex[length=2mm]}, thick, draw=mmblue] (-0.5,0) -- (-0.5,2.4);
+    \node[rotate=90, font=\scriptsize\bfseries, text=mmblue] at (-0.88,1.2) {$M=128$ fixed};
+    % three output-tile widths
+    \draw[d] (0,0) rectangle (0.8,2.4);
+    \draw[d] (1.3,0) rectangle (2.9,2.4);
+    \draw[d] (3.4,0) rectangle (6.6,2.4);
+    \node[font=\scriptsize\bfseries] at (0.4,-0.4) {$N{=}64$};
+    \node[font=\scriptsize\bfseries] at (2.1,-0.4) {$N{=}128$};
+    \node[font=\scriptsize\bfseries] at (5.0,-0.4) {$N{=}256$};
+    \node[font=\scriptsize, text=mmgray] at (3.0,2.78) {output tile $D$ (in TMEM) --- one of three widths};
+  \end{tikzpicture}
+  \end{center}
 
-  \vspace{0.25cm}
-  \textbf{This is why $BM = 128$}: smaller wastes the MMA (and reads past the A
-  tile), larger won't fit --- TMEM has only 128 rows. Need more rows?
-  \textbf{2-CTA MMA} has two CTAs jointly cover $M = 256$ --- each still
-  holding 128.
+  \vspace{0.45cm}
+  \small \textbf{$M$ is fixed at 128} --- the MMA's M-atom, and TMEM holds only
+  128 rows. \textbf{$N \in \{64,128,256\}$}; $K=16$ per instruction (chained over
+  $BK$). Need more rows? \textbf{2-CTA MMA} spans $M=256$, 128 per CTA.
 \end{frame}
 
 \begin{frame}{TMEM: Tensor Memory}
-  A separate on-chip memory, new in Blackwell, dedicated to \textbf{MMA
-  accumulators}.
-  \begin{itemize}
-    \item \textbf{$128 \times 512$ per SM} ($128$ lanes $\times$ $512$ cols
-      $\times\,4$\,B $= 256$\,KB) --- holds the FP32 partial sums.
-    \item The MMA writes results \textbf{here, not into registers}; the epilogue
-      reads them back with \code{tcgen05.ld}.
-    \item Keeping large accumulators off the register file frees registers and
-      lets tiles be big.
-  \end{itemize}
+  A separate on-chip memory (new in Blackwell) that holds the \textbf{MMA
+  accumulators} --- a fixed \textbf{$128\times512$} array per SM:
 
-  \vspace{0.2cm}
-  Together with the MMA's $128$-row M-atom, this $128$-row layout is what
-  \textbf{fixes $BM = 128$}.
+  \vspace{0.3cm}
+  \begin{center}
+  \begin{tikzpicture}[font=\scriptsize, scale=0.95, transform shape]
+    \draw[thick, fill=green!8] (0,0) rectangle (6.4,2.2);
+    \fill[orange!22] (0,0) rectangle (3.2,2.2);
+    \draw[thick] (0,0) rectangle (6.4,2.2);
+    \draw[dashed, black!45] (3.2,0) -- (3.2,2.2);
+    \node[align=center, font=\scriptsize\bfseries] at (1.6,1.1) {$128\times256$\\ accumulator};
+    \node[align=center, font=\scriptsize, text=mmgray] at (4.8,1.1) {room for a\\ 2nd buffer};
+    \draw[{Latex[length=1.8mm]}-{Latex[length=1.8mm]}, draw=mmblue] (-0.45,0) -- (-0.45,2.2);
+    \node[rotate=90, font=\scriptsize\bfseries, text=mmblue] at (-0.82,1.1) {128 rows};
+    \draw[{Latex[length=1.8mm]}-{Latex[length=1.8mm]}, draw=mmblue] (0,2.55) -- (6.4,2.55);
+    \node[font=\scriptsize\bfseries, text=mmblue] at (3.2,2.85) {512 columns};
+    \node[font=\scriptsize, text=mmgray] at (3.2,-0.4) {$128\times512\times4$\,B $=256$\,KB (fp32)};
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.4cm}
+  \small The MMA writes accumulators here, \textbf{not into registers}; the
+  epilogue reads them back with \code{tcgen05.ld}. The \textbf{128 rows} are the
+  $BM{=}128$ lanes --- the same constraint that fixes the MMA's M-atom.
 \end{frame}
 
 \begin{frame}{mbarrier and Async Pipelining}
