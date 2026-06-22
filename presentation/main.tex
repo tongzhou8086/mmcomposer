@@ -579,99 +579,48 @@
   \end{center}
 \end{frame}
 
-\begin{frame}{Per-Slot Synchronization: Engine View}
-  \begin{center}
-    \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=1.45cm, align=center, font=\small},
-        op/.style={draw, thick, rounded corners=1pt, minimum width=2.25cm, minimum height=0.85cm, align=center, font=\small},
-        flow/.style={-{Latex[length=2mm]}, very thick, draw=mmblue},
-        signal/.style={-{Stealth[length=2.3mm]}, very thick, densely dashed},
-        siglabel/.style={font=\scriptsize\bfseries, align=center, inner sep=1.5pt, fill=white}
-      ]
-      \node[container, fill=blue!7] (hbm1) at (-5.0,2.05) {HBM};
-      \node[op, fill=teal!10] (tma) at (-1.55,2.05) {TMA engine};
-      \node[container, fill=teal!8, minimum size=1.75cm] (smem1) at (2.8,2.05) {SMEM\\compute\\buffer};
-
-      \node[container, fill=teal!8] (smem2) at (-5.0,0) {SMEM};
-      \node[op, fill=green!10] (mma) at (-1.55,0) {Tensor Core};
-      \node[container, fill=green!8] (tmem2) at (2.8,0) {TMEM};
-
-      \node[container, fill=green!8] (tmem3) at (-5.0,-2.05) {TMEM};
-      \node[op, fill=orange!12, minimum width=2.45cm] (epi) at (-1.55,-2.05) {CUDA cores};
-      \node[container, fill=orange!8] (regs) at (2.8,-2.05) {registers};
-
-      \draw[flow] (hbm1) -- (tma);
-      \draw[flow] (tma) -- (smem1);
-      \draw[flow] (smem2) -- (mma);
-      \draw[flow] (mma) -- (tmem2);
-      \draw[flow] (tmem3) -- (epi);
-      \draw[flow] (epi) -- (regs);
-
-      \draw[signal, draw=mmsignal] (-1.00,1.625) -- (-1.00,0.425);
-      \node[siglabel, text=mmsignal] at (-0.45,1.03) {data ready};
-
-      \draw[signal, draw=mmsignal] (-2.10,0.425) -- (-2.10,1.625);
-      \node[siglabel, text=mmsignal] at (-2.65,1.03) {buffer free};
-
-      \draw[signal, draw=mmsignal] (-1.00,-0.425) -- (-1.00,-1.625);
-      \node[siglabel, text=mmsignal] at (-0.42,-1.03) {data ready*};
-
-      \draw[signal, draw=mmsignal] (-2.10,-1.625) -- (-2.10,-0.425);
-      \node[siglabel, text=mmsignal] at (-2.65,-1.03) {buffer free};
-
-      \draw[flow] (-1.8,-3.05) -- (-0.6,-3.05);
-      \node[font=\scriptsize, text=mmgray, right] at (-0.55,-3.05) {dataflow};
-      \draw[signal, draw=mmsignal] (1.1,-3.05) -- (2.3,-3.05);
-      \node[font=\scriptsize, text=mmgray, right] at (2.35,-3.05) {signal};
-      \node[font=\scriptsize, text=mmgray, align=center] at (0,-3.55)
-        {Data flows through the engines; the warps issue the work and raise the
-        signals (mbarrier).\\ * TMEM data ready is sent only after the final MMA finishes.};
-    \end{tikzpicture}
-  \end{center}
-\end{frame}
-
 \begin{frame}{Zoom In: TMA Engine \quad (HBM $\to$ SMEM)}
   \begin{center}
     \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=1.85cm, align=center, font=\small},
-        engine/.style={draw, thick, rounded corners=2pt, minimum width=2.7cm, minimum height=1.05cm, align=center, font=\small},
+        container/.style={draw, thick, rounded corners=2pt, minimum width=2.0cm, minimum height=1.5cm, align=center, font=\small},
+        engine/.style={ellipse, draw, thick, minimum width=3.0cm, minimum height=1.5cm, align=center, font=\small},
         flow/.style={-{Latex[length=2.4mm]}, line width=1.1pt, draw=mmblue},
         event/.style={draw=mmsignal, densely dashed, semithick, rounded corners=3pt, fill=mmsignal!7, inner sep=4pt, font=\scriptsize\bfseries, text=mmsignal, align=center},
         evarrow/.style={-{Stealth[length=2.2mm]}, thick, densely dashed, draw=mmsignal},
         status/.style={font=\scriptsize, text=mmgray}
       ]
       \node[container, fill=blue!4] (in) at (-4.4,0) {};
-      \begin{scope}\clip (-4.4,0) circle (0.925cm);
-        \only<1>{\fill[blue!22] (-5.4,-0.925) rectangle (-3.4,0.925);}
-        \only<2>{\fill[blue!22] (-5.4,-0.925) rectangle (-3.4,0);}
+      \begin{scope}\clip[rounded corners=2pt] (-5.4,-0.75) rectangle (-3.4,0.75);
+        \only<1>{\fill[blue!22] (-5.4,-0.75) rectangle (-3.4,0.75);}
+        \only<2>{\fill[blue!22] (-5.4,-0.75) rectangle (-3.4,0);}
       \end{scope}
       \node[container] at (in) {};
       \node[font=\small] at (in) {HBM};
 
       \node[engine, fill=teal!10] (eng) at (0,0) {TMA\\engine};
 
-      \node[container, fill=teal!4, minimum size=2.05cm] (out) at (4.4,0) {};
-      \begin{scope}\clip (4.4,0) circle (1.025cm);
-        \only<2>{\fill[teal!26] (3.375,-1.025) rectangle (5.425,0);}
-        \only<3>{\fill[teal!26] (3.375,-1.025) rectangle (5.425,1.025);}
+      \node[container, fill=teal!4] (out) at (4.4,0) {};
+      \begin{scope}\clip[rounded corners=2pt] (3.4,-0.75) rectangle (5.4,0.75);
+        \only<2>{\fill[teal!26] (3.4,-0.75) rectangle (5.4,0);}
+        \only<3>{\fill[teal!26] (3.4,-0.75) rectangle (5.4,0.75);}
       \end{scope}
-      \node[container, minimum size=2.05cm] at (out) {};
+      \node[container] at (out) {};
       \node[font=\small, align=center] at (out) {SMEM\\compute\\buffer};
 
       \draw[flow] (in) -- (eng);
       \draw[flow] (eng) -- node[above, font=\scriptsize, text=mmblue] {fill} (out);
 
       \only<1>{
-        \node[event] (ein) at (2.7,2.4) {receives \textbf{compute buffer free}};
+        \node[event] (ein) at (2.7,2.15) {receives \textbf{compute buffer free}};
         \draw[evarrow] (ein) to[bend left=12] (out.north);
       }
       \only<3>{
-        \node[event] (eout) at (2.7,2.4) {raises \textbf{compute data ready}};
+        \node[event] (eout) at (2.7,2.15) {raises \textbf{compute data ready}};
         \draw[evarrow] (out.north) to[bend right=12] (eout);
       }
 
-      \node[status] at (-4.4,-1.5) {\only<1-2>{tile ready}\only<3>{consumed}};
-      \node[status] at (4.4,-1.65) {\only<1>{free}\only<2>{filling}\only<3>{full}};
+      \node[status] at (-4.4,-1.1) {\only<1-2>{tile ready}\only<3>{consumed}};
+      \node[status] at (4.4,-1.1) {\only<1>{free}\only<2>{filling}\only<3>{full}};
     \end{tikzpicture}
   \end{center}
 
@@ -687,47 +636,47 @@
 \begin{frame}{Zoom In: Tensor Core \quad (SMEM $\to$ TMEM)}
   \begin{center}
     \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=1.85cm, align=center, font=\small},
-        engine/.style={draw, thick, rounded corners=2pt, minimum width=2.7cm, minimum height=1.05cm, align=center, font=\small},
+        container/.style={draw, thick, rounded corners=2pt, minimum width=2.0cm, minimum height=1.5cm, align=center, font=\small},
+        engine/.style={ellipse, draw, thick, minimum width=3.0cm, minimum height=1.5cm, align=center, font=\small},
         flow/.style={-{Latex[length=2.4mm]}, line width=1.1pt, draw=mmblue},
         event/.style={draw=mmsignal, densely dashed, semithick, rounded corners=3pt, fill=mmsignal!7, inner sep=4pt, font=\scriptsize\bfseries, text=mmsignal, align=center},
         evarrow/.style={-{Stealth[length=2.2mm]}, thick, densely dashed, draw=mmsignal},
         status/.style={font=\scriptsize, text=mmgray}
       ]
       \node[container, fill=teal!4] (in) at (-4.4,0) {};
-      \begin{scope}\clip (-4.4,0) circle (0.925cm);
-        \only<1>{\fill[teal!26] (-5.4,-0.925) rectangle (-3.4,0.925);}
-        \only<2>{\fill[teal!26] (-5.4,-0.925) rectangle (-3.4,0);}
+      \begin{scope}\clip[rounded corners=2pt] (-5.4,-0.75) rectangle (-3.4,0.75);
+        \only<1>{\fill[teal!26] (-5.4,-0.75) rectangle (-3.4,0.75);}
+        \only<2>{\fill[teal!26] (-5.4,-0.75) rectangle (-3.4,0);}
       \end{scope}
       \node[container] at (in) {};
       \node[font=\small] at (in) {SMEM};
 
       \node[engine, fill=green!12] (eng) at (0,0) {Tensor\\Core};
 
-      \node[container, fill=green!4, minimum size=2.05cm] (out) at (4.4,0) {};
-      \begin{scope}\clip (4.4,0) circle (1.025cm);
-        \only<2>{\fill[green!26] (3.375,-1.025) rectangle (5.425,0);}
-        \only<3>{\fill[green!26] (3.375,-1.025) rectangle (5.425,1.025);}
+      \node[container, fill=green!4] (out) at (4.4,0) {};
+      \begin{scope}\clip[rounded corners=2pt] (3.4,-0.75) rectangle (5.4,0.75);
+        \only<2>{\fill[green!26] (3.4,-0.75) rectangle (5.4,0);}
+        \only<3>{\fill[green!26] (3.4,-0.75) rectangle (5.4,0.75);}
       \end{scope}
-      \node[container, minimum size=2.05cm] at (out) {};
+      \node[container] at (out) {};
       \node[font=\small, align=center] at (out) {TMEM};
 
       \draw[flow] (in) -- (eng);
       \draw[flow] (eng) -- node[above, font=\scriptsize, text=mmblue] {fill} (out);
 
       \only<1>{
-        \node[event] (ein) at (-1.9,2.4) {receives \textbf{compute data ready}};
+        \node[event] (ein) at (-1.9,2.15) {receives \textbf{compute data ready}};
         \draw[evarrow] (ein) to[bend right=12] (in.north);
       }
       \only<3>{
-        \node[event] (e1) at (-3.1,2.4) {raises \textbf{compute buffer free}};
+        \node[event] (e1) at (-3.1,2.15) {raises \textbf{compute buffer free}};
         \draw[evarrow] (in.north) to[bend left=12] (e1);
-        \node[event] (e2) at (3.5,2.4) {raises \textbf{TMEM data ready}};
+        \node[event] (e2) at (3.5,2.15) {raises \textbf{TMEM data ready}};
         \draw[evarrow] (out.north) to[bend right=12] (e2);
       }
 
-      \node[status] at (-4.4,-1.5) {\only<1>{ready}\only<2>{draining}\only<3>{free}};
-      \node[status] at (4.4,-1.65) {\only<1>{free}\only<2>{filling}\only<3>{full}};
+      \node[status] at (-4.4,-1.1) {\only<1>{ready}\only<2>{draining}\only<3>{free}};
+      \node[status] at (4.4,-1.1) {\only<1>{free}\only<2>{filling}\only<3>{full}};
     \end{tikzpicture}
   \end{center}
 
@@ -744,45 +693,45 @@
 \begin{frame}{Zoom In: CUDA Cores \quad (TMEM $\to$ registers)}
   \begin{center}
     \begin{tikzpicture}[
-        container/.style={circle, draw, thick, minimum size=1.85cm, align=center, font=\small},
-        engine/.style={draw, thick, rounded corners=2pt, minimum width=2.7cm, minimum height=1.05cm, align=center, font=\small},
+        container/.style={draw, thick, rounded corners=2pt, minimum width=2.0cm, minimum height=1.5cm, align=center, font=\small},
+        engine/.style={ellipse, draw, thick, minimum width=3.0cm, minimum height=1.5cm, align=center, font=\small},
         flow/.style={-{Latex[length=2.4mm]}, line width=1.1pt, draw=mmblue},
         event/.style={draw=mmsignal, densely dashed, semithick, rounded corners=3pt, fill=mmsignal!7, inner sep=4pt, font=\scriptsize\bfseries, text=mmsignal, align=center},
         evarrow/.style={-{Stealth[length=2.2mm]}, thick, densely dashed, draw=mmsignal},
         status/.style={font=\scriptsize, text=mmgray}
       ]
       \node[container, fill=green!4] (in) at (-4.4,0) {};
-      \begin{scope}\clip (-4.4,0) circle (0.925cm);
-        \only<1>{\fill[green!26] (-5.4,-0.925) rectangle (-3.4,0.925);}
-        \only<2>{\fill[green!26] (-5.4,-0.925) rectangle (-3.4,0);}
+      \begin{scope}\clip[rounded corners=2pt] (-5.4,-0.75) rectangle (-3.4,0.75);
+        \only<1>{\fill[green!26] (-5.4,-0.75) rectangle (-3.4,0.75);}
+        \only<2>{\fill[green!26] (-5.4,-0.75) rectangle (-3.4,0);}
       \end{scope}
       \node[container] at (in) {};
       \node[font=\small] at (in) {TMEM};
 
       \node[engine, fill=orange!14] (eng) at (0,0) {CUDA\\cores};
 
-      \node[container, fill=orange!4, minimum size=2.05cm] (out) at (4.4,0) {};
-      \begin{scope}\clip (4.4,0) circle (1.025cm);
-        \only<2>{\fill[orange!24] (3.375,-1.025) rectangle (5.425,0);}
-        \only<3>{\fill[orange!24] (3.375,-1.025) rectangle (5.425,1.025);}
+      \node[container, fill=orange!4] (out) at (4.4,0) {};
+      \begin{scope}\clip[rounded corners=2pt] (3.4,-0.75) rectangle (5.4,0.75);
+        \only<2>{\fill[orange!24] (3.4,-0.75) rectangle (5.4,0);}
+        \only<3>{\fill[orange!24] (3.4,-0.75) rectangle (5.4,0.75);}
       \end{scope}
-      \node[container, minimum size=2.05cm] at (out) {};
+      \node[container] at (out) {};
       \node[font=\small, align=center] at (out) {registers};
 
       \draw[flow] (in) -- node[above, font=\scriptsize, text=mmblue] {drain} (eng);
       \draw[flow] (eng) -- (out);
 
       \only<1>{
-        \node[event] (ein) at (-1.9,2.4) {receives \textbf{TMEM data ready}};
+        \node[event] (ein) at (-1.9,2.15) {receives \textbf{TMEM data ready}};
         \draw[evarrow] (ein) to[bend right=12] (in.north);
       }
       \only<3>{
-        \node[event] (eout) at (-1.9,2.4) {raises \textbf{TMEM buffer free}};
+        \node[event] (eout) at (-1.9,2.15) {raises \textbf{TMEM buffer free}};
         \draw[evarrow] (in.north) to[bend left=12] (eout);
       }
 
-      \node[status] at (-4.4,-1.5) {\only<1>{ready}\only<2>{draining}\only<3>{free}};
-      \node[status] at (4.4,-1.65) {\only<1>{empty}\only<2>{loading}\only<3>{loaded}};
+      \node[status] at (-4.4,-1.1) {\only<1>{ready}\only<2>{draining}\only<3>{free}};
+      \node[status] at (4.4,-1.1) {\only<1>{empty}\only<2>{loading}\only<3>{loaded}};
     \end{tikzpicture}
   \end{center}
 
@@ -820,9 +769,9 @@
       \draw[flow] (-0.35,1.75) -- (-0.35,1.24)
         node[midway, right, font=\scriptsize] {TMA fill};
 
-      \node[label] at (-4.75,-1.35) {TMEM\\accumulator};
-      \node[slot, fill=green!12, minimum width=1.30cm] (t0) at (-2.45,-1.35) {buf 0};
-      \node[slot, fill=green!22, minimum width=1.30cm] (t1) at (-0.82,-1.35) {buf 1};
+      \node[label] at (-4.75,-1.1) {TMEM\\accumulator};
+      \node[slot, fill=green!12, minimum width=1.30cm] (t0) at (-2.45,-1.1) {buf 0};
+      \node[slot, fill=green!22, minimum width=1.30cm] (t1) at (-0.82,-1.1) {buf 1};
       \draw[flow] (-2.45,-1.66) -- (-2.45,-2.17)
         node[below, font=\scriptsize] {epilogue drain};
       \draw[flow] (-0.82,-0.52) -- (-0.82,-1.03)
