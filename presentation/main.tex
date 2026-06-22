@@ -592,7 +592,6 @@
       \node[container, fill=blue!4] (in) at (-4.4,0) {};
       \begin{scope}\clip[rounded corners=2pt] (-5.4,-0.75) rectangle (-3.4,0.75);
         \only<1>{\fill[blue!22] (-5.4,-0.75) rectangle (-3.4,0.75);}
-        \only<2>{\fill[blue!22] (-5.4,-0.75) rectangle (-3.4,0);}
       \end{scope}
       \node[container] at (in) {};
       \node[font=\small] at (in) {HBM};
@@ -601,8 +600,7 @@
 
       \node[container, fill=teal!4] (out) at (4.4,0) {};
       \begin{scope}\clip[rounded corners=2pt] (3.4,-0.75) rectangle (5.4,0.75);
-        \only<2>{\fill[teal!26] (3.4,-0.75) rectangle (5.4,0);}
-        \only<3>{\fill[teal!26] (3.4,-0.75) rectangle (5.4,0.75);}
+        \only<2>{\fill[teal!26] (3.4,-0.75) rectangle (5.4,0.75);}
       \end{scope}
       \node[container] at (out) {};
       \node[font=\small, align=center] at (out) {SMEM\\compute\\buffer};
@@ -614,22 +612,21 @@
         \node[event] (ein) at (2.7,2.15) {receives \textbf{compute buffer free}};
         \draw[evarrow] (ein) to[bend left=12] (out.north);
       }
-      \only<3>{
+      \only<2>{
         \node[event] (eout) at (2.7,2.15) {raises \textbf{compute data ready}};
         \draw[evarrow] (out.north) to[bend right=12] (eout);
       }
 
-      \node[status] at (-4.4,-1.1) {\only<1-2>{tile ready}\only<3>{consumed}};
-      \node[status] at (4.4,-1.1) {\only<1>{free}\only<2>{filling}\only<3>{full}};
+      \node[status] at (-4.4,-1.1) {\only<1>{tile ready}\only<2>{consumed}};
+      \node[status] at (4.4,-1.1) {\only<1>{free}\only<2>{full}};
     \end{tikzpicture}
   \end{center}
 
   \vspace{0.05cm}
-  \only<1>{\textbf{Trigger --- event received:} the SMEM compute slot is free
-    (\code{compute buffer free}). Free initially, then freed by the MMA each cycle.}
-  \only<2>{The \textbf{TMA engine} streams the tile from HBM and fills the SMEM
-    compute buffer.}
-  \only<3>{\textbf{On completion --- event sent:} \code{compute data ready} ---
+  \only<1>{\textbf{Trigger --- event received:} \code{compute buffer free} --- the
+    SMEM compute slot is free (initially; later freed by the MMA). The TMA engine
+    then fills it from HBM.}
+  \only<2>{\textbf{On completion --- event sent:} \code{compute data ready} ---
     which is exactly the trigger for the next stage.}
 \end{frame}
 
@@ -646,7 +643,6 @@
       \node[container, fill=teal!4] (in) at (-4.4,0) {};
       \begin{scope}\clip[rounded corners=2pt] (-5.4,-0.75) rectangle (-3.4,0.75);
         \only<1>{\fill[teal!26] (-5.4,-0.75) rectangle (-3.4,0.75);}
-        \only<2>{\fill[teal!26] (-5.4,-0.75) rectangle (-3.4,0);}
       \end{scope}
       \node[container] at (in) {};
       \node[font=\small] at (in) {SMEM};
@@ -655,8 +651,7 @@
 
       \node[container, fill=green!4] (out) at (4.4,0) {};
       \begin{scope}\clip[rounded corners=2pt] (3.4,-0.75) rectangle (5.4,0.75);
-        \only<2>{\fill[green!26] (3.4,-0.75) rectangle (5.4,0);}
-        \only<3>{\fill[green!26] (3.4,-0.75) rectangle (5.4,0.75);}
+        \only<2>{\fill[green!26] (3.4,-0.75) rectangle (5.4,0.75);}
       \end{scope}
       \node[container] at (out) {};
       \node[font=\small, align=center] at (out) {TMEM};
@@ -668,24 +663,23 @@
         \node[event] (ein) at (-1.9,2.15) {receives \textbf{compute data ready}};
         \draw[evarrow] (ein) to[bend right=12] (in.north);
       }
-      \only<3>{
+      \only<2>{
         \node[event] (e1) at (-3.1,2.15) {raises \textbf{compute buffer free}};
         \draw[evarrow] (in.north) to[bend left=12] (e1);
         \node[event] (e2) at (3.5,2.15) {raises \textbf{TMEM data ready}};
         \draw[evarrow] (out.north) to[bend right=12] (e2);
       }
 
-      \node[status] at (-4.4,-1.1) {\only<1>{ready}\only<2>{draining}\only<3>{free}};
-      \node[status] at (4.4,-1.1) {\only<1>{free}\only<2>{filling}\only<3>{full}};
+      \node[status] at (-4.4,-1.1) {\only<1>{ready}\only<2>{free}};
+      \node[status] at (4.4,-1.1) {\only<1>{free}\only<2>{full}};
     \end{tikzpicture}
   \end{center}
 
   \vspace{0.05cm}
-  \only<1>{\textbf{Trigger --- event received:} \code{compute data ready} ---
-    the tile the TMA engine just delivered. (The TMEM accumulator must also be free.)}
-  \only<2>{The \textbf{Tensor Core} reads SMEM and accumulates into the TMEM
-    accumulator buffer.}
-  \only<3>{\textbf{On completion --- events sent:} \code{compute buffer free}
+  \only<1>{\textbf{Trigger --- event received:} \code{compute data ready} --- the
+    tile the TMA just delivered (and the TMEM accumulator is free). The Tensor Core
+    accumulates it into TMEM.}
+  \only<2>{\textbf{On completion --- events sent:} \code{compute buffer free}
     back to the TMA, and \code{TMEM data ready} (after the tile's final MMA)
     forward to the epilogue.}
 \end{frame}
@@ -703,7 +697,6 @@
       \node[container, fill=green!4] (in) at (-4.4,0) {};
       \begin{scope}\clip[rounded corners=2pt] (-5.4,-0.75) rectangle (-3.4,0.75);
         \only<1>{\fill[green!26] (-5.4,-0.75) rectangle (-3.4,0.75);}
-        \only<2>{\fill[green!26] (-5.4,-0.75) rectangle (-3.4,0);}
       \end{scope}
       \node[container] at (in) {};
       \node[font=\small] at (in) {TMEM};
@@ -712,8 +705,7 @@
 
       \node[container, fill=orange!4] (out) at (4.4,0) {};
       \begin{scope}\clip[rounded corners=2pt] (3.4,-0.75) rectangle (5.4,0.75);
-        \only<2>{\fill[orange!24] (3.4,-0.75) rectangle (5.4,0);}
-        \only<3>{\fill[orange!24] (3.4,-0.75) rectangle (5.4,0.75);}
+        \only<2>{\fill[orange!24] (3.4,-0.75) rectangle (5.4,0.75);}
       \end{scope}
       \node[container] at (out) {};
       \node[font=\small, align=center] at (out) {registers};
@@ -725,22 +717,21 @@
         \node[event] (ein) at (-1.9,2.15) {receives \textbf{TMEM data ready}};
         \draw[evarrow] (ein) to[bend right=12] (in.north);
       }
-      \only<3>{
+      \only<2>{
         \node[event] (eout) at (-1.9,2.15) {raises \textbf{TMEM buffer free}};
         \draw[evarrow] (in.north) to[bend left=12] (eout);
       }
 
-      \node[status] at (-4.4,-1.1) {\only<1>{ready}\only<2>{draining}\only<3>{free}};
-      \node[status] at (4.4,-1.1) {\only<1>{empty}\only<2>{loading}\only<3>{loaded}};
+      \node[status] at (-4.4,-1.1) {\only<1>{ready}\only<2>{free}};
+      \node[status] at (4.4,-1.1) {\only<1>{empty}\only<2>{loaded}};
     \end{tikzpicture}
   \end{center}
 
   \vspace{0.05cm}
   \only<1>{\textbf{Trigger --- event received:} \code{TMEM data ready} from the
-    final MMA. (The register destination must also be free.)}
-  \only<2>{The \textbf{CUDA cores} drain TMEM into registers with
-    \code{tcgen05.ld}, ready for the downcast and store.}
-  \only<3>{\textbf{On completion --- event sent:} \code{TMEM buffer free} back
+    final MMA (and the register destination is free). The CUDA cores drain TMEM
+    into registers with \code{tcgen05.ld}.}
+  \only<2>{\textbf{On completion --- event sent:} \code{TMEM buffer free} back
     to the Tensor Core, so the next tile can accumulate.}
 \end{frame}
 
