@@ -793,8 +793,8 @@ if (warp_id == 0 && elect_sync()) {            // TMA-load warp
     tma_2d_load_g2(A_base(slot), A_tmap, ...);        // drain HBM -> fill A
     tma_2d_load_g2(B_base(slot), B_tmap, ...);        //              fill B
     // signal: compute data ready
-    mbarrier_arrive_expect_tx(smem_compute_full_mbar[slot],
-                              SLOT_BYTES);
+    mbarrier_signal_on_bytes_loaded(smem_compute_full_mbar[slot],
+                                    SLOT_BYTES);
     gk++;
   }
 }
@@ -816,11 +816,10 @@ else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {   // MMA warp
                         smem_compute_full_phase[slot]);
     issue_mma_chain(d_tmem, A_base(slot), B_base(slot), ...);
     // signal: compute buffer free
-    tcgen05_commit_mcast_g2(smem_compute_free_mbar[slot],
-                            cta_mask);
+    mbarrier_signal_on_mma_completion(smem_compute_free_mbar[slot]);
     gk++;
   }
-  tcgen05_commit_mcast_g2(tmem_full[buf], cta_mask); // signal: TMEM data ready
+  mbarrier_signal_on_mma_completion(tmem_full[buf]); // signal: TMEM data ready
 }
   \end{lstlisting}
   \vspace{-0.2cm}
