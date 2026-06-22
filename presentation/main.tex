@@ -620,7 +620,8 @@
 
       \node[container, fill=green!4] (out) at (4.4,0) {};
       \begin{scope}\clip[rounded corners=2pt] (3.4,-0.75) rectangle (5.4,0.75);
-        \only<2>{\fill[green!26] (3.4,-0.75) rectangle (5.4,0.75);}
+        \only<2>{\fill[green!26] (3.4,-0.75) rectangle (5.4,0);}
+        \only<3>{\fill[green!26] (3.4,-0.75) rectangle (5.4,0.75);}
       \end{scope}
       \node[container] at (out) {};
       \node[font=\small, align=center] at (out) {TMEM};
@@ -635,12 +636,14 @@
       \only<2>{
         \node[event] (e1) at (-3.1,2.15) {raises \textbf{compute buffer free}};
         \draw[evarrow] (in.north) to[bend left=12] (e1);
+      }
+      \only<3>{
         \node[event] (e2) at (3.5,2.15) {raises \textbf{TMEM data ready}};
         \draw[evarrow] (out.north) to[bend right=12] (e2);
       }
 
-      \node[status] at (-4.4,-1.1) {\only<1>{ready}\only<2>{free}};
-      \node[status] at (4.4,-1.1) {\only<1>{free}\only<2>{full}};
+      \node[status] at (-4.4,-1.1) {\only<1>{ready}\only<2-3>{free}};
+      \node[status] at (4.4,-1.1) {\only<1>{empty}\only<2>{partly full}\only<3>{full}};
     \end{tikzpicture}
   \end{center}
 
@@ -648,9 +651,11 @@
   \only<1>{\textbf{Trigger --- event received:} \code{compute data ready} --- the
     tile the TMA just delivered (and the TMEM accumulator is free). The Tensor Core
     accumulates it into TMEM.}
-  \only<2>{\textbf{On completion --- events sent:} \code{compute buffer free}
-    back to the TMA, and \code{TMEM data ready} (after the tile's final MMA)
-    forward to the epilogue.}
+  \only<2>{\textbf{On completion --- event sent:} each MMA consumes its SMEM tile,
+    so \code{compute buffer free} goes back to the TMA --- but the TMEM accumulator
+    is still only partly filled.}
+  \only<3>{\textbf{After the tile's final MMA:} the TMEM result is complete, so
+    \code{TMEM data ready} goes forward to the epilogue.}
 \end{frame}
 
 \begin{frame}{Zoom In: CUDA Cores \quad (TMEM $\to$ registers)}
