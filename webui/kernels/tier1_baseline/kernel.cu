@@ -121,11 +121,11 @@ __device__ __forceinline__ void mbarrier_init(uint32_t mb, int count) {
 __device__ __forceinline__ void mbarrier_arrive_no_tx(uint32_t mb) {
     asm volatile("mbarrier.arrive.shared::cta.b64 _, [%0];" :: "r"(mb) : "memory");
 }
-__device__ __forceinline__ void mbarrier_arrive_expect_tx(uint32_t mb, int bytes) {
+__device__ __forceinline__ void signal_on_bytes_loaded(uint32_t mb, int bytes) {
     asm volatile("mbarrier.arrive.expect_tx.release.cta.shared::cluster.b64 _, [%0], %1;"
                  :: "r"(mb), "r"(bytes) : "memory");
 }
-__device__ __forceinline__ void mbarrier_wait_phase(uint32_t mb, uint32_t phase) {
+__device__ __forceinline__ void wait_phase(uint32_t mb, uint32_t phase) {
     asm volatile(
         "{\n\t .reg .pred P;\n\t"
         "WAIT_%=: mbarrier.try_wait.parity.shared::cta.b64 P, [%0], %1;\n\t"
@@ -215,7 +215,7 @@ extern "C" __global__ void matmul_dbuf(
     //   2. Issue K_MMAS tcgen05.mma's into TMEM
     //   3. tcgen05_commit(mma_done[slot])      → mma_done fires when MMAs drain
     //   4. Issue next-iter's TMA into slot     (overlaps with running MMAs)
-    //   5. mbarrier_arrive_expect_tx(tile_ready[next_slot], SLOT_BYTES)
+    //   5. signal_on_bytes_loaded(tile_ready[next_slot], SLOT_BYTES)
     //   6. Wait on mma_done[next_slot] before that slot's NEXT TMA       (skipped here)
     //
     // The "double-buffer" trick: with NS=2 we maintain one slot in
@@ -240,7 +240,7 @@ extern "C" __global__ void matmul_dbuf(
                     tma_2d_load(B_base(s) + n * BK * BF16_BYTES,
                                 B_tmap, /*x=*/ off_n + n, /*y=*/ s * BK, mb);
                 }
-                mbarrier_arrive_expect_tx(mb, SLOT_BYTES);
+                signal_on_bytes_loaded(mb, SLOT_BYTES);
             }
         }
 
@@ -251,7 +251,7 @@ extern "C" __global__ void matmul_dbuf(
             const uint32_t ready_mb = (uint32_t)__cvta_generic_to_shared(&tile_ready[slot]);
             const uint32_t done_mb  = (uint32_t)__cvta_generic_to_shared(&mma_done[slot]);
 
-            mbarrier_wait_phase(ready_mb, tile_ready_phase[slot]);
+            wait_phase(ready_mb, tile_ready_phase[slot]);
             tile_ready_phase[slot] ^= 1;
             tcgen05_fence_after_thread_sync();
 
@@ -261,7 +261,7 @@ extern "C" __global__ void matmul_dbuf(
             // Prefetch (k + NS)-th tile into the freed slot.
             const int next_k = k + NS;
             if (next_k < num_k_iters) {
-                mbarrier_wait_phase(done_mb, mma_done_phase[slot]);
+                wait_phase(done_mb, mma_done_phase[slot]);
                 mma_done_phase[slot] ^= 1;
                 tma_2d_load(A_base(slot), A_tmap,
                             /*x=*/ next_k * BK, /*y=*/ off_m, ready_mb);
@@ -272,14 +272,14 @@ extern "C" __global__ void matmul_dbuf(
                                 /*x=*/ off_n + n,
                                 /*y=*/ next_k * BK, ready_mb);
                 }
-                mbarrier_arrive_expect_tx(ready_mb, SLOT_BYTES);
+                signal_on_bytes_loaded(ready_mb, SLOT_BYTES);
             }
         }
 
         tcgen05_commit((uint32_t)__cvta_generic_to_shared(&all_mmas_done));
     }
 
-    mbarrier_wait_phase(
+    wait_phase(
         (uint32_t)__cvta_generic_to_shared(&all_mmas_done), 0);
 
     // ── Coalesced 2-phase epilogue (row × col warp grid, from ch10) ──
