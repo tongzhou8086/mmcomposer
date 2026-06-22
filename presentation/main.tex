@@ -833,7 +833,7 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
   mbarrier_wait_phase(tmem_full[buf], full[buf]);  // wait: TMEM data ready
   tcgen05_ld(...);                                 // drain TMEM -> registers
   // ... epilogue: write the result out ...
-  EPI_TMEM_FREE_ARRIVE(buf);                       // signal: TMEM buffer free
+  mbarrier_signal_sync(tmem_free_mbar[buf]);       // signal: TMEM buffer free
 }
   \end{lstlisting}
   \vspace{-0.2cm}
