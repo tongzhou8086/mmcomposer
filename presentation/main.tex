@@ -71,7 +71,6 @@
     \item \hyperlink{toc:epi}{Designing the epilogue}
     \item \hyperlink{toc:tiles}{Shared memory partitioning}
     \item \hyperlink{toc:impl}{Implementation and performance results}
-    \item \hyperlink{toc:fusion}{Adding a custom epilogue fusion}
   \end{itemize}
 \end{frame}
 
@@ -928,24 +927,6 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{2-CTA MMA: In the Instructions}
-  The cluster cooperation shows up directly in the PTX:
-  \begin{lstlisting}[language=C]
-// TMA load into clustered SMEM (both CTAs' arrivals counted):
-cp.async.bulk.tensor.2d.shared::cluster.global
-    .mbarrier::complete_tx::bytes.cta_group::2  [smem], [tmap,{x,y}], [mbar];
-
-// One MMA issued across the CTA pair:
-tcgen05.mma.cta_group::2.kind::f16  ... ;
-
-// Completion multicast to both CTAs in the cluster:
-tcgen05.commit.cta_group::2.mbarrier::arrive::one
-    .shared::cluster.multicast::cluster.b64  [smem_compute_free], cta_mask;
-  \end{lstlisting}
-  \vspace{-0.2cm}
-  \footnotesize Source: \code{webui/kernels/tier3\_cluster\_swizzle/kernel.cu}.
-\end{frame}
-
 \begin{frame}{2-CTA MMA: More Compute Stages}
   Each CTA stores only \textbf{half} of B ($BN_{\text{local}} = BN/2$), so the
   compute slot shrinks and \textbf{more pipeline stages fit} in the same SMEM.
@@ -1446,6 +1427,24 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   fewer/larger compute slots trade for more store buffers.}
 \end{frame}
 
+\section{Implementation and Performance}
+\sectionslide{toc:impl}{Implementation and Performance}
+
+\begin{frame}{Implementation: Warp Layout}
+  \textbf{Warp layout --- deliberately not a power of two.} Each CTA launches
+  \[
+    \underbrace{1}_{\text{TMA}} + \underbrace{1}_{\text{MMA}}
+    + \underbrace{4 \text{ or } 8}_{\text{epilogue}}
+    \;=\; 6 \text{ or } 10 \text{ warps.}
+  \]
+  \begin{itemize}
+    \item The \textbf{TMA} and \textbf{MMA} warps are fixed --- one each.
+    \item The \textbf{epilogue} warp count $\in \{4, 8\}$ is \textbf{autotuned};
+      more warps give the TMEM drain and SMEM write more parallelism.
+    \item So the CTA is sized to the work, not rounded up to a power of two.
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{Autotuning: Configuration Search Space}
   Autotune sweeps these parameters and benchmarks every \emph{valid} combo:
 
@@ -1472,97 +1471,6 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
     \item The framework fixes everything else; the one knob it leaves open is the
       \textbf{CTA-swizzle factor} $\{1,2,4,8,16\}$ (an L2-reuse block ordering,
       not covered here).
-  \end{itemize}
-\end{frame}
-
-\section{Implementation and Performance}
-\sectionslide{toc:impl}{Implementation and Performance}
-
-\begin{frame}{Implementation: TMA Loading}
-  Every K-step, a \textbf{single elected lane} in the TMA warp issues one
-  bulk-tensor copy per operand (\code{cp.async.bulk.tensor.2d}, the
-  \code{cta\_group::2} cluster form):
-  \begin{itemize}
-    \item \textbf{A tile} --- $BM\times BK = 128\times64$ bf16 $=16$\,KB, one
-      descriptor copy.
-    \item \textbf{B tile} --- $BN_{\text{local}}\times BK$, issued in $64$-column
-      chunks; each CTA loads only its own $BN/2$ columns.
-    \item SMEM destinations use the \textbf{128-byte swizzle}
-      (\code{SWIZZLE\_128B}) --- one atom is $128$\,B $= 64$ bf16, which fixes the
-      inner load box to $64$ --- so the subsequent MMA reads SMEM
-      bank-conflict-free.
-    \item \textbf{Data-ready signal.} The producer arms the slot's \code{mbarrier}
-      with the expected byte count (\code{arrive.expect\_tx}, software) and
-      \emph{continues without blocking}. The TMA \emph{engine} credits bytes as
-      the data lands; once the count is met the hardware \textbf{auto-flips the
-      barrier's phase}
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Implementation: MMA Issue}
-  The MMA warp drives the tensor core with one instruction
-  (\code{tcgen05.mma.cta\_group::2.kind::f16}):
-  \begin{itemize}
-    \item \textbf{Shape} --- $N$ width is $64$, $128$, or $256$ (the max); $K=16$
-      for bf16. So a $128\times256$ tile over $BK=64$ is \textbf{4 K-chained
-      MMAs} ($64/16$).
-    \item \textbf{One thread, one warp} --- a single elected lane issues each MMA;
-      operands are named by \textbf{SMEM matrix descriptors}, not staged through
-      registers.
-    \item \textbf{2-CTA} --- only \textbf{rank 0} issues, but the tensor cores on
-      \textbf{both} ranks compute (the instruction spans $M = 2\times128$ across
-      the cluster).
-    \item \textbf{Async completion signal.} Partial sums accumulate in TMEM.
-      The lane issues the MMAs then \code{tcgen05.commit} and
-      \emph{continues without blocking}; once all the MMAs finish, the hardware
-      \textbf{auto-flips the barrier's phase} --- signalling ``TMEM data ready.''
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Implementation: Signals via mbarrier}
-  Each ready/free signal is one \code{mbarrier}. A producer issues or arms it and
-  moves on; the \textbf{hardware auto-flips the phase} once the relevant work
-  completes. The consumer blocks in \code{mbarrier\_wait\_phase}, which spins on
-  \code{try\_wait.parity} until that flip:
-
-  \vspace{0.15cm}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.5\textwidth}
-    \textbf{Data-ready (``full'')}
-    \begin{itemize}
-      \item TMA\,$\to$\,SMEM: \code{mbarrier\_arrive\_expect\_tx(.., SLOT\_BYTES)}
-        --- flips once the bytes land.
-      \item MMA\,$\to$\,TMEM: \code{tcgen05\_commit\_mcast\_g2(tmem\_full)} ---
-        flips once prior MMAs finish.
-    \end{itemize}
-
-    \column{0.5\textwidth}
-    \textbf{Resource-free}
-    \begin{itemize}
-      \item MMA\,$\to$\,SMEM slot: \code{tcgen05\_commit\_mcast\_g2(free\_mbar)}
-        --- flips after prior MMAs finish.
-      \item Epilogue\,$\to$\,TMEM: \code{EPI\_TMEM\_FREE\_ARRIVE} --- flips once
-        the epilogue has drained TMEM.
-    \end{itemize}
-  \end{columns}
-
-  \vspace{0.1cm}
-  \footnotesize These are exactly the \code{mbarrier} calls in the warp-code
-  slides --- the concrete form of the dashed ready/free arrows.
-\end{frame}
-
-\begin{frame}{Implementation: Warp Layout}
-  \textbf{Warp layout --- deliberately not a power of two.} Each CTA launches
-  \[
-    \underbrace{1}_{\text{TMA}} + \underbrace{1}_{\text{MMA}}
-    + \underbrace{4 \text{ or } 8}_{\text{epilogue}}
-    \;=\; 6 \text{ or } 10 \text{ warps.}
-  \]
-  \begin{itemize}
-    \item The \textbf{TMA} and \textbf{MMA} warps are fixed --- one each.
-    \item The \textbf{epilogue} warp count $\in \{4, 8\}$ is \textbf{autotuned};
-      more warps give the TMEM drain and SMEM write more parallelism.
-    \item So the CTA is sized to the work, not rounded up to a power of two.
   \end{itemize}
 \end{frame}
 
@@ -1695,6 +1603,91 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \centering\small The optimum is shape-dependent and empirical --- hence autotune.
 \end{frame}
 
+\begin{frame}{Acknowledgements}
+  \vspace{1.4cm}
+  \begin{center}
+    \large
+    Thanks to \textbf{Haidong}, \textbf{Gaoyuan}, and \textbf{Hao} for the
+    discussions and feedback that shaped this material.
+  \end{center}
+\end{frame}
+
+\section{Backup Slides}
+\sectionslide{toc:backup}{Backup Slides}
+
+\begin{frame}{Implementation: TMA Loading}
+  Every K-step, a \textbf{single elected lane} in the TMA warp issues one
+  bulk-tensor copy per operand (\code{cp.async.bulk.tensor.2d}, the
+  \code{cta\_group::2} cluster form):
+  \begin{itemize}
+    \item \textbf{A tile} --- $BM\times BK = 128\times64$ bf16 $=16$\,KB, one
+      descriptor copy.
+    \item \textbf{B tile} --- $BN_{\text{local}}\times BK$, issued in $64$-column
+      chunks; each CTA loads only its own $BN/2$ columns.
+    \item SMEM destinations use the \textbf{128-byte swizzle}
+      (\code{SWIZZLE\_128B}) --- one atom is $128$\,B $= 64$ bf16, which fixes the
+      inner load box to $64$ --- so the subsequent MMA reads SMEM
+      bank-conflict-free.
+    \item \textbf{Data-ready signal.} The producer arms the slot's \code{mbarrier}
+      with the expected byte count (\code{arrive.expect\_tx}, software) and
+      \emph{continues without blocking}. The TMA \emph{engine} credits bytes as
+      the data lands; once the count is met the hardware \textbf{auto-flips the
+      barrier's phase}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Implementation: MMA Issue}
+  The MMA warp drives the tensor core with one instruction
+  (\code{tcgen05.mma.cta\_group::2.kind::f16}):
+  \begin{itemize}
+    \item \textbf{Shape} --- $N$ width is $64$, $128$, or $256$ (the max); $K=16$
+      for bf16. So a $128\times256$ tile over $BK=64$ is \textbf{4 K-chained
+      MMAs} ($64/16$).
+    \item \textbf{One thread, one warp} --- a single elected lane issues each MMA;
+      operands are named by \textbf{SMEM matrix descriptors}, not staged through
+      registers.
+    \item \textbf{2-CTA} --- only \textbf{rank 0} issues, but the tensor cores on
+      \textbf{both} ranks compute (the instruction spans $M = 2\times128$ across
+      the cluster).
+    \item \textbf{Async completion signal.} Partial sums accumulate in TMEM.
+      The lane issues the MMAs then \code{tcgen05.commit} and
+      \emph{continues without blocking}; once all the MMAs finish, the hardware
+      \textbf{auto-flips the barrier's phase} --- signalling ``TMEM data ready.''
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Implementation: Signals via mbarrier}
+  Each ready/free signal is one \code{mbarrier}. A producer issues or arms it and
+  moves on; the \textbf{hardware auto-flips the phase} once the relevant work
+  completes. The consumer blocks in \code{mbarrier\_wait\_phase}, which spins on
+  \code{try\_wait.parity} until that flip:
+
+  \vspace{0.15cm}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.5\textwidth}
+    \textbf{Data-ready (``full'')}
+    \begin{itemize}
+      \item TMA\,$\to$\,SMEM: \code{mbarrier\_arrive\_expect\_tx(.., SLOT\_BYTES)}
+        --- flips once the bytes land.
+      \item MMA\,$\to$\,TMEM: \code{tcgen05\_commit\_mcast\_g2(tmem\_full)} ---
+        flips once prior MMAs finish.
+    \end{itemize}
+
+    \column{0.5\textwidth}
+    \textbf{Resource-free}
+    \begin{itemize}
+      \item MMA\,$\to$\,SMEM slot: \code{tcgen05\_commit\_mcast\_g2(free\_mbar)}
+        --- flips after prior MMAs finish.
+      \item Epilogue\,$\to$\,TMEM: \code{EPI\_TMEM\_FREE\_ARRIVE} --- flips once
+        the epilogue has drained TMEM.
+    \end{itemize}
+  \end{columns}
+
+  \vspace{0.1cm}
+  \footnotesize These are exactly the \code{mbarrier} calls in the warp-code
+  slides --- the concrete form of the dashed ready/free arrows.
+\end{frame}
+
 \section{Adding a Custom Epilogue Fusion}
 \sectionslide{toc:fusion}{Adding a Custom Epilogue Fusion}
 
@@ -1791,15 +1784,6 @@ for (int p = 0; p < (BN/64)/2; p++) {          // loop over chunk PAIRS
   staged TMA store, pipelining --- and the user writes only the fusion. That is
   effectively a small \textbf{DSL for epilogue fusions}: bias$+$activation,
   residual add, gated activations, quantization, \ldots
-\end{frame}
-
-\begin{frame}{Acknowledgements}
-  \vspace{1.4cm}
-  \begin{center}
-    \large
-    Thanks to \textbf{Haidong} and \textbf{Gaoyuan} for the discussions and
-    feedback that shaped this material.
-  \end{center}
 \end{frame}
 
 \end{document}
