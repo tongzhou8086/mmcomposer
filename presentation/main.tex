@@ -760,38 +760,6 @@
     \end{tabular}
   \end{table}
 \end{frame}
-\begin{frame}{Orchestration: Coupled Event-Driven Loops}
-  No clock --- each engine \textbf{WAIT}s for its signals, \textbf{RUN}s, then
-  signals the others. In steady state all three are running at once:
-
-  \vspace{0.45cm}
-  \begin{center}
-  \begin{tikzpicture}[font=\scriptsize, scale=0.95, transform shape,
-      eng/.style={draw, very thick, rounded corners=3pt, fill=green!16,
-                  minimum width=2.3cm, minimum height=1.35cm, align=center},
-      self/.style={-{Latex[length=1.6mm]}, thick, draw=black!55},
-      sig/.style={-{Stealth[length=2.2mm]}, very thick, draw=mmsignal},
-      sl/.style={font=\scriptsize\bfseries, text=mmsignal, fill=white, inner sep=1.5pt}]
-    \node[eng] (tma) at (-4.7,0) {\textbf{TMA}\\[2pt]{\scriptsize WAIT $\to$ RUN $\to$ signal}};
-    \node[eng] (mma) at (0,0)    {\textbf{MMA}\\[2pt]{\scriptsize WAIT $\to$ RUN $\to$ signal}};
-    \node[eng] (epi) at (4.7,0)  {\textbf{epilogue}\\[2pt]{\scriptsize WAIT $\to$ RUN $\to$ signal}};
-    \draw[self] (tma.115) to[out=125,in=55,looseness=7] node[above,font=\tiny,text=black!55]{loop} (tma.65);
-    \draw[self] (mma.115) to[out=125,in=55,looseness=7] node[above,font=\tiny,text=black!55]{loop} (mma.65);
-    \draw[self] (epi.115) to[out=125,in=55,looseness=7] node[above,font=\tiny,text=black!55]{loop} (epi.65);
-    \draw[sig] (tma.25)  to[out=35,in=145]  node[sl]{data ready}  (mma.155);
-    \draw[sig] (mma.205) to[out=215,in=-35] node[sl]{buffer free} (tma.-25);
-    \draw[sig] (mma.25)  to[out=35,in=145]  node[sl]{TMEM ready}  (epi.155);
-    \draw[sig] (epi.205) to[out=215,in=-35] node[sl]{TMEM free}   (mma.-25);
-  \end{tikzpicture}
-  \end{center}
-
-  \vspace{0.4cm}
-  \small Each warp loops \textbf{WAIT} (until its \emph{input is ready and output
-  buffer free}) $\to$ \textbf{RUN} $\to$ \textbf{signal}. One warp's signal is
-  another's trigger --- that coupling is the \textbf{orchestration}, and with no
-  clock it keeps all three overlapping.
-\end{frame}
-
 \begin{frame}{From Diagram to Code}
   We now connect the container diagram to the real kernel. Each warp role maps
   to one loop that \emph{waits}, \emph{works}, then \emph{signals}:
