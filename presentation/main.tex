@@ -1225,9 +1225,9 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
 \end{frame}
 
 \begin{frame}{Epilogue Concern 2: Filling the $128\times64$ SMEM Buffer}
-  One warp store writes \textbf{one 16-byte column} (one cell per lane --- the
-  highlighted column, not the whole row); naively those cells share \textbf{one
-  bank}, so the swizzle $n \oplus \text{(row \& 7)}$ spreads them.
+  One warp store writes \textbf{one 16-byte column} (one cell per lane, not the
+  whole row); naively those cells share \textbf{one bank}, so the swizzle
+  $n \oplus \text{(row \& 7)}$ spreads them.
 
   \vspace{0.05cm}
   \begin{columns}[T,onlytextwidth]
@@ -1242,9 +1242,7 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
             \ifcase\bank \def\bc{red!35}\or\def\bc{orange!45}\or\def\bc{yellow!65}\or\def\bc{green!45}\or\def\bc{teal!45}\or\def\bc{cyan!45}\or\def\bc{blue!35}\or\def\bc{violet!45}\fi
             \node[cell, fill=\bc] at (0.46*\c, -0.40*\r) {\tiny\bfseries\bank};
           }
-        }
-        \draw[red, very thick] (0.46*2-0.23,0.20) rectangle (0.46*2+0.23,-0.40*7-0.20);
-      \end{tikzpicture}\\[0.1cm]
+        }      \end{tikzpicture}\\[0.1cm]
       {\scriptsize a column hits \textbf{one bank}\\ $\Rightarrow$ 8-way conflict}
     \end{center}
     \column{0.5\textwidth}
@@ -1261,9 +1259,7 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
             \ifcase\bank \def\bc{red!35}\or\def\bc{orange!45}\or\def\bc{yellow!65}\or\def\bc{green!45}\or\def\bc{teal!45}\or\def\bc{cyan!45}\or\def\bc{blue!35}\or\def\bc{violet!45}\fi
             \node[cell, fill=\bc] at (0.46*\c, -0.40*\r) {\tiny\bfseries\bank};
           }
-        }
-        \draw[red, very thick] (0.46*2-0.23,0.20) rectangle (0.46*2+0.23,-0.40*7-0.20);
-      \end{tikzpicture}\\[0.1cm]
+        }      \end{tikzpicture}\\[0.1cm]
       {\scriptsize each row $\to$ a \textbf{different bank}\\ $\Rightarrow$ conflict-free}
     \end{center}
   \end{columns}
