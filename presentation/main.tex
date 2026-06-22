@@ -771,9 +771,9 @@
       \toprule
       Warp & Waits on & Works & Signals \\
       \midrule
-      TMA & \code{smem\_compute\_free\_mbar[slot]} & TMA load A/B & \code{smem\_compute\_full\_mbar[slot]} \\
-      MMA & \code{smem\_compute\_full\_mbar[slot]} & \code{tcgen05.mma} & \code{smem\_compute\_free\_mbar}, \code{tmem\_full} \\
-      Epilogue & \code{tmem\_full[buf]} & drain + TMA store & \code{tmem\_free\_mbar[buf]} \\
+      TMA & \code{smem\_compute\_free[slot]} & TMA load A/B & \code{smem\_compute\_full[slot]} \\
+      MMA & \code{smem\_compute\_full[slot]} & \code{tcgen05.mma} & \code{smem\_compute\_free}, \code{tmem\_full} \\
+      Epilogue & \code{tmem\_full[buf]} & drain + TMA store & \code{tmem\_free[buf]} \\
       \bottomrule
     \end{tabular}
   \end{table}
@@ -788,12 +788,12 @@ if (warp_id == 0 && elect_sync()) {            // TMA-load warp
   for (int k = 0; k < num_k; k++) {
     int slot = gk % NS;
     // wait: compute buffer free
-    mbarrier_wait_phase(smem_compute_free_mbar[slot],
+    mbarrier_wait_phase(smem_compute_free[slot],
                         smem_compute_free_phase[slot]);
     tma_2d_load_g2(A_base(slot), A_tmap, ...);        // drain HBM -> fill A
     tma_2d_load_g2(B_base(slot), B_tmap, ...);        //              fill B
     // signal: compute data ready
-    mbarrier_signal_on_bytes_loaded(smem_compute_full_mbar[slot],
+    mbarrier_signal_on_bytes_loaded(smem_compute_full[slot],
                                     SLOT_BYTES);
     gk++;
   }
@@ -807,16 +807,16 @@ if (warp_id == 0 && elect_sync()) {            // TMA-load warp
 \begin{frame}[fragile]{MMA Warp: Compute Buffer Free, TMEM Data Ready}
   \begin{lstlisting}[language=C,basicstyle=\ttfamily\footnotesize]
 else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {   // MMA warp
-  mbarrier_wait_phase(tmem_free_mbar[buf],
+  mbarrier_wait_phase(tmem_free[buf],
                       tmem_free_phase[buf]);        // wait: TMEM buffer free
   for (int k = 0; k < num_k; k++) {
     int slot = gk % NS;
     // wait: compute data ready
-    mbarrier_wait_phase(smem_compute_full_mbar[slot],
+    mbarrier_wait_phase(smem_compute_full[slot],
                         smem_compute_full_phase[slot]);
     issue_mma_chain(d_tmem, A_base(slot), B_base(slot), ...);
     // signal: compute buffer free
-    mbarrier_signal_on_mma_completion(smem_compute_free_mbar[slot]);
+    mbarrier_signal_on_mma_completion(smem_compute_free[slot]);
     gk++;
   }
   mbarrier_signal_on_mma_completion(tmem_full[buf]); // signal: TMEM data ready
@@ -830,10 +830,10 @@ else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {   // MMA warp
 \begin{frame}[fragile]{Epilogue Warps: Drain TMEM, Signal TMEM Free}
   \begin{lstlisting}[language=C,basicstyle=\ttfamily\footnotesize]
 else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
-  mbarrier_wait_phase(tmem_full[buf], full[buf]);  // wait: TMEM data ready
+  mbarrier_wait_phase(tmem_full[buf], tmem_full_phase[buf]); // wait: TMEM data ready
   tcgen05_ld(...);                                 // drain TMEM -> registers
   // ... epilogue: write the result out ...
-  mbarrier_signal_sync(tmem_free_mbar[buf]);       // signal: TMEM buffer free
+  mbarrier_signal_sync(tmem_free[buf]);       // signal: TMEM buffer free
 }
   \end{lstlisting}
   \vspace{-0.2cm}
@@ -940,7 +940,7 @@ tcgen05.mma.cta_group::2.kind::f16  ... ;
 
 // Completion multicast to both CTAs in the cluster:
 tcgen05.commit.cta_group::2.mbarrier::arrive::one
-    .shared::cluster.multicast::cluster.b64  [smem_compute_free_mbar], cta_mask;
+    .shared::cluster.multicast::cluster.b64  [smem_compute_free], cta_mask;
   \end{lstlisting}
   \vspace{-0.2cm}
   \footnotesize Source: \code{webui/kernels/tier3\_cluster\_swizzle/kernel.cu}.
