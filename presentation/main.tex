@@ -113,7 +113,7 @@
   on-chip and GEMM becomes \textbf{compute-bound}, not memory-bound.
 \end{frame}
 
-\begin{frame}{Tiling: Exploit Data Reuse Opportunity}
+\begin{frame}{Tiling: Exploit the Data-Reuse Opportunity}
   The output is computed in \textbf{tiles}. One CTA (thread block) owns one
   $BM\times BN$ output tile and sweeps $K$ in $BK$-wide chunks:
 
