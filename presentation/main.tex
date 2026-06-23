@@ -259,15 +259,15 @@
     \node at (4.765,0.75) {A}; \node at (6.41,0.75) {$C$}; \node[font=\tiny] at (6.41,1.745) {B};
     \node[nlab] at (6.41,-0.42) {$N{=}256$};
     % K = 16 measure (B height = A width)
-    \draw[dim] (7.95,1.62) -- (7.95,1.87) node[midway, right, dimlab] {$K{=}16$};
+    \draw[dim] (7.95,1.62) -- (7.95,1.87) node[midway, right, dimlab] {$K{=}16$ fixed};
   \end{tikzpicture}
   \end{center}
 
   \vspace{0.45cm}
-  \small \textbf{$M$ fixed at 128} (the MMA's M-atom; TMEM holds 128 rows).
-  \textbf{$N \in \{64,128,256\}$}, \textbf{$K=16$} per instruction (chained over
-  $BK$). A is $M{\times}K$, B is $K{\times}N$; only B and the output $C$ widen
-  with $N$.
+  \small \textbf{$M$ and $K$ are both fixed by hardware:} $M{=}128$ (the MMA's
+  M-atom; TMEM holds 128 rows) and $K{=}16$ for bf16 (chained over $BK$). Only
+  \textbf{$N \in \{64,128,256\}$} varies --- A is $M{\times}K$, B is $K{\times}N$,
+  so only B and the output $C$ widen with $N$.
 \end{frame}
 
 \begin{frame}{TMEM: Tensor Memory}
@@ -291,32 +291,6 @@
   \small The MMA writes accumulators here, \textbf{not into registers}; the
   epilogue reads them back with \code{tcgen05.ld}. The \textbf{128 rows} are the
   $BM{=}128$ lanes --- the same constraint that fixes the MMA's M-atom.
-\end{frame}
-
-\begin{frame}{mbarrier: a Shared-Memory Barrier}
-  An \textbf{mbarrier} is a single \textbf{64-bit (8-byte)} word in shared memory.
-  The hardware packs all of its synchronization state into that one word:
-
-  \vspace{0.35cm}
-  \begin{center}
-  \begin{tikzpicture}[font=\scriptsize, scale=0.95, transform shape,
-      f/.style={draw, thick, minimum height=1.0cm, align=center}]
-    \node[f, fill=blue!12, minimum width=1.1cm] (ph) at (0,0) {phase\\(parity)};
-    \node[f, fill=orange!16, minimum width=2.6cm, anchor=west] (ar) at (ph.east) {pending\\arrival count};
-    \node[f, fill=green!16, minimum width=2.8cm, anchor=west] (tx) at (ar.east) {pending tx-count\\(bytes)};
-    \node[font=\scriptsize, text=mmgray] at (3.25,0.85) {one 64-bit word in shared memory};
-  \end{tikzpicture}
-  \end{center}
-
-  \vspace{0.5cm}
-  \small \textbf{Common operations:} \code{init(N)} sets the arrival count;
-  \code{arrive} checks a thread in (count\,$-1$); \code{arrive.expect\_tx(bytes)}
-  checks in \emph{and} arms the byte count; \code{try\_wait.parity} blocks until
-  the \textbf{phase flips} --- which the hardware does once both counts reach zero.
-
-  \vspace{0.15cm}
-  \small \textbf{Typical use:} signal that data is \emph{ready to consume}, or
-  that a buffer is \emph{free to reuse}.
 \end{frame}
 
 \begin{frame}{The Big Picture: GEMM Dataflow on the SM}
@@ -1633,6 +1607,32 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 
 \section{Backup Slides}
 \sectionslide{toc:backup}{Backup Slides}
+
+\begin{frame}{mbarrier: a Shared-Memory Barrier}
+  An \textbf{mbarrier} is a single \textbf{64-bit (8-byte)} word in shared memory.
+  The hardware packs all of its synchronization state into that one word:
+
+  \vspace{0.35cm}
+  \begin{center}
+  \begin{tikzpicture}[font=\scriptsize, scale=0.95, transform shape,
+      f/.style={draw, thick, minimum height=1.0cm, align=center}]
+    \node[f, fill=blue!12, minimum width=1.1cm] (ph) at (0,0) {phase\\(parity)};
+    \node[f, fill=orange!16, minimum width=2.6cm, anchor=west] (ar) at (ph.east) {pending\\arrival count};
+    \node[f, fill=green!16, minimum width=2.8cm, anchor=west] (tx) at (ar.east) {pending tx-count\\(bytes)};
+    \node[font=\scriptsize, text=mmgray] at (3.25,0.85) {one 64-bit word in shared memory};
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.5cm}
+  \small \textbf{Common operations:} \code{init(N)} sets the arrival count;
+  \code{arrive} checks a thread in (count\,$-1$); \code{arrive.expect\_tx(bytes)}
+  checks in \emph{and} arms the byte count; \code{try\_wait.parity} blocks until
+  the \textbf{phase flips} --- which the hardware does once both counts reach zero.
+
+  \vspace{0.15cm}
+  \small \textbf{Typical use:} signal that data is \emph{ready to consume}, or
+  that a buffer is \emph{free to reuse}.
+\end{frame}
 
 \begin{frame}{Implementation: TMA Loading}
   Every K-step, a \textbf{single elected lane} in the TMA warp issues one
