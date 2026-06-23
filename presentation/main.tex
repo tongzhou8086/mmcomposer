@@ -491,8 +491,8 @@
     \only<4>{
       \draw[fl] (tma.north) to[out=88,in=205] node[flab,pos=0.85]{fill} (c1.south west);
       \draw[fl] (c0.north) to[out=70,in=170] node[dlab,pos=0.55]{drain} (tc.west);
-      \draw[fl] (tc.south) -- node[flab,pos=0.5]{fill} (t0.north);
-      \draw[fl] (t1.south) to[out=-90,in=50] node[dlab,pos=0.55]{drain} (cuda.north);
+      \draw[fl] (tc.south) -- node[flab,pos=0.5]{fill} (t1.north);
+      \draw[fl] (t0.south) to[out=-90,in=130] node[dlab,pos=0.55]{drain} (cuda.north);
       \draw[fl] (cuda.west) to[out=180,in=-5] node[flab,pos=0.5]{fill} (e1.east);
       \draw[fl] (e0.west) to[out=180,in=-90] node[dlab,pos=0.4]{drain} (tma.south);
       \draw[fl] ([yshift=-4pt]tma.west) -- node[below,font=\tiny]{store} ([yshift=-4pt]hbm.east);
