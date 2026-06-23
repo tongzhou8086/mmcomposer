@@ -143,8 +143,7 @@
   \vspace{0.08cm}
   \textbf{Naive:} each thread streams a full \textbf{row of $A$} and
   \textbf{column of $B$} straight from \textbf{HBM}, and neighbours re-read the
-  same rows and columns. \textbf{No reuse} $\Rightarrow \sim\! 2MNK$ reads
-  ($O(N^3)$ --- as much as the compute) $\Rightarrow$ this is \textbf{memory-bound}.
+  same rows and columns. \textbf{No structural reuse} $\Rightarrow$ this is \textbf{memory-bound}.
 \end{frame}
 
 \begin{frame}{Tiling: Exploit the Data-Reuse Opportunity}
