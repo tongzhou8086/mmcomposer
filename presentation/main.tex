@@ -112,6 +112,40 @@
   on-chip and GEMM becomes \textbf{compute-bound}, not memory-bound.
 \end{frame}
 
+\begin{frame}{Naive Access Pattern: One Thread per Output}
+  \begin{center}
+  \begin{tikzpicture}[transform shape, font=\scriptsize,
+      cell/.style={draw=black!35, line width=0.3pt},
+      lab/.style={font=\small}]
+    % output C grid (6 cols x 5 rows); highlight one cell (c=3, r=2)
+    \foreach \c in {0,...,5}{\foreach \r in {0,...,4}{
+      \ifnum\c=3 \ifnum\r=2 \fill[orange!45] (\c*0.4,\r*0.4) rectangle ++(0.4,0.4);\fi\fi
+      \draw[cell] (\c*0.4,\r*0.4) rectangle ++(0.4,0.4);}}
+    % A grid (3 cols x 5 rows) at left; highlight row r=2
+    \foreach \k in {0,...,2}{\foreach \r in {0,...,4}{
+      \ifnum\r=2 \fill[blue!22] (-1.5+\k*0.4,\r*0.4) rectangle ++(0.4,0.4);\fi
+      \draw[cell] (-1.5+\k*0.4,\r*0.4) rectangle ++(0.4,0.4);}}
+    % B grid (6 cols x 3 rows) on top; highlight col c=3
+    \foreach \c in {0,...,5}{\foreach \k in {0,...,2}{
+      \ifnum\c=3 \fill[blue!22] (\c*0.4,2.3+\k*0.4) rectangle ++(0.4,0.4);\fi
+      \draw[cell] (\c*0.4,2.3+\k*0.4) rectangle ++(0.4,0.4);}}
+    \node[lab] at (-0.9,-0.40) {$A$};
+    \node[lab] at (1.2,-0.40)  {$C$};
+    \node[lab] at (1.2,3.72)   {$B$};
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.1cm}
+  {\footnotesize\color{mmgray}\centering orange: one output element (one thread)
+   \qquad blue: the $A$ row $+$ $B$ column it reads\par}
+
+  \vspace{0.2cm}
+  \textbf{Naive:} each thread streams a full \textbf{row of $A$} and
+  \textbf{column of $B$} straight from \textbf{HBM}, and neighbours re-read the
+  same rows and columns. \textbf{No reuse} $\Rightarrow \sim\! 2MNK$ reads
+  ($O(N^3)$ --- as much as the compute) $\Rightarrow$ this is \textbf{memory-bound}.
+\end{frame}
+
 \begin{frame}{Tiling: Exploit the Data-Reuse Opportunity}
   The output is computed in \textbf{tiles}. One CTA (thread block) owns one
   $BM\times BN$ output tile and sweeps $K$ in $BK$-wide chunks:
