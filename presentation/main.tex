@@ -861,8 +861,7 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
 
   \vspace{0.05cm}
   \begin{center}{\footnotesize\color{mmgray}%
-    \tikz[baseline=-0.5ex]\draw[-{Latex[length=1.6mm]},line width=1.3pt,draw=orange!85!black](0,0)--(0.5,0);~each SM's \textbf{tensor cores} read the \textbf{neighbour's} shared memory (cluster DSMEM)\\[0.08cm]
-    {\scriptsize the SM's 4 sub-partitions issue as \emph{one} \code{tcgen05} MMA ($M{=}128$); 2-CTA spans the pair ($M{=}256$)}}\end{center}
+    \tikz[baseline=-0.5ex]\draw[-{Latex[length=1.6mm]},line width=1.3pt,draw=orange!85!black](0,0)--(0.5,0);~each SM's \textbf{tensor cores} read the \textbf{neighbour's} shared memory (cluster DSMEM)}\end{center}
 \end{frame}
 
 \begin{frame}{2-CTA MMA: Geometry}
