@@ -840,32 +840,33 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
   \begin{tikzpicture}[font=\small,
       smbox/.style={draw=mmgray, very thick, dashed, rounded corners=5pt},
       eng/.style={ellipse, draw, thick, fill=green!14, align=center, minimum width=2.1cm, minimum height=0.95cm, font=\scriptsize},
-      mem/.style={draw, thick, rounded corners=2pt, fill=blue!10, align=center, minimum width=1.7cm, minimum height=0.8cm, font=\scriptsize},
-      loc/.style={-{Latex[length=2.2mm]}, very thick, draw=mmblue},
-      xs/.style={-{Latex[length=2.2mm]}, very thick, draw=orange!80!black}]
-    % --- SM 0 ---
+      mem/.style={draw, thick, rounded corners=2pt, align=center, minimum width=1.7cm, minimum height=0.8cm, font=\scriptsize},
+      a0/.style={-{Latex[length=2.2mm]}, very thick, draw=violet!70!black},
+      a1/.style={-{Latex[length=2.2mm]}, very thick, draw=orange!85!black}]
+    % --- SM 0 (CTA 0, violet) ---
     \draw[smbox] (-5.8,-1.7) rectangle (-0.5,2.0);
     \node[font=\scriptsize\bfseries, text=mmgray, anchor=north west] at (-5.72,1.93) {SM 0};
-    \node[eng] (mma0)  at (-3.15,1.1)  {MMA engine\\{\scriptsize(tensor core)}};
-    \node[mem] (smem0) at (-3.15,-0.85) {SMEM};
-    % --- SM 1 ---
+    \node[eng] (mma0)  at (-3.15,1.1)   {MMA engine\\{\scriptsize(tensor core)}};
+    \node[mem, fill=violet!35] (smem0) at (-3.15,-0.85) {SMEM};
+    % --- SM 1 (CTA 1, orange) ---
     \draw[smbox] (0.5,-1.7) rectangle (5.8,2.0);
     \node[font=\scriptsize\bfseries, text=mmgray, anchor=north east] at (5.72,1.93) {SM 1};
-    \node[eng] (mma1)  at (3.15,1.1)  {MMA engine\\{\scriptsize(tensor core)}};
-    \node[mem] (smem1) at (3.15,-0.85) {SMEM};
-    % local reads
-    \draw[loc] (smem0.north) -- (mma0.south);
-    \draw[loc] (smem1.north) -- (mma1.south);
-    % cross-SM reads (cluster distributed shared memory)
-    \draw[xs] (smem1.north west) to[out=130,in=-25] (mma0.east);
-    \draw[xs] (smem0.north east) to[out=50,in=205]  (mma1.west);
+    \node[eng] (mma1)  at (3.15,1.1)   {MMA engine\\{\scriptsize(tensor core)}};
+    \node[mem, fill=orange!28] (smem1) at (3.15,-0.85) {SMEM};
+    % local reads (straight, vertical)
+    \draw[a0] (smem0) -- (mma0);
+    \draw[a1] (smem1) -- (mma1);
+    % cross-SM reads -- each tensor core also reads the neighbour's SMEM (cluster DSMEM)
+    \draw[a1] (smem1) -- (mma0);
+    \draw[a0] (smem0) -- (mma1);
   \end{tikzpicture}
   \end{center}
 
   \vspace{0.15cm}
   \begin{center}{\footnotesize\color{mmgray}%
-    \tikz[baseline=-0.5ex]\draw[-{Latex[length=1.6mm]},very thick,draw=mmblue] (0,0)--(0.5,0);~reads its \textbf{own} SMEM \qquad
-    \tikz[baseline=-0.5ex]\draw[-{Latex[length=1.6mm]},very thick,draw=orange!80!black] (0,0)--(0.5,0);~reads the \textbf{neighbour's} SMEM (cluster DSMEM)}\end{center}
+    \tikz[baseline=-0.5ex]\node[draw=black,thin,fill=violet!35,minimum size=1.6ex,inner sep=0pt]{};~SM 0 SMEM (CTA 0)\qquad
+    \tikz[baseline=-0.5ex]\node[draw=black,thin,fill=orange!28,minimum size=1.6ex,inner sep=0pt]{};~SM 1 SMEM (CTA 1)\\[0.12cm]
+    each tensor core reads \textbf{both} --- its own (straight) and the neighbour's (crossing, cluster DSMEM)}\end{center}
 \end{frame}
 
 \begin{frame}{2-CTA MMA: Geometry}
