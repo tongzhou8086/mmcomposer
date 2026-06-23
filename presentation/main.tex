@@ -840,7 +840,8 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
   \begin{tikzpicture}[font=\scriptsize,
       hllab/.style={font=\tiny\bfseries, fill=white, text=black, inner sep=1.1pt, rounded corners=0.5pt},
       tclab/.style={font=\small\bfseries, fill=white, fill opacity=0.82, text opacity=1, text=black, inner sep=2.2pt, rounded corners=1.5pt},
-      xread/.style={-{Latex[length=2.4mm]}, line width=1.3pt, draw=orange!90!black}]
+      a0/.style={-{Latex[length=2.4mm]}, line width=1.3pt, draw=violet!70!black},
+      a1/.style={-{Latex[length=2.4mm]}, line width=1.3pt, draw=orange!90!black}]
     \node[inner sep=0] (smL) at (0,0)   {\includegraphics[width=3.2cm]{images/b200_arch.png}};
     \node[inner sep=0] (smR) at (4.3,0) {\includegraphics[width=3.2cm]{images/b200_arch.png}};
     \node[font=\scriptsize\bfseries, text=mmblue, anchor=south, inner sep=1pt] at (smL.north) {SM 0};
@@ -851,17 +852,24 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
     \node[tclab] (tcR)   at ($($(smR.north west)!0.5!(smR.north east)$)!0.5!($(smR.south west)!0.5!(smR.south east)$)$) {Tensor Core};
     \node[hllab] (smemL) at ($($(smL.north west)!0.5!(smL.north east)$)!0.918!($(smL.south west)!0.5!(smL.south east)$)$) {Shared Memory};
     \node[hllab] (smemR) at ($($(smR.north west)!0.5!(smR.north east)$)!0.918!($(smR.south west)!0.5!(smR.south east)$)$) {Shared Memory};
-    % cross-SM reads: each SM's tensor cores read the NEIGHBOUR's shared memory (label to label)
-    \draw[white, line width=3.4pt] (smemR.north) -- (tcL.south);
-    \draw[white, line width=3.4pt] (smemL.north) -- (tcR.south);
-    \draw[xread] (smemR.north) -- (tcL.south);
-    \draw[xread] (smemL.north) -- (tcR.south);
+    % read edges coloured by the SM the data originates from (SM 0 violet, SM 1 orange).
+    % each tensor core reads its OWN shared memory (vertical) and the NEIGHBOUR's (crossing).
+    \draw[white, line width=3.4pt] (smemL.north)      -- (tcL.south);
+    \draw[white, line width=3.4pt] (smemR.north)      -- (tcR.south);
+    \draw[white, line width=3.4pt] (smemL.north east) -- (tcR.south west);
+    \draw[white, line width=3.4pt] (smemR.north west) -- (tcL.south east);
+    \draw[a0] (smemL.north)      -- (tcL.south);          % SM0 -> own TC
+    \draw[a0] (smemL.north east) -- (tcR.south west);     % SM0 -> neighbour TC
+    \draw[a1] (smemR.north)      -- (tcR.south);          % SM1 -> own TC
+    \draw[a1] (smemR.north west) -- (tcL.south east);     % SM1 -> neighbour TC
   \end{tikzpicture}
   \end{center}
 
   \vspace{0.05cm}
   \begin{center}{\footnotesize\color{mmgray}%
-    \tikz[baseline=-0.5ex]\draw[-{Latex[length=1.6mm]},line width=1.3pt,draw=orange!85!black](0,0)--(0.5,0);~each SM's \textbf{tensor cores} read the \textbf{neighbour's} shared memory (cluster DSMEM)}\end{center}
+    \tikz[baseline=-0.5ex]\draw[-{Latex[length=1.6mm]},line width=1.3pt,draw=violet!70!black](0,0)--(0.5,0);~from \textbf{SM 0} shared memory\qquad
+    \tikz[baseline=-0.5ex]\draw[-{Latex[length=1.6mm]},line width=1.3pt,draw=orange!90!black](0,0)--(0.5,0);~from \textbf{SM 1} shared memory\\[0.06cm]
+    {\scriptsize each tensor core reads its \textbf{own} $+$ the \textbf{neighbour's} (cluster DSMEM)}}\end{center}
 \end{frame}
 
 \begin{frame}{2-CTA MMA: Geometry}
