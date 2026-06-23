@@ -239,24 +239,24 @@
     \node[rotate=90, font=\scriptsize\bfseries, text=mmblue] at (-0.64,0.75) {$M=128$ fixed};
     % caption
     \node[font=\scriptsize, text=mmgray] at (3.9,2.42)
-      {one \texttt{tcgen05.mma}: $D = A\,B$ \;---\; $A,B$ read from SMEM, $D$ accumulates in TMEM};
+      {one \texttt{tcgen05.mma}: $C = A \cdot B$ \;---\; $A,B$ read from SMEM, $C$ accumulates in TMEM};
     % ===== N = 64 =====
     \draw[a] (0,0) rectangle (0.25,1.5);
     \draw[d] (0.37,0) rectangle (1.07,1.5);
     \draw[b] (0.37,1.62) rectangle (1.07,1.87);
-    \node at (0.125,0.75) {A}; \node at (0.72,0.75) {$D$}; \node[font=\tiny] at (0.72,1.745) {B};
+    \node at (0.125,0.75) {A}; \node at (0.72,0.75) {$C$}; \node[font=\tiny] at (0.72,1.745) {B};
     \node[nlab] at (0.72,-0.42) {$N{=}64$};
     % ===== N = 128 =====
     \draw[a] (1.97,0) rectangle (2.22,1.5);
     \draw[d] (2.34,0) rectangle (3.74,1.5);
     \draw[b] (2.34,1.62) rectangle (3.74,1.87);
-    \node at (2.095,0.75) {A}; \node at (3.04,0.75) {$D$}; \node[font=\tiny] at (3.04,1.745) {B};
+    \node at (2.095,0.75) {A}; \node at (3.04,0.75) {$C$}; \node[font=\tiny] at (3.04,1.745) {B};
     \node[nlab] at (3.04,-0.42) {$N{=}128$};
     % ===== N = 256 =====
     \draw[a] (4.64,0) rectangle (4.89,1.5);
     \draw[d] (5.01,0) rectangle (7.81,1.5);
     \draw[b] (5.01,1.62) rectangle (7.81,1.87);
-    \node at (4.765,0.75) {A}; \node at (6.41,0.75) {$D$}; \node[font=\tiny] at (6.41,1.745) {B};
+    \node at (4.765,0.75) {A}; \node at (6.41,0.75) {$C$}; \node[font=\tiny] at (6.41,1.745) {B};
     \node[nlab] at (6.41,-0.42) {$N{=}256$};
     % K = 16 measure (B height = A width)
     \draw[dim] (7.95,1.62) -- (7.95,1.87) node[midway, right, dimlab] {$K{=}16$};
@@ -266,7 +266,7 @@
   \vspace{0.45cm}
   \small \textbf{$M$ fixed at 128} (the MMA's M-atom; TMEM holds 128 rows).
   \textbf{$N \in \{64,128,256\}$}, \textbf{$K=16$} per instruction (chained over
-  $BK$). A is $M{\times}K$, B is $K{\times}N$; only B and the output $D$ widen
+  $BK$). A is $M{\times}K$, B is $K{\times}N$; only B and the output $C$ widen
   with $N$.
 \end{frame}
 
