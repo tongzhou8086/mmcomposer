@@ -1426,8 +1426,7 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \vspace{0.1cm}
   \begin{itemize}
     \item A \textbf{static checker} prunes combos whose SMEM exceeds
-      \textbf{227\,KB} ($NS \times \text{slot}(BN) + \text{store}\times16
-      \le 227$) before benchmarking; the fastest survivor wins.
+      \textbf{227\,KB}.
     \item The framework fixes everything else; the one knob it leaves open is the
       \textbf{CTA-swizzle factor} $\{1,2,4,8,16\}$ (an L2-reuse block ordering,
       not covered here).
