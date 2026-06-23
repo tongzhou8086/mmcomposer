@@ -168,8 +168,8 @@
   The GPU execution hierarchy this talk leans on:
   \begin{itemize}
     \item A \textbf{warp} --- 32 threads issued together; the unit of scheduling.
-    \item A \textbf{CTA} (thread block) --- several warps sharing one SM's shared
-      memory.
+    \item A \textbf{CTA} (Cooperative Thread Array, i.e.\ a thread block) ---
+      several warps sharing one SM's shared memory.
     \item A \textbf{cluster} --- a few CTAs on neighbouring SMs that can read each
       other's SMEM. We use \textbf{2-CTA} clusters.
   \end{itemize}
