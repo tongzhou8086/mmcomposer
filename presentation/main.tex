@@ -913,7 +913,7 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
     \tikz[baseline=-0.5ex]\node[draw=black,thin,fill=orange!28,minimum size=1.6ex,inner sep=0pt]{};~CTA 1 input \;(both in SMEM)\qquad
     \tikz[baseline=-0.5ex]\node[draw=black,thin,fill=green!18,minimum size=1.6ex,inner sep=0pt]{};~output $C$ (in TMEM)}\end{center}
 
-  \vspace{0.25cm}
+  \vspace{0.05cm}
   \begin{center}
     {\large \textbf{Each CTA keeps only \emph{half} of $B$ ($BN/2$) in SMEM}}\\[0.1cm]
     {\small\color{mmgray} per-CTA slot $48 \to 32$\,KB at $BN{=}256$}
@@ -1372,55 +1372,10 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
 \section{Implementation and Performance}
 \sectionslide{toc:impl}{Implementation and Performance}
 
-\begin{frame}{Implementation: Warp Layout}
-  \textbf{Warp layout --- deliberately not a power of two.} Each CTA launches
-  \[
-    \underbrace{1}_{\text{TMA}} + \underbrace{1}_{\text{MMA}}
-    + \underbrace{4 \text{ or } 8}_{\text{epilogue}}
-    \;=\; 6 \text{ or } 10 \text{ warps.}
-  \]
-  \begin{itemize}
-    \item The \textbf{TMA} and \textbf{MMA} warps are fixed --- one each.
-    \item The \textbf{epilogue} warp count $\in \{4, 8\}$ is \textbf{autotuned};
-      more warps give the TMEM drain and SMEM write more parallelism.
-    \item So the CTA is sized to the work, not rounded up to a power of two.
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Autotuning: Configuration Search Space}
-  Autotune sweeps these parameters and benchmarks every \emph{valid} combo:
-
-  \begin{table}
-    \centering\small
-    \begin{tabular}{ll}
-      \toprule
-      Parameter (covered in this talk) & Candidate values \\
-      \midrule
-      $BM$ (tile rows)               & $\{128\}$ (fixed) \\
-      $BK$ (tile depth)              & $\{64\}$ (fixed) \\
-      $BN$ (tile cols)               & $\{256,\ 512\}$ \\
-      compute slots ($NS$)           & $\{2,3,4,5,6\}$ \\
-      epilogue slots (store buffers) & $\{1,2,3,4\}$ \\
-      epilogue warps                 & $\{4,8\}$ \\
-      \bottomrule
-    \end{tabular}
-  \end{table}
-
-  \vspace{0.1cm}
-  \begin{itemize}
-    \item A \textbf{static checker} prunes combos whose SMEM exceeds
-      \textbf{227\,KB} ($NS \times \text{slot}(BN) + \text{store}\times16
-      \le 227$) before benchmarking; the fastest survivor wins.
-    \item The framework fixes everything else; the one knob it leaves open is the
-      \textbf{CTA-swizzle factor} $\{1,2,4,8,16\}$ (an L2-reuse block ordering,
-      not covered here).
-  \end{itemize}
-\end{frame}
-
 \begin{frame}{MMComposer: One Generator, Many Kernels}
-  \textbf{MMComposer} is a CUDA GEMM kernel \emph{generator}: pick a point in a
-  space of design knobs and it splices hand-tuned fragments into a complete,
-  compilable kernel --- one tool, many matmul implementations.
+  We developed \textbf{MMComposer} --- a CUDA matmul kernel \emph{generator}: pick
+  a point in a space of design knobs and it splices hand-tuned fragments into a
+  complete, compilable kernel --- one tool, many matmul implementations.
 
   \vspace{0.15cm}
   The design built up in this talk is \textbf{one specific combo} of those knobs:
@@ -1446,6 +1401,37 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   fp32 accumulate --- a $\sim$280-line core kernel plus $\sim$270 lines of reusable
   PTX intrinsic wrappers. Other combos (sequential epilogue, no 2-CTA,
   \code{cp.async} load, plain 16-byte store) remain generable.
+\end{frame}
+
+\begin{frame}{Autotuning: Configuration Search Space}
+  Autotune sweeps these parameters and benchmarks every \emph{valid} combo:
+
+  \begin{table}
+    \centering\small
+    \begin{tabular}{ll}
+      \toprule
+      Parameter (covered in this talk) & Candidate values \\
+      \midrule
+      $BM$ (tile rows)               & $\{128\}$ (fixed) \\
+      $BK$ (tile depth)              & $\{64\}$ (fixed) \\
+      $BN$ (tile cols)               & $\{256,\ 512\}$ \\
+      compute slots ($NS$)           & $\{2,3,4,5,6\}$ \\
+      epilogue slots (store buffers) & $\{1,2,3,4\}$ \\
+      TMA / MMA warps                & $\{1\}$ each (fixed) \\
+      epilogue warps                 & $\{4,8\}$ \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \vspace{0.1cm}
+  \begin{itemize}
+    \item A \textbf{static checker} prunes combos whose SMEM exceeds
+      \textbf{227\,KB} ($NS \times \text{slot}(BN) + \text{store}\times16
+      \le 227$) before benchmarking; the fastest survivor wins.
+    \item The framework fixes everything else; the one knob it leaves open is the
+      \textbf{CTA-swizzle factor} $\{1,2,4,8,16\}$ (an L2-reuse block ordering,
+      not covered here).
+  \end{itemize}
 \end{frame}
 
 \begin{frame}{Benchmark Setup}
