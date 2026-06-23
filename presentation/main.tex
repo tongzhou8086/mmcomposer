@@ -877,54 +877,49 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
 \end{frame}
 
 \begin{frame}{2-CTA MMA: Geometry}
-  \begin{center}{\large \textbf{Half-B load \;$\rightarrow$\; full-B compute}}\end{center}
-  \vspace{0.15cm}
   \begin{center}
-      \begin{tikzpicture}[scale=1.12, transform shape,
-          lab/.style={align=center, font=\scriptsize},
-          bhlab/.style={align=center, font=\tiny},
-          dim/.style={Stealth-Stealth, thin, black!60},
-          dimlab/.style={font=\tiny, text=black!70}
-        ]
-        % Fixed-coordinate geometry:
-        % A width = B height = BK, and B total width = output width = BN.
-        % Colour encodes CTA ownership: CTA 0 = blue, CTA 1 = orange.
-        % A: split by rows -- CTA 0 the top BM, CTA 1 the bottom BM
-        \draw[thick, fill=blue!16]   (0,0.80) rectangle (0.85,1.60);
-        \draw[thick, fill=orange!28] (0,0)    rectangle (0.85,0.80);
-        % output C: same row split
-        \draw[thick, fill=blue!16]   (1.10,0.80) rectangle (3.50,1.60);
-        \draw[thick, fill=orange!28] (1.10,0)    rectangle (3.50,0.80);
-        % B: split by columns -- CTA 0 loads the left half, CTA 1 the right half
-        \draw[thick, fill=blue!16]   (1.10,1.85) rectangle (2.30,2.70);
-        \draw[thick, fill=orange!28] (2.30,1.85) rectangle (3.50,2.70);
+  \begin{tikzpicture}[scale=1.05, transform shape,
+      lab/.style={align=center, font=\scriptsize},
+      tl/.style={align=center, font=\tiny},
+      ti/.style={align=center, font=\scriptsize\bfseries},
+      cnt/.style={align=center, font=\scriptsize}]
+    % =============== LEFT: single-CTA -- each CTA loads the FULL B ===============
+    % CTA 0 sub-block (blue): A . B -> C
+    \draw[thick, fill=blue!16] (0,1.45)    rectangle (0.30,2.15);
+    \draw[thick, fill=blue!16] (0.42,1.45) rectangle (1.92,2.15);
+    \draw[thick, fill=blue!16] (0.42,2.27) rectangle (1.92,2.57);
+    \node[tl] at (0.15,1.80) {A}; \node[lab] at (1.17,1.80) {C}; \node[lab] at (1.17,2.42) {B};
+    % CTA 1 sub-block (orange): A . B -> C
+    \draw[thick, fill=orange!28] (0,0)      rectangle (0.30,0.70);
+    \draw[thick, fill=orange!28] (0.42,0)   rectangle (1.92,0.70);
+    \draw[thick, fill=orange!28] (0.42,0.82) rectangle (1.92,1.12);
+    \node[tl] at (0.15,0.35) {A}; \node[lab] at (1.17,0.35) {C}; \node[lab] at (1.17,0.97) {B};
+    \node[tl, anchor=east] at (-0.12,1.80) {CTA 0};
+    \node[tl, anchor=east] at (-0.12,0.35) {CTA 1};
+    \node[ti]  at (0.96,2.92) {single-CTA \;(2-CTA off)};
+    \node[cnt] at (0.96,-0.45) {$B$: \textbf{2$\times$} (full)};
+    % =============== vs ===============
+    \node[font=\Large\bfseries, text=black!50] at (2.62,1.30) {vs};
+    % =============== RIGHT: 2-CTA cluster -- B loaded ONCE, split ===============
+    \begin{scope}[xshift=3.40cm, yshift=0.45cm]
+      \draw[thick, fill=blue!16]   (0,0.70)    rectangle (0.30,1.40);
+      \draw[thick, fill=orange!28] (0,0)       rectangle (0.30,0.70);
+      \draw[thick, fill=blue!16]   (0.42,0.70) rectangle (1.92,1.40);
+      \draw[thick, fill=orange!28] (0.42,0)    rectangle (1.92,0.70);
+      \draw[thick, fill=blue!16]   (0.42,1.52) rectangle (1.17,1.82);
+      \draw[thick, fill=orange!28] (1.17,1.52) rectangle (1.92,1.82);
+      \node[tl] at (0.15,1.05) {A}; \node[tl] at (0.15,0.35) {A};
+      \node[lab] at (1.17,1.05) {C}; \node[lab] at (1.17,0.35) {C};
+      \node[tl] at (1.17,1.67) {B};
+      \node[ti]  at (0.96,2.47) {2-CTA cluster \;(on)};
+      \node[cnt] at (0.96,-0.90) {$B$: \textbf{1$\times$} (split $BN/2$)};
+    \end{scope}
+  \end{tikzpicture}
+  \end{center}
 
-        \node[bhlab] at (0.425,1.20) {A\\CTA 0};
-        \node[bhlab] at (0.425,0.40) {A\\CTA 1};
-        \node[lab]   at (2.30,1.20) {$C$ (CTA 0)};
-        \node[lab]   at (2.30,0.40) {$C$ (CTA 1)};
-        \node[bhlab] at (1.70,2.275) {B\\CTA 0};
-        \node[bhlab] at (2.90,2.275) {B\\CTA 1};
-
-        \draw[dim] (0,-0.16) -- (0.85,-0.16)
-            node[midway, below, dimlab] {$BK$};
-        \draw[dim] (-0.16,0.80) -- (-0.16,1.60) node[midway, left, dimlab] {$BM$};
-        \draw[dim] (-0.16,0)    -- (-0.16,0.80) node[midway, left, dimlab] {$BM$};
-        \draw[dim] (1.10,-0.16) -- (3.50,-0.16)
-            node[midway, below, dimlab] {$BN$};
-        \draw[dim] (3.66,0.80) -- (3.66,1.60) node[midway, right, dimlab] {$BM$};
-        \draw[dim] (3.66,0)    -- (3.66,0.80) node[midway, right, dimlab] {$BM$};
-        \draw[dim] (1.10,2.86) -- (3.50,2.86)
-            node[midway, above, dimlab] {$BN$};
-        \draw[dim] (3.66,1.85) -- (3.66,2.70)
-            node[midway, right, dimlab] {$BK$};
-      \end{tikzpicture}
-    \end{center}
-
-  \vspace{0.3cm}
+  \vspace{0.35cm}
   \begin{center}
-    {\large \textbf{$\rightarrow$ unlock more compute buffers}}\\[0.12cm]
-    {\small\color{mmgray} smaller per-CTA B ($BN/2$): $48 \to 32$\,KB per slot at $BN{=}256$}
+    {\large \textbf{Half the per-CTA $B$ in SMEM $\;\rightarrow\;$ unlock more compute buffers}}
   \end{center}
 \end{frame}
 
