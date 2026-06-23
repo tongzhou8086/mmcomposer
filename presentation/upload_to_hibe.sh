@@ -34,26 +34,36 @@ pdf, out, title = sys.argv[1], sys.argv[2], sys.argv[3]
 b = base64.b64encode(open(pdf, "rb").read()).decode()
 html = (
     '<!doctype html><meta charset=utf-8><title>' + title + '</title>'
-    '<body style=margin:0>'
-    '<header style="padding:10px 16px;background:#2a3140;color:#e6e6e6;'
-    'font-family:-apple-system,Segoe UI,Roboto,sans-serif">'
-    '<b>' + title + '</b> &nbsp; '
-    '<a style=color:#7fb0ff href=data:application/pdf;base64,' + b +
-    ' download=gemm-blackwell.pdf>Download PDF</a></header>'
-    '<embed type=application/pdf style="width:100%;height:calc(100vh - 48px)" '
+    '<body style=margin:0;background:#1f2430>'
+    '<embed type=application/pdf style="width:100%;height:100vh" '
     'src=data:application/pdf;base64,' + b + '#view=FitH>'
 )
 open(out, "w").write(html)
 print("built %s (%.2f MB)" % (out, len(html) / 1e6))
 PY
 
-# 2. Upload (create or update by name).
-resp="$(curl -sS -X POST https://hibe.dev/api/projects/single-html \
-    -H "Authorization: Bearer $TOK" \
-    -F "name=$NAME" -F "html=@$HTML")"
-echo "upload: $resp"
+# 2. Create the project, or (if the name already exists) update it in place via a
+#    tarball PUT -- which preserves the share URL. Look up any existing id by name:
+existing_id="$(curl -sS https://hibe.dev/api/projects -H "Authorization: Bearer $TOK" \
+    | python3 -c "import sys,json
+d=json.load(sys.stdin)
+ps=d if isinstance(d,list) else d.get('projects',d.get('items',[]))
+print(next((p['id'] for p in ps if p.get('name')==sys.argv[1]),''))" "$NAME" 2>/dev/null || true)"
 
-id="$(printf '%s' "$resp" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)"
+if [ -n "$existing_id" ]; then
+    tmp="$(mktemp -d)"; cp "$HTML" "$tmp/index.html"
+    tar -C "$tmp" -czf "$tmp/update.tgz" index.html
+    resp="$(curl -sS -X PUT "https://hibe.dev/api/projects/$existing_id" \
+        -H "Authorization: Bearer $TOK" -F "tar=@$tmp/update.tgz")"
+    rm -rf "$tmp"
+    echo "updated: $resp"
+    id="$existing_id"
+else
+    resp="$(curl -sS -X POST https://hibe.dev/api/projects/single-html \
+        -H "Authorization: Bearer $TOK" -F "name=$NAME" -F "html=@$HTML")"
+    echo "created: $resp"
+    id="$(printf '%s' "$resp" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)"
+fi
 [ -n "$id" ] || { echo "ERROR: upload failed (no project id in response)." >&2; exit 1; }
 
 # 3. Ensure public sharing is on, then print the stable share URL.
