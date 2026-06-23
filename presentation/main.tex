@@ -542,7 +542,7 @@
   and \textbf{buffer free}.
 \end{frame}
 
-\begin{frame}{Zoom In: TMA Engine \quad (HBM $\to$ SMEM)}
+\begin{frame}{TMA Engine \only<1>{--- start on \emph{compute buffer free}}\only<2>{--- done: \emph{compute data ready}}}
   \begin{center}
     \begin{tikzpicture}[
         container/.style={draw, thick, rounded corners=2pt, minimum width=2.0cm, minimum height=1.5cm, align=center, font=\small},
@@ -593,7 +593,7 @@
     which is exactly the trigger for the next stage.}
 \end{frame}
 
-\begin{frame}{Zoom In: Tensor Core \quad (SMEM $\to$ TMEM)}
+\begin{frame}{Tensor Core \only<1>{--- start on \emph{compute data ready}}\only<2>{--- done: \emph{compute buffer free}}\only<3>{--- done: \emph{TMEM data ready}}}
   \begin{center}
     \begin{tikzpicture}[
         container/.style={draw, thick, rounded corners=2pt, minimum width=2.0cm, minimum height=1.5cm, align=center, font=\small},
@@ -652,7 +652,7 @@
     \code{TMEM data ready} goes forward to the epilogue.}
 \end{frame}
 
-\begin{frame}{Zoom In: CUDA Cores \quad (TMEM $\to$ registers)}
+\begin{frame}{CUDA Cores \only<1>{--- start on \emph{TMEM data ready}}\only<2>{--- done: \emph{TMEM buffer free}}}
   \begin{center}
     \begin{tikzpicture}[
         container/.style={draw, thick, rounded corners=2pt, minimum width=2.0cm, minimum height=1.5cm, align=center, font=\small},
