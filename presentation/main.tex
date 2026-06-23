@@ -87,10 +87,8 @@
   \begin{itemize}
     \item It is the workhorse of ML --- every linear layer and attention
       projection is a GEMM.
-    \item Three sizes: \textbf{$M$} (output rows), \textbf{$N$} (output columns),
+    \item Three dimensions: \textbf{$M$} (output rows), \textbf{$N$} (output columns),
       \textbf{$K$} (the contracted ``inner'' dimension).
-    \item Each of the $M\times N$ outputs sums $K$ products --- a lot of reuse of
-      $A$ and $B$, which is what makes tiling pay off.
   \end{itemize}
 \end{frame}
 
@@ -110,16 +108,12 @@
     byte feeds $\sim O(N)$ FLOPs.
   \end{center}
 
-  \vspace{0.15cm}
-  {\small E.g.\ $M{=}N{=}K{=}4096$: $\sim$100\,MB moved vs $\sim$137\,GFLOP
-  $\approx$ \textbf{1300 FLOPs/byte}.}
-
   \vspace{0.25cm}
   \centering \textbf{$\Rightarrow$ huge data-reuse opportunity} --- keep tiles
   on-chip and GEMM becomes \textbf{compute-bound}, not memory-bound.
 \end{frame}
 
-\begin{frame}{Tiling: Where $BM$, $BN$, $BK$ Come From}
+\begin{frame}{Tiling: Exploit Data Reuse Opportunity}
   The output is computed in \textbf{tiles}. One CTA (thread block) owns one
   $BM\times BN$ output tile and sweeps $K$ in $BK$-wide chunks:
 
