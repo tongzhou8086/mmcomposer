@@ -840,83 +840,55 @@ else if (warp_id >= 4 && warp_id < NUM_WARPS + 4) {   // epilogue warps
 \section{2-CTA MMA}
 \sectionslide{toc:cta2}{2-CTA MMA: Unlock More Buffers}
 
-\begin{frame}{One Key Optimization: 2-CTA MMA}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.43\textwidth}
-    \vspace{0.35cm}
-    \begin{itemize}
-      \item Two CTAs form one cluster.
-      \item Each CTA keeps one A slice and half of B in SMEM.
-      \item One group-2 MMA produces a larger, higher-AI output tile.
-    \end{itemize}
-
-    \vspace{0.25cm}
-    \small
-    Benefit: \textbf{higher arithmetic intensity}. The cluster computes a
-    larger tile while B storage is split across the CTAs.
-
-    \column{0.53\textwidth}
-    \begin{center}
-      \begin{tikzpicture}[
-          cta/.style={draw, thick, rounded corners=1pt, minimum width=2.0cm, minimum height=1.0cm, align=center, font=\scriptsize},
-          op/.style={draw, thick, rounded corners=1pt, minimum width=2.1cm, minimum height=0.8cm, align=center, font=\scriptsize},
-          outputtile/.style={draw, thick, minimum width=2.4cm, minimum height=1.25cm, align=center, font=\scriptsize},
-          arrow/.style={-{Latex[length=2mm]}, very thick, draw=mmblue}
-        ]
-        \node[cta, fill=teal!12] (cta0) at (-1.35,1.0) {CTA 0\\A slice + B half};
-        \node[cta, fill=teal!20] (cta1) at (-1.35,-0.35) {CTA 1\\A slice + B half};
-        \node[op, fill=green!12] (mma) at (1.35,0.32) {group-2\\MMA};
-        \node[outputtile, fill=orange!12] (tile) at (4.05,0.32) {$2BM \times BN$\\higher-AI tile};
-
-        \draw[arrow] (cta0.east) -- (mma.west);
-        \draw[arrow] (cta1.east) -- (mma.west);
-        \draw[arrow] (mma.east) -- (tile.west);
-      \end{tikzpicture}
-    \end{center}
-  \end{columns}
-\end{frame}
-
 \begin{frame}{2-CTA MMA: Geometry}
   \begin{center}
   \begin{tikzpicture}[scale=1.4, transform shape,
+      c0/.style={draw, thick, fill=violet!35},
+      c1/.style={draw, thick, fill=orange!28},
+      oc/.style={draw, thick, fill=green!18},
       lab/.style={align=center, font=\scriptsize},
       tl/.style={align=center, font=\tiny},
       ti/.style={align=center, font=\scriptsize\bfseries},
       cnt/.style={align=center, font=\scriptsize}]
     % =============== LEFT: single-CTA -- each CTA loads the FULL B ===============
-    % CTA 0 sub-block (blue): A . B -> C
-    \draw[thick, fill=blue!16] (0,1.45)    rectangle (0.30,2.15);
-    \draw[thick, fill=blue!16] (0.42,1.45) rectangle (1.92,2.15);
-    \draw[thick, fill=blue!16] (0.42,2.27) rectangle (1.92,2.57);
-    \node[tl] at (0.15,1.80) {A}; \node[lab] at (1.17,1.80) {C}; \node[lab] at (1.17,2.42) {B};
-    % CTA 1 sub-block (orange): A . B -> C
-    \draw[thick, fill=orange!28] (0,0)      rectangle (0.30,0.70);
-    \draw[thick, fill=orange!28] (0.42,0)   rectangle (1.92,0.70);
-    \draw[thick, fill=orange!28] (0.42,0.82) rectangle (1.92,1.12);
-    \node[tl] at (0.15,0.35) {A}; \node[lab] at (1.17,0.35) {C}; \node[lab] at (1.17,0.97) {B};
+    % CTA 0 sub-block: A . B -> C  (inputs purple, output green = TMEM)
+    \draw[c0]  (0,1.45)    rectangle (0.30,2.15);
+    \draw[oc] (0.42,1.45) rectangle (1.92,2.15);
+    \draw[c0]  (0.42,2.27) rectangle (1.92,2.57);
+    \node[tl] at (0.15,1.80) {$A$}; \node[lab] at (1.17,1.80) {$C$}; \node[lab] at (1.17,2.42) {$B$};
+    % CTA 1 sub-block: A . B -> C  (inputs orange, output green = TMEM)
+    \draw[c1]  (0,0)       rectangle (0.30,0.70);
+    \draw[oc] (0.42,0)    rectangle (1.92,0.70);
+    \draw[c1]  (0.42,0.82) rectangle (1.92,1.12);
+    \node[tl] at (0.15,0.35) {$A$}; \node[lab] at (1.17,0.35) {$C$}; \node[lab] at (1.17,0.97) {$B$};
     \node[tl, anchor=east] at (-0.12,1.80) {CTA 0};
     \node[tl, anchor=east] at (-0.12,0.35) {CTA 1};
     \node[ti]  at (0.96,2.92) {single-CTA \;(2-CTA off)};
     \node[cnt] at (0.96,-0.45) {$B$: \textbf{2$\times$} (full)};
-    % =============== vs ===============
     % =============== RIGHT: 2-CTA cluster -- B loaded ONCE, split ===============
     \begin{scope}[xshift=4.35cm, yshift=0.45cm]
-      \draw[thick, fill=blue!16]   (0,0.70)    rectangle (0.30,1.40);
-      \draw[thick, fill=orange!28] (0,0)       rectangle (0.30,0.70);
-      \draw[thick, fill=blue!16]   (0.42,0.70) rectangle (1.92,1.40);
-      \draw[thick, fill=orange!28] (0.42,0)    rectangle (1.92,0.70);
-      \draw[thick, fill=blue!16]   (0.42,1.52) rectangle (1.17,1.82);
-      \draw[thick, fill=orange!28] (1.17,1.52) rectangle (1.92,1.82);
-      \node[tl] at (0.15,1.05) {A}; \node[tl] at (0.15,0.35) {A};
-      \node[lab] at (1.17,1.05) {C}; \node[lab] at (1.17,0.35) {C};
-      \node[tl] at (1.17,1.67) {B};
+      \draw[c0]  (0,0.70)    rectangle (0.30,1.40);
+      \draw[c1]  (0,0)       rectangle (0.30,0.70);
+      \draw[oc] (0.42,0.70) rectangle (1.92,1.40);
+      \draw[oc] (0.42,0)    rectangle (1.92,0.70);
+      \draw[c0]  (0.42,1.52) rectangle (1.17,1.82);
+      \draw[c1]  (1.17,1.52) rectangle (1.92,1.82);
+      \node[tl] at (0.15,1.05) {$A$}; \node[tl] at (0.15,0.35) {$A$};
+      \node[lab] at (1.17,1.05) {$C$}; \node[lab] at (1.17,0.35) {$C$};
+      \node[tl] at (1.17,1.67) {$B$};
       \node[ti]  at (0.96,2.47) {2-CTA cluster \;(on)};
       \node[cnt] at (0.96,-0.90) {$B$: \textbf{1$\times$} (split $BN/2$)};
     \end{scope}
   \end{tikzpicture}
   \end{center}
 
-  \vspace{0.35cm}
+  \vspace{0.1cm}
+  \begin{center}{\footnotesize\color{mmgray}%
+    \tikz[baseline=-2pt]\filldraw[fill=violet!35,draw=black,thin] (0,0) rectangle (0.24,0.24);~CTA 0 input\quad
+    \tikz[baseline=-2pt]\filldraw[fill=orange!28,draw=black,thin] (0,0) rectangle (0.24,0.24);~CTA 1 input\quad
+    \tikz[baseline=-2pt]\filldraw[fill=green!18,draw=black,thin] (0,0) rectangle (0.24,0.24);~output $C$ (in TMEM)}\end{center}
+
+  \vspace{0.25cm}
   \begin{center}
     {\large \textbf{Half the per-CTA $B$ in SMEM $\;\rightarrow\;$ unlock more compute buffers}}
   \end{center}
