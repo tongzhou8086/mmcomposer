@@ -1369,7 +1369,7 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   fewer/larger compute slots trade for more store buffers.}
 \end{frame}
 
-\begin{frame}{CTA Swizzle: L2 Reuse}
+\begin{frame}{One Last Optimization: CTA Swizzle to Improve L2 Reuse}
   \begin{center}\small Grouped ordering reuses the B tiles while they are \textbf{still hot in L2} --- far fewer loads.\end{center}
   \vspace{0.1cm}
   \begin{center}
