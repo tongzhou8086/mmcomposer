@@ -1550,6 +1550,19 @@ for (int chunk = 0; chunk < BN/64; chunk++) {
   \end{itemize}
 \end{frame}
 
+\begin{frame}{Performance Analysis: How Many Buffers?}
+  \textbf{Compute buffers ($NS$).} You don't have to \emph{max out} the ring ---
+  but \textbf{2 is never enough}. Winners cluster at \textbf{5--6} for $BN{=}256$
+  and \textbf{3--4} for $BN{=}512$: a deeper ring hides TMA load latency behind the
+  MMA, and a wider $BN{=}512$ tile (more MMA work per stage) needs fewer stages to
+  stay ahead. Beyond that, extra stages just cost SMEM.
+
+  \vspace{0.4cm}
+  \textbf{Store buffers.} \textbf{1--2 is enough}; \textbf{3--4 were never chosen}.
+  A plausible reason: too many outstanding TMA \emph{store} requests begin to
+  \textbf{compete with the TMA loads} feeding the compute pipeline.
+\end{frame}
+
 \begin{frame}{Future Work}
   \vspace{0.3cm}
   \begin{itemize}
