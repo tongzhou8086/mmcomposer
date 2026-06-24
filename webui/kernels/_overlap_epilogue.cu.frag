@@ -31,9 +31,6 @@
 
                     #pragma unroll
                     for (int chunk = 0; chunk < NUM_CHUNKS; chunk++) {
-                        if (ew == 0)
-                            tma_wait_group<TMA_STORE_STAGES - 1>();
-
                         float t[LOADS_PER_WARP][8];
                         #pragma unroll
                         for (int n = 0; n < LOADS_PER_WARP; n++) {
@@ -41,6 +38,12 @@
                             tcgen05_ld_32x32b_x8(trow + (uint32_t)(chunk * STORE_N + local_n * 8), t[n]);
                         }
                         tcgen05_wait_ld();
+
+                        // The TMEM->reg load above doesn't touch the store buffer, so wait for a
+                        // free store slot only now -- letting the load overlap the in-flight TMA
+                        // store. Stays before the bar.sync below so all warps respect the wait.
+                        if (ew == 0)
+                            tma_wait_group<TMA_STORE_STAGES - 1>();
 
 #if SINGLE_TMEM_ACCUM
                         if (chunk == NUM_CHUNKS - 1)
