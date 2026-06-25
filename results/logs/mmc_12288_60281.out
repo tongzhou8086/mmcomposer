@@ -1,0 +1,288 @@
+# autotune 12288x12288x12288  scope=production  (timing on the current GPU; this can take a while)
+# do_bench override: warmup=500ms rep=500ms
+# filters={'bn': [256, 512], 'ns': [3, 4, 5, 6, 7], 'two_cta': [1], 'tma_store_stages': [1, 2], 'single_tmem_policy': 'bn512-only'}
+# live autotune startup
+[????????????????????????????????????] 0 measured
+cuBLAS reference: n/a
+Top 0 of 0 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+# live autotune startup
+[###################-----------------] 288/558 ( 51.6%)
+phase: compiled OK: 288/288
+measured combos: 0/738
+cuBLAS reference: 1477 TFLOPS
+Top 0 of 0 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+# live autotune leaderboard
+[#-----------------------------------] 26/738 (  3.5%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 26 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1062      72%   on   on  256  3   1  4     1  1     0    0   1   1
+ 2     1061      72%   on   on  256  3   1  4     1  1     1    0   0   2
+ 3     1060      72%   on   on  256  3   1  4     1  1     0    0   1   2
+ 4     1059      72%   on   on  256  3   1  4     1  1     0    0   0   2
+ 5     1058      72%   on   on  256  3   1  8     1  1     0    0   1   1
+ 6     1057      72%   on   on  256  3   1 16     1  1     0    0   0   2
+ 7     1057      72%   on   on  256  3   1  4     1  1     1    1   0   2
+ 8     1057      72%   on   on  256  3   1  4     1  1     0    1   0   2
+ 9     1057      72%   on   on  256  3   1  8     1  1     1    1   0   2
+10     1056      72%   on   on  256  3   1  8     1  1     0    0   1   2
+# live autotune leaderboard
+[####--------------------------------] 83/738 ( 11.2%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 83 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1145      78%   on   on  256  3   4  4     1  1     0    0   1   1
+ 2     1145      78%   on   on  256  3   4  8     1  1     1    0   0   2
+ 3     1145      78%   on   on  256  3   4  8     1  1     1    1   0   2
+ 4     1145      78%   on   on  256  3   4  8     1  1     0    0   1   1
+ 5     1144      77%   on   on  256  3   4  4     1  1     0    0   1   2
+ 6     1142      77%   on   on  256  3   4  4     1  1     1    1   0   2
+ 7     1138      77%   on   on  256  3   4  8     1  1     0    0   0   2
+ 8     1134      77%   on   on  256  3   4  8     1  1     0    0   1   2
+ 9     1129      76%   on   on  256  3   4  4     1  1     1    0   0   2
+10     1129      76%   on   on  256  3   4  8     1  1     0    1   0   2
+# live autotune leaderboard
+[#######-----------------------------] 139/738 ( 18.8%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 139 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1167      79%   on   on  256  3   8  8     1  1     1    1   0   2
+ 2     1166      79%   on   on  256  3   8  8     1  1     0    0   1   1
+ 3     1166      79%   on   on  256  3   8  4     1  1     1    1   0   2
+ 4     1164      79%   on   on  256  3   8  4     1  1     0    0   1   1
+ 5     1164      79%   on   on  256  3   8 16     1  1     1    1   0   2
+ 6     1164      79%   on   on  256  3   8  4     1  1     0    0   1   2
+ 7     1164      79%   on   on  256  3   8  8     1  1     0    0   1   2
+ 8     1164      79%   on   on  256  3   8 16     1  1     0    0   1   1
+ 9     1163      79%   on   on  256  3   8  8     1  1     0    0   0   2
+10     1163      79%   on   on  256  3   8  4     1  1     1    0   0   2
+# live autotune leaderboard
+[##########--------------------------] 196/738 ( 26.6%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 196 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1213      82%   on   on  256  4   1  4     1  1     0    0   1   1
+ 2     1212      82%   on   on  256  4   1  8     1  1     0    0   1   1
+ 3     1210      82%   on   on  256  4   1  4     1  1     0    0   1   2
+ 4     1209      82%   on   on  256  4   1  4     1  1     1    1   0   2
+ 5     1208      82%   on   on  256  4   1  4     1  1     1    0   0   2
+ 6     1205      82%   on   on  256  4   1  4     1  1     0    1   0   2
+ 7     1202      81%   on   on  256  4   1  4     1  1     0    0   0   2
+ 8     1198      81%   on   on  256  4   1  8     1  1     0    0   0   2
+ 9     1181      80%   on   on  256  4   1  4     1  0     0    0   0   2
+10     1173      79%   on   on  256  4   1  8     1  0     0    0   0   2
+# live autotune leaderboard
+[############------------------------] 252/738 ( 34.1%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 252 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1333      90%   on   on  256  4   4  4     1  1     0    0   1   1
+ 2     1329      90%   on   on  256  4   4  4     1  1     0    0   1   2
+ 3     1327      90%   on   on  256  4   4  4     1  1     0    0   0   2
+ 4     1326      90%   on   on  256  4   4  4     1  1     1    1   0   2
+ 5     1319      89%   on   on  256  4   4  4     1  1     1    0   0   2
+ 6     1319      89%   on   on  256  4   4  4     1  1     0    1   0   2
+ 7     1276      86%   on   on  256  4   4  4     1  0     0    1   0   2
+ 8     1275      86%   on   on  256  4   4  4     1  0     0    0   0   2
+ 9     1260      85%   on   on  256  4   4  4     0  0     0    1   0   2
+10     1259      85%   on   on  256  4   4  4     0  0     0    0   0   2
+# live autotune leaderboard
+[###############---------------------] 309/738 ( 41.9%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 309 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1363      92%   on   on  256  4   8  8     1  1     0    0   1   1
+ 2     1363      92%   on   on  256  4   8  4     1  1     0    0   1   1
+ 3     1360      92%   on   on  256  4   8  4     1  1     0    0   1   2
+ 4     1359      92%   on   on  256  4   8  8     1  1     0    0   1   2
+ 5     1358      92%   on   on  256  4   8 16     1  1     0    0   1   2
+ 6     1357      92%   on   on  256  4   8  4     1  1     1    1   0   2
+ 7     1357      92%   on   on  256  4   8  4     1  1     1    0   0   2
+ 8     1357      92%   on   on  256  4   8  8     1  1     1    1   0   2
+ 9     1357      92%   on   on  256  4  16  4     1  1     0    0   1   1
+10     1355      92%   on   on  256  4   8 16     1  1     1    1   0   2
+# live autotune leaderboard
+[##################------------------] 367/738 ( 49.7%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 367 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1363      92%   on   on  256  4   8  8     1  1     0    0   1   1
+ 2     1363      92%   on   on  256  4   8  4     1  1     0    0   1   1
+ 3     1360      92%   on   on  256  4   8  4     1  1     0    0   1   2
+ 4     1359      92%   on   on  256  4   8  8     1  1     0    0   1   2
+ 5     1358      92%   on   on  256  4   8 16     1  1     0    0   1   2
+ 6     1357      92%   on   on  256  4   8  4     1  1     1    1   0   2
+ 7     1357      92%   on   on  256  4   8  4     1  1     1    0   0   2
+ 8     1357      92%   on   on  256  4   8  8     1  1     1    1   0   2
+ 9     1357      92%   on   on  256  4  16  4     1  1     0    0   1   1
+10     1355      92%   on   on  256  4  16  8     1  1     0    0   1   1
+# live autotune leaderboard
+[#####################---------------] 425/738 ( 57.6%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 425 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1377      93%   on   on  256  5   4  8     1  1     0    0   1   1
+ 2     1366      93%   on   on  256  5   4  4     1  1     1    1   0   2
+ 3     1363      92%   on   on  256  4   8  8     1  1     0    0   1   1
+ 4     1363      92%   on   on  256  4   8  4     1  1     0    0   1   1
+ 5     1360      92%   on   on  256  4   8  4     1  1     0    0   1   2
+ 6     1359      92%   on   on  256  4   8  8     1  1     0    0   1   2
+ 7     1358      92%   on   on  256  4   8 16     1  1     0    0   1   2
+ 8     1357      92%   on   on  256  5   4  4     1  1     0    0   1   2
+ 9     1357      92%   on   on  256  4   8  4     1  1     1    1   0   2
+10     1357      92%   on   on  256  4   8  4     1  1     1    0   0   2
+# live autotune leaderboard
+[########################------------] 482/738 ( 65.3%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 482 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1407      95%   on   on  256  5   8  8     1  1     0    0   1   1
+ 2     1403      95%   on   on  256  5   8  8     1  1     0    0   1   2
+ 3     1397      95%   on   on  256  5   8 16     1  1     0    0   1   2
+ 4     1395      94%   on   on  256  5   8  8     1  1     1    1   0   2
+ 5     1394      94%   on   on  256  5   8  4     1  1     0    0   1   2
+ 6     1394      94%   on   on  256  5   8 16     1  1     1    1   0   2
+ 7     1389      94%   on   on  256  5   8  4     1  1     0    0   1   1
+ 8     1388      94%   on   on  256  5   8 16     1  1     0    0   1   1
+ 9     1386      94%   on   on  256  5  16  8     1  1     0    0   1   1
+10     1382      94%   on   on  256  5  16  4     1  1     0    0   1   2
+# live autotune leaderboard
+[##########################----------] 540/738 ( 73.2%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 540 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1407      95%   on   on  256  5   8  8     1  1     0    0   1   1
+ 2     1403      95%   on   on  256  5   8  8     1  1     0    0   1   2
+ 3     1397      95%   on   on  256  5   8 16     1  1     0    0   1   2
+ 4     1395      94%   on   on  256  5   8  8     1  1     1    1   0   2
+ 5     1394      94%   on   on  256  5   8  4     1  1     0    0   1   2
+ 6     1394      94%   on   on  256  5   8 16     1  1     1    1   0   2
+ 7     1389      94%   on   on  256  5   8  4     1  1     0    0   1   1
+ 8     1388      94%   on   on  256  5   8 16     1  1     0    0   1   1
+ 9     1386      94%   on   on  256  5  16  8     1  1     0    0   1   1
+10     1382      94%   on   on  256  5  16  4     1  1     0    0   1   2
+# live autotune leaderboard
+[#############################-------] 597/738 ( 80.9%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 597 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1407      95%   on   on  256  5   8  8     1  1     0    0   1   1
+ 2     1403      95%   on   on  256  5   8  8     1  1     0    0   1   2
+ 3     1397      95%   on   on  256  5   8 16     1  1     0    0   1   2
+ 4     1395      94%   on   on  256  5   8  8     1  1     1    1   0   2
+ 5     1394      94%   on   on  256  5   8  4     1  1     0    0   1   2
+ 6     1394      94%   on   on  256  5   8 16     1  1     1    1   0   2
+ 7     1390      94%   on   on  256  6   8  4     1  1     0    0   1   1
+ 8     1390      94%   on   on  256  6   8  8     1  1     0    0   1   1
+ 9     1389      94%   on   on  256  5   8  4     1  1     0    0   1   1
+10     1389      94%   on   on  256  6   8 16     1  1     0    0   1   1
+# live autotune leaderboard
+[################################----] 653/738 ( 88.5%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 653 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1407      95%   on   on  256  5   8  8     1  1     0    0   1   1
+ 2     1403      95%   on   on  256  5   8  8     1  1     0    0   1   2
+ 3     1397      95%   on   on  256  5   8 16     1  1     0    0   1   2
+ 4     1395      94%   on   on  256  5   8  8     1  1     1    1   0   2
+ 5     1394      94%   on   on  256  5   8  4     1  1     0    0   1   2
+ 6     1394      94%   on   on  256  5   8 16     1  1     1    1   0   2
+ 7     1390      94%   on   on  256  6   8  4     1  1     0    0   1   1
+ 8     1390      94%   on   on  256  6   8  8     1  1     0    0   1   1
+ 9     1389      94%   on   on  256  5   8  4     1  1     0    0   1   1
+10     1389      94%   on   on  256  6   8 16     1  1     0    0   1   1
+# live autotune leaderboard
+[###################################-] 710/738 ( 96.2%)
+phase: benchmarking generated kernels
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 710 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1469     100%   on   on  512  3  16  8     1  1     0    0   1   2
+ 2     1469      99%   on   on  512  3  16  4     1  1     0    0   1   2
+ 3     1467      99%   on   on  512  3   8 16     1  1     0    0   1   2
+ 4     1461      99%   on   on  512  3   8  8     1  1     0    0   1   2
+ 5     1461      99%   on   on  512  3   8  4     1  1     0    0   1   2
+ 6     1461      99%   on   on  512  3  16 16     1  1     0    0   1   2
+ 7     1460      99%   on   on  512  3  16  8     1  1     0    0   1   1
+ 8     1459      99%   on   on  512  3  16  4     1  1     0    0   1   1
+ 9     1453      98%   on   on  512  3   8  4     1  1     0    0   1   1
+10     1452      98%   on   on  512  3  32  8     1  1     0    0   1   2
+# live autotune leaderboard
+[####################################] 738/738 (100.0%)
+phase: done
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 738 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1472     100%   on   on  512  4  16  4     1  1     0    0   1   2
+ 2     1469     100%   on   on  512  3  16  8     1  1     0    0   1   2
+ 3     1469      99%   on   on  512  3  16  4     1  1     0    0   1   2
+ 4     1467      99%   on   on  512  3   8 16     1  1     0    0   1   2
+ 5     1461      99%   on   on  512  3   8  8     1  1     0    0   1   2
+ 6     1461      99%   on   on  512  4  16  8     1  1     0    0   1   2
+ 7     1461      99%   on   on  512  3   8  4     1  1     0    0   1   2
+ 8     1461      99%   on   on  512  3  16 16     1  1     0    0   1   2
+ 9     1460      99%   on   on  512  4  16 16     1  1     0    0   1   2
+10     1460      99%   on   on  512  3  16  8     1  1     0    0   1   1
+# final autotune leaderboard
+cuBLAS reference: 1477 TFLOPS
+Top 10 of 738 measured combos at 12288x12288x12288, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1472     100%   on   on  512  4  16  4     1  1     0    0   1   2
+ 2     1470     100%   on   on  512  3  16  8     1  1     0    0   1   2
+ 3     1469      99%   on   on  512  3  16  4     1  1     0    0   1   2
+ 4     1466      99%   on   on  512  3   8 16     1  1     0    0   1   2
+ 5     1461      99%   on   on  512  3   8  8     1  1     0    0   1   2
+ 6     1461      99%   on   on  512  4  16  8     1  1     0    0   1   2
+ 7     1461      99%   on   on  512  3   8  4     1  1     0    0   1   2
+ 8     1461      99%   on   on  512  3  16 16     1  1     0    0   1   2
+ 9     1460      99%   on   on  512  4  16 16     1  1     0    0   1   2
+10     1460      99%   on   on  512  3  16  8     1  1     0    0   1   1
+# recorded top 10 results to results/12288x12288x12288.txt

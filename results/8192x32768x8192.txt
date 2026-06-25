@@ -1,0 +1,24 @@
+# recorded_at_utc=2026-06-15T06:33:23.441148+00:00
+# command=webui/autotune.py 8192x32768x8192 --live-interval 60 --live-redraw never --record --warmup-ms 500 --rep-ms 500 --timeout 7200
+# shape=8192x32768x8192
+# scope=production
+# top=10
+# filters={'bn': [256, 512], 'ns': [3, 4, 5, 6, 7], 'two_cta': [1], 'tma_store_stages': [1, 2], 'single_tmem_policy': 'bn512-only'}
+# do_bench_override warmup_ms=500 rep_ms=500
+
+# final autotune leaderboard
+cuBLAS reference: 1404 TFLOPS
+Top 10 of 738 measured combos at 8192x32768x8192, by TFLOPS:
+
+ #   TFLOPS  %cuBLAS   WS 2CTA   BN NS GSM NW  PERS OV SPLIT L1NA TMA TMS
+-------------------------------------------------------------------------
+ 1     1458     104%   on   on  512  3  16  4     1  1     0    0   1   2
+ 2     1453     104%   on   on  512  3  16 16     1  1     0    0   1   2
+ 3     1450     103%   on   on  512  3  32  8     1  1     0    0   1   2
+ 4     1448     103%   on   on  512  4  16  4     1  1     0    0   1   2
+ 5     1444     103%   on   on  512  4   8  8     1  1     0    0   1   2
+ 6     1415     101%   on   on  512  3   8  4     1  1     0    0   1   1
+ 7     1408     100%   on   on  512  3  16 16     1  1     0    0   1   1
+ 8     1405     100%   on   on  512  3  16  4     1  1     0    0   1   1
+ 9     1400     100%   on   on  512  3  16  8     1  1     0    0   1   1
+10     1395      99%   on   on  512  4  16  8     1  1     0    0   1   1
