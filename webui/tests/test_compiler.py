@@ -14,8 +14,9 @@ import tempfile
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
 
-import compiler
+from mmcomposer import compiler
 
 TRIVIAL = "extern \"C\" __global__ void noop() {}\n"
 BROKEN = "this is not valid CUDA;\n"

@@ -10,9 +10,10 @@ import sys
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
 
-import mvp_core as mc
-import combos
+from mmcomposer import mvp_core as mc
+from mmcomposer import combos
 
 WS_DIRS = list(dict.fromkeys(t["dir"] for k, t in mc.TIER_MAP.items() if t and k[0]))
 ALL_DIRS = list(dict.fromkeys(t["dir"] for t in mc.TIER_MAP.values() if t))

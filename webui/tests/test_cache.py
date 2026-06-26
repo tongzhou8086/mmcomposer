@@ -9,8 +9,9 @@ import tempfile
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
 
-import cache as C
+from mmcomposer import cache as C
 
 
 def _cache(d):

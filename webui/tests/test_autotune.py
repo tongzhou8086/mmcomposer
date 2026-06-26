@@ -14,12 +14,13 @@ import tempfile
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
 sys.path.insert(0, str(WEBUI / "kernels"))
 
-import mvp_core as mc
-import combos
-import cache as kcache
-import autotune
+from mmcomposer import mvp_core as mc
+from mmcomposer import combos
+from mmcomposer import cache as kcache
+from mmcomposer import autotune
 
 WS_DIRS = list(dict.fromkeys(t["dir"] for k, t in mc.TIER_MAP.items() if t and k[0]))
 TIGHT = {"bn": [256], "ns": [4], "gsm": [8], "nw": [8], "two_cta": [1],

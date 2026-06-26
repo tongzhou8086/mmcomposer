@@ -16,12 +16,13 @@ import tempfile
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
 sys.path.insert(0, str(WEBUI / "kernels"))
 sys.path.insert(0, str(WEBUI / "tests"))
 
-import mvp_core as mc
-import combos
-import runtime
+from mmcomposer import mvp_core as mc
+from mmcomposer import combos
+from mmcomposer import runtime
 
 SHAPES = [(2048, 2048, 2048), (4096, 4096, 4096), (8192, 4608, 768)]
 NUM_SMS = 132  # fixed so the persistent-grid branch is exercised deterministically
@@ -57,7 +58,7 @@ def test_correctness_matches_torch():
     if not torch.cuda.is_available():
         print("    SKIP (no CUDA)")
         return
-    import compiler
+    from mmcomposer import compiler
 
     # A known-good 2-CTA overlapped/TMA-pipelined config (validated combo).
     tier = mc.TIER_MAP[(True, True)]

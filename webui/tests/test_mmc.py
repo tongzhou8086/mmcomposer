@@ -19,9 +19,10 @@ os.environ["MMCOMPOSER_CACHE_DIR"] = tempfile.mkdtemp(prefix="mmc_test_")
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
 sys.path.insert(0, str(WEBUI / "kernels"))
 
-import mmc
+import mmcomposer.mmc as mmc
 
 
 def test_validation_rejects_bad_inputs():
@@ -73,10 +74,10 @@ def test_matmul_end_to_end_after_pretune():
     if not torch.cuda.is_available():
         print("    SKIP (no CUDA)")
         return
-    import autotune
+    from mmcomposer import autotune
     M = N = K = 512
     # pre-populate the (shared, temp) cache with a tiny sweep so matmul hits it
-    ws = list(dict.fromkeys(t["dir"] for k, t in __import__("mvp_core").TIER_MAP.items()
+    ws = list(dict.fromkeys(t["dir"] for k, t in __import__("mmcomposer").mvp_core.TIER_MAP.items()
                             if t and k[0]))
     tight = {"bn": [256], "ns": [4], "gsm": [8], "nw": [8], "two_cta": [1],
              "persistent": [1], "overlap": [1], "split_epilogue": [0],

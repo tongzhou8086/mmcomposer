@@ -28,8 +28,9 @@ import streamlit as st
 # Make `mvp_core` importable whether launched via `streamlit run` (which
 # adds the script dir to sys.path) or via AppTest / other harnesses.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 import streamlit.components.v1 as components
-import mvp_core as mc
+from mmcomposer import mvp_core as mc
 
 
 # ── Page setup ────────────────────────────────────────────────────────

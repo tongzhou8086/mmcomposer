@@ -9,8 +9,9 @@ import sys
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
 
-import leaderboard as lb
+from mmcomposer import leaderboard as lb
 
 
 def _records():

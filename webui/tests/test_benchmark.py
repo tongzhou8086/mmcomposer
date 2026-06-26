@@ -12,9 +12,10 @@ import sys
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
 sys.path.insert(0, str(WEBUI / "kernels"))
 
-import benchmark as bench
+from mmcomposer import benchmark as bench
 
 
 def test_gemm_flops():

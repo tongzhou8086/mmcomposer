@@ -43,8 +43,8 @@ sys.path.insert(0, str(WEBUI))                                  # webui shims (m
 sys.path.insert(0, str(_REPO))                                  # mmcomposer package
 sys.path.insert(0, str(_REPO / "mmcomposer" / "kernels"))       # _runtime
 
-import mvp_core as mc
-from combos import all_combos, is_valid
+from mmcomposer import mvp_core as mc
+from mmcomposer.combos import all_combos, is_valid
 from mmcomposer.codegen import branch_free_issues
 
 import numpy as np

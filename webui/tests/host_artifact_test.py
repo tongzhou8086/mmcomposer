@@ -27,7 +27,8 @@ import sys
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WEBUI))
-import mvp_core as mc
+sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
+from mmcomposer import mvp_core as mc
 
 SCRATCH = WEBUI / "tests" / "_scratch" / "host_artifacts"
 
