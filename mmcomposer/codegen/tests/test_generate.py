@@ -17,9 +17,9 @@ from __future__ import annotations
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))  # webui/
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))  # repo root
 
-from codegen import generate_kernel   # noqa: E402
+from mmcomposer.codegen import generate_kernel   # noqa: E402
 
 GOLDEN = pathlib.Path(__file__).resolve().parent / "golden"
 

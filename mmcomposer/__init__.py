@@ -21,22 +21,23 @@ for _p in (_WEBUI, _WEBUI / "kernels"):
     if _ps not in _sys.path:
         _sys.path.insert(0, _ps)
 
-# Relocated into the package (light, no heavy deps): import eagerly.
-from . import compiler, cache, leaderboard  # noqa: E402,F401
+# Relocated into the package: import eagerly (all package-internal, CPU-safe;
+# the libcuda-touching bits in runtime/benchmark are imported lazily on use).
+from . import (compiler, cache, leaderboard, mvp_core, combos,  # noqa: E402,F401
+               runtime, benchmark, codegen)
 
-# Still under webui/ (or heavy): expose lazily so importing mmcomposer.<leaf>
-# doesn't drag in the whole API.
+# Still under webui/ (relocated in Chunk 3): exposed lazily so importing a single
+# mmcomposer.<leaf> doesn't drag in the API and re-enter the webui shims.
 _API = {"matmul", "get_tuned_kernel", "tune"}        # live in webui/mmc.py
-_WEBUI_MODS = {"combos", "runtime", "benchmark", "autotune", "mvp_core"}
 
 __all__ = ["matmul", "get_tuned_kernel", "tune",
            "combos", "compiler", "runtime", "benchmark",
-           "cache", "leaderboard", "autotune"]
+           "cache", "leaderboard", "autotune", "mvp_core", "codegen"]
 
 
 def __getattr__(name):
     if name in _API:
         return getattr(_importlib.import_module("mmc"), name)
-    if name in _WEBUI_MODS:
-        return _importlib.import_module(name)
+    if name == "autotune":          # still under webui/ (Chunk 3)
+        return _importlib.import_module("autotune")
     raise AttributeError(f"module 'mmcomposer' has no attribute {name!r}")

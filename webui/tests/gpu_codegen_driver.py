@@ -38,12 +38,14 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 
 WEBUI = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(WEBUI))
-sys.path.insert(0, str(WEBUI / "kernels"))
+_REPO = WEBUI.parent
+sys.path.insert(0, str(WEBUI))                                  # webui shims (mvp_core, combos)
+sys.path.insert(0, str(_REPO))                                  # mmcomposer package
+sys.path.insert(0, str(_REPO / "mmcomposer" / "kernels"))       # _runtime
 
 import mvp_core as mc
 from combos import all_combos, is_valid
-from codegen import branch_free_issues
+from mmcomposer.codegen import branch_free_issues
 
 import numpy as np
 import torch

@@ -11,9 +11,9 @@ import contextlib
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))  # webui/
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))  # repo root
 
-from codegen.directives import resolve, evaluate, DirectiveError   # noqa: E402
+from mmcomposer.codegen.directives import resolve, evaluate, DirectiveError   # noqa: E402
 
 
 @contextlib.contextmanager
