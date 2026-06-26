@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mmcomposer"
+version = "0.1.0"
+description = "A CUDA matmul kernel generator + autotuner for NVIDIA Blackwell (B200)."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "torch",
+    "cuda-python",
+]
+
+[project.optional-dependencies]
+# Live benchmarking uses triton.testing.do_bench (ships with a GPU torch build);
+# listed for environments where torch doesn't pull it transitively.
+bench = ["triton"]
+
+[project.scripts]
+mmcomposer-tune = "mmcomposer.autotune:main"
+
+[tool.setuptools]
+# kernels/ is data (templates + _runtime.py + compat_matrix.json), loaded via
+# __file__-relative paths -- shipped as package data, not an import package.
+packages = ["mmcomposer", "mmcomposer.codegen"]
+
+[tool.setuptools.package-data]
+"mmcomposer" = [
+    "kernels/**/*.cu",
+    "kernels/**/*.cu.frag",
+    "kernels/**/*.py",
+    "kernels/**/*.json",
+    "DESIGN.md",
+]

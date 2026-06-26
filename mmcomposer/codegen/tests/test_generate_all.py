@@ -18,10 +18,10 @@ import itertools
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))  # webui/
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))  # repo root
 
-import mvp_core as mc                       # noqa: E402
-from codegen import generate_kernel, branch_free_issues   # noqa: E402
+from mmcomposer import mvp_core as mc                       # noqa: E402
+from mmcomposer.codegen import generate_kernel, branch_free_issues   # noqa: E402
 
 
 def all_valid_configs():

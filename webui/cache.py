@@ -1,6 +1,6 @@
-"""Shim: this module moved to ``mmcomposer.mvp_core`` (Stage B migration).
+"""Shim: this module moved to ``mmcomposer.cache`` (Stage B migration).
 
-Kept so existing in-repo ``import mvp_core`` keeps working while consumers are
+Kept so existing in-repo ``import cache`` keeps working while consumers are
 repointed.  Adds the repo root to sys.path so ``mmcomposer`` is importable
 regardless of cwd, then aliases this module to the relocated one.
 """
@@ -8,6 +8,6 @@ import pathlib as _p
 import sys as _s
 
 _s.path.insert(0, str(_p.Path(__file__).resolve().parent.parent))  # repo root
-import mmcomposer.mvp_core as _moved  # noqa: E402
+import mmcomposer.cache as _moved  # noqa: E402
 
 _s.modules[__name__] = _moved
