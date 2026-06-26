@@ -64,7 +64,11 @@ live leaderboard by measured TFLOPS.
 ## Web UI
 
 A Streamlit app to inspect/generate/download a kernel for a chosen config and
-view its measured B200 performance:
+view its measured B200 performance.
+
+**Live:** [mmcomposer.streamlit.app](https://mmcomposer.streamlit.app/)
+
+Or run it locally:
 
 ```bash
 streamlit run webui/app.py
