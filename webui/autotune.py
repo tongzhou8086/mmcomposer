@@ -91,6 +91,21 @@ def _record_config(tier, k) -> dict:
     return cfg
 
 
+def scope_to_dirs_filters(scope: str = "production"):
+    """Map a scope name to (tier_dirs, filters).  Shared by the CLI and mmc.tune.
+
+    production -- warp-spec-on, BN=256/512, NS>=3, 2-CTA, single-TMEM only at BN512.
+    full       -- every tier/combo (incl. warp-spec off and BN=64); very large.
+    """
+    ws_dirs = list(dict.fromkeys(t["dir"] for k, t in mc.TIER_MAP.items() if t and k[0]))
+    all_dirs = list(dict.fromkeys(t["dir"] for t in mc.TIER_MAP.values() if t))
+    if scope == "production":
+        return ws_dirs, {"bn": [256, 512], "ns": [x for x in mc.NS_OPTS if x >= 3],
+                         "two_cta": [1], "tma_store_stages": [1, 2],
+                         "single_tmem_policy": "bn512-only"}
+    return all_dirs, {"single_tmem_policy": "all"}
+
+
 def tune(M, N, K, *, tier_dirs, filters, dtype="bf16", arch=kcache.DEFAULT_ARCH,
          tol=CORRECT_TOL, warmup_ms=None, rep_ms=None,
          cublas_samples=3, cublas_warmup_samples=1, fresh=True,
@@ -201,19 +216,7 @@ def main() -> int:
     args = ap.parse_args()
     M, N, K = parse_shape(args.shape)
 
-    ws_dirs = list(dict.fromkeys(t["dir"] for k, t in mc.TIER_MAP.items() if t and k[0]))
-    all_dirs = list(dict.fromkeys(t["dir"] for t in mc.TIER_MAP.values() if t))
-    production = args.scope == "production"
-    tier_dirs = ws_dirs if production else all_dirs
-    filters = {}
-    if production:
-        filters["bn"] = [256, 512]
-        filters["ns"] = [x for x in mc.NS_OPTS if x >= 3]
-        filters["two_cta"] = [1]
-        filters["tma_store_stages"] = [1, 2]
-        filters["single_tmem_policy"] = "bn512-only"
-    else:
-        filters["single_tmem_policy"] = "all"
+    tier_dirs, filters = scope_to_dirs_filters(args.scope)
     for fkey, spec in (("bn", args.bn), ("ns", args.ns), ("gsm", args.gsm), ("nw", args.nw),
                        ("persistent", args.persistent), ("two_cta", args.two_cta),
                        ("overlap", args.overlap), ("split_epilogue", args.split_epilogue),
