@@ -80,6 +80,51 @@ def test_is_valid_accepts_good_rejects_bad():
     assert not combos.is_valid(tier3, dict(good, ns=1))  # NS=1 below pipeline min
 
 
+KNOB_KEYS = {"bm", "bn", "bk", "ns", "gsm", "nw", "persistent", "ld_width",
+             "overlap", "split_epilogue", "l1_no_alloc", "tma_pipelined",
+             "tma_store_stages", "single_tmem"}
+
+
+def test_no_duplicate_valid_combos():
+    # Enumeration must not emit the same combo twice.  A combo's identity is
+    # (tier, knobs) -- and the single-CTA vs 2-CTA arms share a dir AND knobs
+    # dict, distinguished only by tier["cluster"], so the signature must include
+    # it (omitting it is what falsely flags the two arms as duplicates).
+    seen = set()
+    for tier, k in combos.valid_combos(ALL_DIRS, FULL):
+        sig = (tier["dir"], tier["cluster"], tuple(sorted(k.items())))
+        assert sig not in seen, f"duplicate combo: {sig}"
+        seen.add(sig)
+
+
+def test_every_combo_carries_full_knob_set():
+    for _, k in combos.all_combos(WS_DIRS, PROD):
+        assert set(k) == KNOB_KEYS
+
+
+def test_filters_honored_across_dimensions():
+    # Every pinned dimension must hold for every yielded combo (not just bn).
+    f = {"bn": [256], "ns": [4, 5], "gsm": [8], "nw": [8]}
+    for _, k in combos.all_combos(WS_DIRS, f):
+        assert k["bn"] == 256
+        assert k["ns"] in (4, 5)
+        assert k["gsm"] == 8
+        assert k["nw"] == 8
+
+
+def test_two_cta_filter_selects_the_right_arms():
+    small = {"bn": [256], "ns": [4], "gsm": [8], "nw": [8]}
+    single = list(combos.all_combos(ALL_DIRS, {**small, "two_cta": [0]}))
+    cluster = list(combos.all_combos(ALL_DIRS, {**small, "two_cta": [1]}))
+    assert single and cluster
+    assert all(not tier["cluster"] for tier, _ in single)
+    assert all(tier["cluster"] for tier, _ in cluster)
+
+
+def test_unknown_two_cta_yields_empty():
+    assert list(combos.all_combos(ALL_DIRS, {"two_cta": [7]})) == []
+
+
 def _main() -> int:
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]
