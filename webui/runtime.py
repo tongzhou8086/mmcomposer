@@ -130,8 +130,8 @@ def _descriptors(config, M, N, K, a, b, c):
     return A, B, C
 
 
-def setup_and_launch(config, M, N, K, a, b, c, cubin_path, *, sync=True):
-    """Load (cached), build descriptors, set SMEM attr, and launch.  Returns c."""
+def _prepare(config, M, N, K, a, b, c, cubin_path):
+    """Build the launch state (fn, grid, block, shared, args) for these tensors."""
     rt, driver = _backends()
     _, num_sms = _ensure_cuda()
     _, fn = _load(cubin_path, config["symbol"])
@@ -143,15 +143,25 @@ def setup_and_launch(config, M, N, K, a, b, c, cubin_path, *, sync=True):
     args = [(ctypes.c_byte * 128).from_buffer_copy(d.tobytes()) for d in (A, B, C)]
     args += [ctypes.c_void_p(c.data_ptr()),
              ctypes.c_int(M), ctypes.c_int(N), ctypes.c_int(K)]
+    return fn, grid, block, shared, args
+
+
+def setup_and_launch(config, M, N, K, a, b, c, cubin_path, *, sync=True):
+    """Build launch state and launch once (one-shot).  Returns c."""
+    rt, _ = _backends()
+    fn, grid, block, shared, args = _prepare(config, M, N, K, a, b, c, cubin_path)
     rt.launch(fn, grid=grid, block=block, shared=shared, args=args, sync=sync)
     return c
 
 
 def kernel(config, cubin_path):
     """Return a callable ``k(a, b, c=None) -> c`` for this (already-compiled)
-    config.  The module is loaded once (cached); pass `c` to reuse an output
-    buffer, else a fresh bf16 output is allocated each call."""
+    config.  The cubin loads once per process, and the per-(shape, buffers) launch
+    state is cached, so repeated calls with the same tensors are *just a launch* --
+    which is what lets do_bench measure the kernel rather than host setup.  Pass
+    `c` to reuse an output buffer, else a fresh bf16 output is allocated."""
     import torch
+    state = {}   # (M,N,K, a_ptr, b_ptr, c_ptr) -> (fn, grid, block, shared, args)
 
     def call(a, b, c=None, *, sync=True):
         M, Ka = a.shape
@@ -159,6 +169,14 @@ def kernel(config, cubin_path):
         assert Ka == Kb, f"inner dims disagree: {a.shape} @ {b.shape}"
         if c is None:
             c = torch.zeros(M, N, dtype=torch.bfloat16, device=a.device)
-        return setup_and_launch(config, M, N, Ka, a, b, c, cubin_path, sync=sync)
+        skey = (M, N, Ka, a.data_ptr(), b.data_ptr(), c.data_ptr())
+        st = state.get(skey)
+        if st is None:
+            st = _prepare(config, M, N, Ka, a, b, c, cubin_path)
+            state[skey] = st
+        rt, _ = _backends()
+        fn, grid, block, shared, args = st
+        rt.launch(fn, grid=grid, block=block, shared=shared, args=args, sync=sync)
+        return c
 
     return call
