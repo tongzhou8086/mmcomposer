@@ -15,7 +15,7 @@ Asserts, per config:
   * every printed result line is "OK" (correctness within tolerance), no "FAIL".
 
 Run on a B200 node:
-    srun ... python webui/tests/host_artifact_test.py
+    python webui/tests/host_artifact_test.py
 """
 
 from __future__ import annotations

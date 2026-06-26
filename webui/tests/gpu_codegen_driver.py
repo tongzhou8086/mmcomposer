@@ -18,7 +18,7 @@ The premise being tested: **"the validator says valid" must imply
 validator isn't rejecting things that actually work).
 
 Usage (from repo root, on a GPU node):
-    srun ... python webui/tests/gpu_codegen_driver.py [--perf-shapes 2048] \
+    python webui/tests/gpu_codegen_driver.py [--perf-shapes 2048] \
         [--tiers tier1_baseline,tier3_cluster_swizzle] \
         [--invalid-sample 12] [--json out.json]
 
