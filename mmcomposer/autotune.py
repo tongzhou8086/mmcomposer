@@ -92,7 +92,13 @@ def _record_config(tier, k) -> dict:
 def scope_to_dirs_filters(scope: str = "production"):
     """Map a scope name to (tier_dirs, filters).  Shared by the CLI and mmc.tune.
 
-    production -- warp-spec-on, BN=256/512, NS>=3, 2-CTA, single-TMEM only at BN512.
+    production -- warp-spec-on, BN=256/512, NS>=3, 2-CTA, single-TMEM only at BN512,
+                  and persistent + overlapped + TMA-pipelined epilogue pinned on
+                  (split/L1-no-alloc off).  These last knobs are pinned because
+                  across 20 recorded shapes the winning config *always* used
+                  PERS=1/OV=1/TMA=1 and never SPLIT=1/L1NA=1; pinning them cuts the
+                  sweep ~73% (738 -> 198 combos).  Pass --scope full or the
+                  per-knob CLI overrides to sweep them anyway.
     full       -- every tier/combo (incl. warp-spec off and BN=64); very large.
     """
     ws_dirs = list(dict.fromkeys(t["dir"] for k, t in mc.TIER_MAP.items() if t and k[0]))
@@ -100,7 +106,9 @@ def scope_to_dirs_filters(scope: str = "production"):
     if scope == "production":
         return ws_dirs, {"bn": [256, 512], "ns": [x for x in mc.NS_OPTS if x >= 3],
                          "two_cta": [1], "tma_store_stages": [1, 2],
-                         "single_tmem_policy": "bn512-only"}
+                         "single_tmem_policy": "bn512-only",
+                         "persistent": [1], "overlap": [1], "tma_pipelined": [1],
+                         "split_epilogue": [0], "l1_no_alloc": [0]}
     return all_dirs, {"single_tmem_policy": "all"}
 
 
