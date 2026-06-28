@@ -12,9 +12,8 @@ import pathlib
 import sys
 import tempfile
 
-WEBUI = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(WEBUI))
-sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
+ROOT = pathlib.Path(__file__).resolve().parents[2]  # repo root
+sys.path.insert(0, str(ROOT))
 
 from mmcomposer import compiler
 

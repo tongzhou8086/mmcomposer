@@ -17,10 +17,7 @@ import tempfile
 
 os.environ["MMCOMPOSER_CACHE_DIR"] = tempfile.mkdtemp(prefix="mmc_test_")
 
-WEBUI = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(WEBUI))
-sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
-sys.path.insert(0, str(WEBUI / "kernels"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))  # repo root
 
 import mmcomposer.mmc as mmc
 

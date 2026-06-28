@@ -8,9 +8,8 @@ isolation: set up inputs, call the module, assert on the returned combos.
 import pathlib
 import sys
 
-WEBUI = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(WEBUI))
-sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
+ROOT = pathlib.Path(__file__).resolve().parents[2]  # repo root
+sys.path.insert(0, str(ROOT))
 
 from mmcomposer import mvp_core as mc
 from mmcomposer import combos

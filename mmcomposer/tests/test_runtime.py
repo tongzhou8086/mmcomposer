@@ -14,11 +14,9 @@ import pathlib
 import sys
 import tempfile
 
-WEBUI = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(WEBUI))
-sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
-sys.path.insert(0, str(WEBUI / "kernels"))
-sys.path.insert(0, str(WEBUI / "tests"))
+ROOT = pathlib.Path(__file__).resolve().parents[2]  # repo root
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "webui" / "tests"))  # gpu_codegen_driver harness
 
 from mmcomposer import mvp_core as mc
 from mmcomposer import combos

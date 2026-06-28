@@ -10,10 +10,8 @@ import math
 import pathlib
 import sys
 
-WEBUI = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(WEBUI))
-sys.path.insert(0, str(WEBUI.parent))  # repo root for mmcomposer
-sys.path.insert(0, str(WEBUI / "kernels"))
+ROOT = pathlib.Path(__file__).resolve().parents[2]  # repo root
+sys.path.insert(0, str(ROOT))
 
 from mmcomposer import benchmark as bench
 
