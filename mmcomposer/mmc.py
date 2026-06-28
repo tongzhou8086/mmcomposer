@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import time
 
 from . import mvp_core as mc        # noqa: F401
 from . import compiler
@@ -80,6 +81,30 @@ def _build(config):
     return runtime.kernel(config, cubin)
 
 
+# ---- one-time auto-tune progress (printed only on a cold shape) -----------
+def _autotune_progress():
+    """An autotune `on_event` callback that prints concise tuning progress to
+    stderr (throttled).  Fresh per tune so its throttle state is isolated."""
+    st = {"t": 0.0}
+
+    def cb(key, phase, **kw):
+        if phase == "enumerate":
+            print(f"[mmcomposer]   {kw['n_valid']} candidate configs to evaluate",
+                  file=sys.stderr, flush=True)
+        elif phase == "compiled":
+            print(f"[mmcomposer]   compiled {kw['n_compiled']}/{kw['n_valid']} kernels; "
+                  f"benchmarking on the GPU...", file=sys.stderr, flush=True)
+        elif phase == "benchmark":
+            done, total = kw.get("done"), kw.get("total")
+            now = time.monotonic()
+            if total and (done >= total or now - st["t"] >= 2.0):
+                st["t"] = now
+                print(f"[mmcomposer]   benchmarked {done}/{total} ({100 * done // total}%)",
+                      file=sys.stderr, flush=True)
+
+    return cb
+
+
 # ---- public API -----------------------------------------------------------
 def tune(M, N, K, *, dtype=DEFAULT_DTYPE, scope="production", **kw) -> dict:
     """Pre-tune a shape (offline): sweep the scope, write the winner to the cache.
@@ -103,11 +128,21 @@ def get_tuned_kernel(a, b, *, tune_if_missing=True):
             raise RuntimeError(
                 f"no tuned config for {key}; run mmc.tune({M}, {N}, {K}) first "
                 f"or call with tune_if_missing=True")
-        summary = tune(M, N, K)
+        # Cold shape -> auto-tune once.  This message (and the progress below)
+        # appears ONLY when tuning actually runs; warm/cached calls are silent.
+        print(f"[mmcomposer] no tuned kernel for {M}x{N}x{K} {DEFAULT_DTYPE} on "
+              f"{DEFAULT_ARCH} -- auto-tuning now (one-time per machine; cached to "
+              f"{kcache.cache_root()} and reused in future sessions)",
+              file=sys.stderr, flush=True)
+        t0 = time.monotonic()
+        summary = tune(M, N, K, on_event=_autotune_progress())
         rec = kcache.best(key)
         if rec is None:
             raise RuntimeError(f"tuning produced no valid config for {key}: "
                                f"{summary.get('error')}")
+        print(f"[mmcomposer] auto-tune complete in {time.monotonic() - t0:.0f}s: "
+              f"best {rec['tflops']:.0f} TFLOPS ({rec['vs_cublas']:.0%} of cuBLAS) -- cached.",
+              file=sys.stderr, flush=True)
     fn = _build(rec["config"])
     _KERNELS[key] = fn
     return fn
