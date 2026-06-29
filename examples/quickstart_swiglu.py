@@ -1,8 +1,8 @@
 """Quickstart: fused GEMM + SwiGLU (dual-B) on Blackwell (B200).
 
-    python examples/quickstart_swiglu.py                  # default 4096 cube
+    python examples/quickstart_swiglu.py                  # default FFN shape 32768x4608x768
     python examples/quickstart_swiglu.py 8192             # square 8192
-    python examples/quickstart_swiglu.py 32768 4608 768   # M N K  (an FFN shape)
+    python examples/quickstart_swiglu.py 32768 4608 768   # M N K
 
 A = [M, K]; the two projection weights B_left, B_gate = [K, N/2]; bf16, M and N
 multiples of 256, K a multiple of 64.  One fused launch returns:
@@ -22,7 +22,7 @@ import mmcomposer as mmc
 # three args -> M N K.
 args = sys.argv[1:]
 if len(args) == 0:
-    M = N = K = 4096
+    M, N, K = 32768, 4608, 768          # an FFN shape: M tokens, N=4608, K=768
 elif len(args) == 1:
     M = N = K = int(args[0])
 elif len(args) == 3:
