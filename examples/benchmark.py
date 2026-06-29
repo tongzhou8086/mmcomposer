@@ -71,13 +71,21 @@ def main() -> int:
     print(f"  torch  {g_tor:8.3f} ms   {tflops(g_tor):7.0f} TFLOPS   (mmc/torch = {g_mmc / g_tor:.3f})\n",
           flush=True)
 
-    print("== End-to-end wall-clock per call (median of 100 iters, incl. CPU + sync) ==", flush=True)
+    print("== End-to-end, kernel callable (median 100 iters, reused output, incl. CPU+sync) ==", flush=True)
     e_mmc = end_to_end_ms(mmc_fn, 100)
     e_tor = end_to_end_ms(torch_fn, 100)
-    print(f"  mmc    {e_mmc:8.3f} ms", flush=True)
-    print(f"  torch  {e_tor:8.3f} ms   (mmc/torch = {e_mmc / e_tor:.3f})\n", flush=True)
+    print(f"  mmc gemm()         {e_mmc:8.3f} ms", flush=True)
+    print(f"  torch.mm(out=)     {e_tor:8.3f} ms   (mmc/torch = {e_mmc / e_tor:.3f})\n", flush=True)
 
-    print("== implied per-call host overhead (end-to-end - do_bench) ==", flush=True)
+    # Full public API path: per call does validate + key + dict lookup AND allocates
+    # a fresh output -- the realistic torch-like usage. torch.matmul allocates too.
+    print("== End-to-end, full public API (median 100 iters, fresh output alloc each call) ==", flush=True)
+    api_mmc = end_to_end_ms(lambda: mmc.matmul(a, b), 100)            # noqa: E731
+    api_tor = end_to_end_ms(lambda: torch.matmul(a, b), 100)          # noqa: E731
+    print(f"  mmc.matmul(a,b)    {api_mmc:8.3f} ms", flush=True)
+    print(f"  torch.matmul(a,b)  {api_tor:8.3f} ms   (mmc/torch = {api_mmc / api_tor:.3f})\n", flush=True)
+
+    print("== implied per-call host overhead (end-to-end callable - do_bench) ==", flush=True)
     print(f"  mmc    {e_mmc - g_mmc:8.3f} ms", flush=True)
     print(f"  torch  {e_tor - g_tor:8.3f} ms", flush=True)
     return 0
