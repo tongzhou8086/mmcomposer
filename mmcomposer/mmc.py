@@ -24,12 +24,14 @@ from . import compiler
 from . import runtime
 from . import cache as kcache
 from . import autotune
+from . import swiglu as _swiglu
 
 DEFAULT_DTYPE = "bf16"
 DEFAULT_ARCH = kcache.DEFAULT_ARCH
 
 # in-process kernel-callable cache, keyed by shape_key (avoids re-render/compile)
 _KERNELS: dict = {}
+_SWIGLU_DUAL_B_NS6_S2 = None   # the fixed swiglu kernel callable (lazy, shape-agnostic)
 
 
 # ---- input validation -----------------------------------------------------
@@ -156,3 +158,20 @@ def matmul(a, b, *, out=None, sync=False, tune_if_missing=True):
     returns immediately (the result is ordered before following torch ops).  Pass
     ``out=`` to reuse an output buffer, or ``sync=True`` to block until done."""
     return get_tuned_kernel(a, b, tune_if_missing=tune_if_missing)(a, b, out, sync=sync)
+
+
+def matmul_swiglu_dual_b_ns6_s2(a, b_left, b_gate, *, c=None, d=None, sync=False):
+    """Fused GEMM + SwiGLU with two B halves (the fixed ``..._dual_b_ns6_s2``
+    Blackwell kernel; config baked in, no autotune).
+
+        A[M, K], B_left[K, N/2], B_gate[K, N/2]  ->  C[M, N], D[M, N/2]
+
+    where ``left = A @ B_left``, ``gate = A @ B_gate``, ``C`` is the packed wide
+    GEMM ([left | gate] per BN=256 tile) and ``D = left * silu(gate)`` is the
+    SwiGLU activation.  Returns ``(c, d)``.  Compiles once per machine (cached),
+    then async on torch's current stream like ``matmul``; pass ``c=``/``d=`` to
+    reuse buffers or ``sync=True`` to block."""
+    global _SWIGLU_DUAL_B_NS6_S2
+    if _SWIGLU_DUAL_B_NS6_S2 is None:
+        _SWIGLU_DUAL_B_NS6_S2 = _swiglu.kernel()
+    return _SWIGLU_DUAL_B_NS6_S2(a, b_left, b_gate, c=c, d=d, sync=sync)

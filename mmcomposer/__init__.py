@@ -19,13 +19,14 @@ double-import warning.
 import importlib as _importlib
 
 from . import (compiler, cache, leaderboard, mvp_core, combos,  # noqa: F401
-               runtime, benchmark, codegen)
+               runtime, benchmark, codegen, swiglu)
 
-_API = {"matmul", "get_tuned_kernel", "tune"}   # defined in mmcomposer.mmc
+# defined in mmcomposer.mmc
+_API = {"matmul", "get_tuned_kernel", "tune", "matmul_swiglu_dual_b_ns6_s2"}
 
-__all__ = ["matmul", "get_tuned_kernel", "tune",
+__all__ = ["matmul", "get_tuned_kernel", "tune", "matmul_swiglu_dual_b_ns6_s2",
            "combos", "compiler", "runtime", "benchmark",
-           "cache", "leaderboard", "autotune", "mvp_core", "codegen"]
+           "cache", "leaderboard", "autotune", "mvp_core", "codegen", "swiglu"]
 
 
 def __getattr__(name):
