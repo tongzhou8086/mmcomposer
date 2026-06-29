@@ -20,7 +20,7 @@ on torch's current stream; pass `c=`/`d=` to reuse buffers or `sync=True` to blo
 Shape rules: M and N multiples of 256, K a multiple of 64 (N = 2 * b_left's
 second dim).  Requires a B200 + nvcc; the kernel compiles once per machine.
 
-    python examples/swiglu_dual_b.py [M [N [K]]]      # default 4096x4096x4096
+    python examples/swiglu_dual_b.py [M [N [K]]]      # default 32768x4608x768
 """
 import sys
 
@@ -28,12 +28,14 @@ import torch
 
 import mmcomposer as mmc
 
+DEFAULT_SHAPE = (32768, 4608, 768)    # the SwiGLU FFN study shape (M, N, K)
+
 
 def main() -> int:
-    vals = [int(x) for x in sys.argv[1:4]] or [4096]
-    M = vals[0]
-    N = vals[1] if len(vals) > 1 else M
-    K = vals[2] if len(vals) > 2 else M
+    vals = [int(x) for x in sys.argv[1:4]]
+    M = vals[0] if len(vals) > 0 else DEFAULT_SHAPE[0]
+    N = vals[1] if len(vals) > 1 else DEFAULT_SHAPE[1]
+    K = vals[2] if len(vals) > 2 else DEFAULT_SHAPE[2]
     if not torch.cuda.is_available():
         print("no CUDA device -- run on a GPU node", file=sys.stderr)
         return 2
