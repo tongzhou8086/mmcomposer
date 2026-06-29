@@ -168,7 +168,9 @@ def kernel(config, cubin_path):
         Kb, N = b.shape
         assert Ka == Kb, f"inner dims disagree: {a.shape} @ {b.shape}"
         if c is None:
-            c = torch.zeros(M, N, dtype=torch.bfloat16, device=a.device)
+            # empty, not zeros: the GEMM writes every element of C, so a memset
+            # would be wasted work (~tens of us per call at large N).
+            c = torch.empty(M, N, dtype=torch.bfloat16, device=a.device)
         skey = (M, N, Ka, a.data_ptr(), b.data_ptr(), c.data_ptr())
         st = state.get(skey)
         if st is None:
