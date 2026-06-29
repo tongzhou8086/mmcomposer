@@ -115,53 +115,9 @@ Each is independently testable; leaves need no other mmcomposer module (and
 
 ## Future
 
-- **Remote results cache**: upload-on-tune, query-at-runtime; shared across machines
-  on the same GPU arch (the "online config registry").
-- More dtypes / layouts; optional **process isolation** for broad/experimental
-  sweeps (a crashing kernel can corrupt an in-process CUDA context).
-
-## Performance findings & TODO
-
-Measured per-call **host** cost (B200, 4096³, `sync=False` so no GPU wait):
-
-| step | cost |
-|---|---|
-| `torch.empty(M,N)` output alloc | ~1.9 µs |
-| `encode_tensor_map` (one TMA descriptor) | ~5.3 µs |
-| `_descriptors` (A+B+C, 3 encodes) | ~16 µs |
-| `_prepare` (3 desc + SMEM attr + arg marshalling) | ~21 µs |
-| `gemm(a,b,c)` reuse buffer (launch-state cache hit) | ~6.5 µs |
-| `gemm(a,b)` fresh output | ~14 µs |
-
-Key point: a TMA descriptor is **not** a raw pointer. `encode_tensor_map`
-(`cuTensorMapEncodeTiled`) is a ~5 µs **driver call** that validates and encodes
-the opaque 128-byte `CUtensorMap` — a plain-pointer kernel arg would be ~free, so
-the TMA encode *is* the cost, and rebuilding all three per call is ~16 µs.
-
-With a **reused output buffer** the launch state is cached (encode happens once)
-and per-call host cost is ~6.5 µs — on par with torch. The overhead only shows up
-when the output is freshly allocated every call; even then it's negligible at
-realistic shapes (kernel ≫ host).
-
-TODO (rough priority):
-
-1. **Async `matmul` on torch's stream** (highest value).  `mmc.matmul` currently
-   *blocks*: the `runtime.kernel` callable defaults to `sync=True` and launches on
-   the default stream 0, unlike `torch.matmul` (async).  Launch on
-   `torch.cuda.current_stream().cuda_stream` and return without syncing, so stream
-   ordering keeps the result safe for following torch ops — this removes a full
-   device sync per call and matches torch semantics.  Keep an opt-in `sync=True` /
-   `out=`.
-2. **Descriptor-cache split** (modest; fresh-output path only).  Cache
-   `(fn, grid, block, shared)` + the **A & B** descriptors by
-   `(config, M, N, K, a_ptr, b_ptr)` (stable across a loop) and re-encode **only C**
-   by `c_ptr`.  Turns a full rebuild (~21 µs) into ~one encode (~7 µs).  Note the
-   `CUtensorMap` is opaque, so the base pointer can't be byte-patched — a changed
-   pointer needs a re-encode.  Worth little when the output buffer is reused
-   (already cached) or at large shapes.
-
-Guidance for now: **reuse your `out=` buffer in hot loops** → per-call host
-overhead ≈ 0 and irrelevant at realistic shapes.
+See **`TODO.md`** (repo root) for measured per-call host costs and the
+performance / future follow-ups (async `matmul`, descriptor caching, remote
+cache, more dtypes).
 
 ## Dependency DAG
 
