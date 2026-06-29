@@ -44,13 +44,21 @@ def main() -> int:
     rel = ((c.float() - ref).norm() / ref.norm()).item()
     print(f"shape M={M} N={N} K={K}   mmc.matmul rel_err (vs fp32) = {rel:.2e}")
 
-    # reusable callable + reuse an out= buffer in a hot loop (host overhead ~0)
+    # reusable callable + reuse an out= buffer (host overhead ~0, async)
     gemm = mmc.get_tuned_kernel(a, b)
     out = torch.empty(M, N, dtype=torch.bfloat16, device="cuda")
-    for _ in range(10):
-        gemm(a, b, out)                # async on the current stream
-    torch.cuda.synchronize()
-    print("ok")
+    out_t = torch.empty(M, N, dtype=torch.bfloat16, device="cuda")
+
+    # GPU kernel time (triton do_bench: warmup 1000 ms, rep 1000 ms, median)
+    from triton.testing import do_bench
+    flops = 2.0 * M * N * K
+    g = do_bench(lambda: gemm(a, b, out, sync=False), warmup=1000, rep=1000,
+                 return_mode="median")
+    t = do_bench(lambda: torch.mm(a, b, out=out_t), warmup=1000, rep=1000,
+                 return_mode="median")
+    print(f"  mmc    {g:8.3f} ms   {flops / (g * 1e-3) / 1e12:7.0f} TFLOPS")
+    print(f"  torch  {t:8.3f} ms   {flops / (t * 1e-3) / 1e12:7.0f} TFLOPS"
+          f"   (mmc/torch = {g / t:.3f})")
     return 0
 
 

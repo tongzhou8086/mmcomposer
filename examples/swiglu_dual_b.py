@@ -54,10 +54,23 @@ def main() -> int:
     rel = ((d.float() - d_ref).norm() / d_ref.norm()).item()
     print(f"SwiGLU activation d rel_err (vs fp32 torch) = {rel:.2e}")
 
-    # reuse buffers in a hot loop (host overhead ~0, async on the current stream)
-    for _ in range(10):
-        mmc.matmul_swiglu_dual_b_ns6_s2(a, b_left, b_gate, c=c, d=d)
-    torch.cuda.synchronize()
+    # GPU kernel time (triton do_bench: warmup 1000 ms, rep 1000 ms, median).
+    # Compare against the equivalent packed wide GEMM in cuBLAS (same FLOPs,
+    # no SwiGLU fusion): torch.mm(a, b_packed) with b_packed = [b_left | b_gate].
+    from triton.testing import do_bench
+    flops = 2.0 * M * N * K                      # two M x (N/2) x K GEMMs
+    b_packed = torch.empty(K, N, dtype=torch.bfloat16, device="cuda")
+    b_packed.view(K, N // 256, 256)[:, :, :128] = b_left.view(K, N // 256, 128)
+    b_packed.view(K, N // 256, 256)[:, :, 128:] = b_gate.view(K, N // 256, 128)
+
+    g = do_bench(lambda: mmc.matmul_swiglu_dual_b_ns6_s2(a, b_left, b_gate, c=c, d=d,
+                                                         sync=False),
+                 warmup=1000, rep=1000, return_mode="median")
+    t = do_bench(lambda: torch.mm(a, b_packed, out=c), warmup=1000, rep=1000,
+                 return_mode="median")
+    print(f"  fused swiglu  {g:8.3f} ms   {flops / (g * 1e-3) / 1e12:7.0f} TFLOPS")
+    print(f"  cuBLAS GEMM   {t:8.3f} ms   {flops / (t * 1e-3) / 1e12:7.0f} TFLOPS"
+          f"   (the GEMM alone, no gate)")
     print("ok")
     return 0
 
