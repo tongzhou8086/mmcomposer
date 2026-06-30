@@ -157,9 +157,28 @@ design decision #7; with IEEE division the fused SiLU was 0.666 ms / 2× *slower
   ~1.09× the bare GEMM and 1.7× faster than torch at an FFN shape.
 - `examples/quickstart_epilogue.py` — runnable showcase.
 
-**Phase 2 (designed, not started):**
-- multi-input / fused-operand epilogues (more than one input value), TBD.
-- control flow via value-level `where(cond, a, b)` + comparison operators returning
+**Phase 2 — multiple inputs (DSL done; kernel pending):**
+- n-ary epilogue: input 0 = accumulator, inputs 1.. = extra same-shape operands,
+  e.g. `lambda x, c: x*c` ((a@b)*c), `lambda x, c: x+c` (residual), `lambda x, g, r:
+  x*sigmoid(g)+r`. **Done:** tracer/lowering (`arity`/`to_cuda`/`to_torch` n-ary).
+  **Pending:** kernel-side direct-to-register LDG of the extra tiles, `aux=` API,
+  autotune threading.
+
+**Phase 3 — multiple stores & accumulator split (design):**
+- **Multi-store:** tuple return → one output matrix per element; shape inferred per
+  value. `c, d = mmc.matmul(a, b, epilogue=fn)`.
+- **Split:** `a, b = x.chunk(2)` splits the accumulator into column-halves (`[M,N/2]`
+  each); width inference (`x`/`f(x)` = full, chunk = 1/k); mixing widths is an error.
+- Together they express the **dual-B SwiGLU kernel** from the DSL:
+  `def swiglu(x): a,b = x.chunk(2); return x, a*b*sigmoid(b)` → packed C `[M,N]` + D
+  `[M,N/2]`. `dual_b=True` (two separate B matrices) makes it byte-equivalent to
+  `matmul_swiglu_dual_b_ns6_s2`.
+- Codegen impact: epilogue iterates over chunk *groups*; one TMA store + buffer per
+  returned value. (n>2 chunks are a natural extension; do k=2 first.)
+- See `mmcomposer/EPILOGUE.md` §8 for the full spec.
+
+**Other designed extensions:**
+- Control flow via value-level `where(cond, a, b)` + comparison operators returning
   predicate `Expr`s (no Python `if` — it can't be traced, and per-element branches
   are predication/`select` on the GPU anyway, which `where` traces directly).
 

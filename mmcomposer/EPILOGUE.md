@@ -164,5 +164,87 @@ and every distinct epilogue are independent cache entries.
 
 ---
 
-*Phase 1 is the single-input / single-output elementwise map described above.
-Phase 2 (multi-input / fused operands) is a future extension.*
+## 8. Roadmap — phases 2 & 3
+
+Phase 1 (above) is the **single-input → single-output** elementwise map. Two
+planned generalizations keep the same "Python-syntax DSL, traced, lowered,
+spliced, tuned-as-a-variant" model; only the contract widens.
+
+### Phase 2 — multiple inputs *(DSL done; kernel pending)*
+
+The epilogue takes **n positional args**: input 0 is the matmul accumulator
+(`x`), inputs 1.. are **extra inputs** of the **same shape `[M,N]`**, combined
+per element at the same position.
+
+```python
+lambda x, c: x * c                 # (a @ b) * c        -- elementwise gate / residual mul
+lambda x, c: x + c                 # (a @ b) + c        -- residual add
+lambda x, g, r: x * sigmoid(g) + r # two extra inputs
+```
+
+- `#extra inputs = arity - 1`; the matmul call supplies that many same-shape
+  tensors (proposed `aux=[c, ...]`). Each is bf16, row-major, exactly `[M,N]`.
+- Lowers to `mmc_epi(float x, float c0, float c1, ...)`; the digest (hence the
+  tuned variant) includes the arity.
+- **Implemented:** the tracer/lowering (`arity`, `to_cuda`, `to_torch` all n-ary).
+  **Pending:** kernel-side load of the extra tiles + `aux=` API + autotune
+  threading. The chosen load strategy is a **direct `ld.global` into registers**
+  (no SMEM; mirrors each thread's accumulator coords; the read is a one-shot
+  epilogue read, so the across-lane stride is cheap relative to the GEMM).
+
+### Phase 3 — multiple stores & accumulator split *(design)*
+
+Two composable extensions that together let the DSL **generate** the hand-tuned
+dual-B SwiGLU kernel:
+
+**(a) Multiple stores.** Return a **tuple** → one output matrix per element. Each
+output's shape is **inferred** from how its value is built (see width inference).
+The API returns a tuple to match: `c, d = mmc.matmul(a, b, epilogue=fn)`.
+
+```python
+lambda x: (x, 1.0 + x)             # two [M,N] outputs
+```
+
+**(b) Accumulator split.** `x.chunk(k)` splits the accumulator into `k` equal
+**column chunks** along N, each of **width 1/k** (`[M, N/k]`). Self-documenting,
+generalizes to any `k` (implement `k=2` first — covers SwiGLU/GLU).
+
+**Width inference & rules.** Every value carries a *width fraction*: `x` and any
+`f(x)` are width 1 (`[M,N]`); a chunk or an expression over chunks is width `1/k`
+(`[M, N/k]`). A returned value's output shape is `[M, N·width]`. **Mixing widths
+in one expression is rejected at trace time** (e.g. `a + x` combines `[M,N/2]`
+with `[M,N]`).
+
+```python
+def left_half(x):                  # one [M, N/2] output
+    a, b = x.chunk(2)
+    return a
+
+def store_two_halves_and_left(x):  # three [M, N/2] outputs: left, right, left
+    a, b = x.chunk(2)
+    return a, b, a
+
+def swiglu(x):                     # the dual-B SwiGLU kernel, from the DSL:
+    a, b = x.chunk(2)              #   packed C [M,N]  +  D [M,N/2]
+    return x, a * b * sigmoid(b)   #   D = left * silu(gate)
+```
+
+- **`dual_b=True`** (matmul arg): instead of one packed `b` of width N, take **two
+  separate B matrices** and load the second chunk's tile from the second one —
+  making `swiglu` above byte-equivalent to `matmul_swiglu_dual_b_ns6_s2`.
+- **Codegen impact (the real work):** split makes the epilogue iterate over
+  **chunk groups** (so `a`, `b` are same-position elements of the two halves)
+  rather than one column at a time; multi-store needs **one output buffer + TMA
+  descriptor per returned value**, each sized by width inference.
+
+### Composition
+
+All three layers stack uniformly — extra inputs (P2) + split + multi-store (P3):
+
+```python
+def f(x, c):                       # gated activation with an external operand
+    a, b = x.chunk(2)
+    return a * sigmoid(b) * c
+```
+
+`n=k` chunks beyond 2 are a natural design extension; implement 2 first.
