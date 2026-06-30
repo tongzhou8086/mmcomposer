@@ -94,8 +94,24 @@ Formal spec: `mmcomposer/EPILOGUE.md`.
 6. **No cost to the plain matmul path.** When `epilogue=None`, `matmul` takes the
    exact original code path (one extra `None` check). The EDL adds nothing to
    regular matmuls — see "Performance" below.
+7. **Approximate fast math in the epilogue.** Division lowers to `__fdividef`
+   (`rcp.approx`) and `exp` to `__expf` (`ex2.approx`) — the same approximate
+   intrinsics the hand-tuned SwiGLU kernel uses. bf16 output makes the ~2-ULP
+   error invisible, and it's what keeps the activation nearly free (an IEEE
+   reciprocal in the epilogue was ~25× more expensive and made fused SiLU 2× slower
+   than torch).
 
 ## Performance
+
+**Kernel (measured, B200, FFN 32768×4608×768):** bare GEMM 0.175 ms; fused
+matmul+SiLU **0.194 ms** — only **1.10×** the bare GEMM (activation ~free), and
+**1.7× faster** than torch doing matmul + a separate SiLU kernel (0.314 ms). The
+win is largest on memory-bound shapes (small K, large output), where torch's
+separate activation pass is a full extra GMEM round trip; on compute-bound squares
+the GEMM dominates and the gap is small. (This relies on the fast-math lowering —
+design decision #7; with IEEE division the fused SiLU was 0.666 ms / 2× *slower*.)
+
+**Host:**
 
 - **Plain `mmc.matmul(a, b)`:** unchanged. `epilogue=None` short-circuits to the
   original path; no extra host work.
@@ -124,10 +140,17 @@ Formal spec: `mmcomposer/EPILOGUE.md`.
   reuses tuned geometry, compiles+caches an epilogue cubin keyed by digest, async
   on torch's current stream.
 - GPU-verified on B200: identity == plain (bit-exact); SiLU / ReLU / GELU match
-  torch to ~1.7e-3.
+  torch to ~1.7e-3. **30 tests** (CPU lowering + op-by-op GPU correctness for every
+  builtin/operator).
+- Fast-math lowering (`div` → `__fdividef`, `exp` → `__expf`) → fused SiLU is
+  ~1.10× the bare GEMM and 1.7× faster than torch at an FFN shape.
+- `examples/quickstart_epilogue.py` — runnable showcase.
 
-**Phase 2 (designed, not started):** multi-input / fused-operand epilogues (more
-than one input value), TBD.
+**Phase 2 (designed, not started):**
+- multi-input / fused-operand epilogues (more than one input value), TBD.
+- control flow via value-level `where(cond, a, b)` + comparison operators returning
+  predicate `Expr`s (no Python `if` — it can't be traced, and per-element branches
+  are predication/`select` on the GPU anyway, which `where` traces directly).
 
 ## Try it
 
