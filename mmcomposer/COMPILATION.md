@@ -32,6 +32,24 @@ This explains the full path from `mmc.matmul(a, b)` to a launched kernel, and
 
 `shape_key = "<M>x<N>x<K>_<dtype>_<arch>"`, e.g. `4096x4096x4096_bf16_sm_100a`.
 
+### Where the cache root lives (and cross-node reuse)
+
+`cache_root()` picks, in order: `$MMCOMPOSER_CACHE_DIR` → `$XDG_CACHE_HOME/mmcomposer`
+→ `~/.cache/mmcomposer`.
+
+On a multi-node cluster this matters: if `XDG_CACHE_HOME` points at **node-local**
+storage (e.g. `/scratch` on a local NVMe), each node has its own cache, so a tune
+done on one node **re-tunes** when a job lands on another. To share one tune across
+all nodes, point mmcomposer at a **shared filesystem** (e.g. `$HOME`):
+
+```bash
+export MMCOMPOSER_CACHE_DIR=$HOME/.cache/mmcomposer
+```
+
+This overrides `XDG_CACHE_HOME` for mmcomposer only (its cache is a tiny JSON +
+cubins), leaving every other tool's cache on fast local scratch. Cubins are
+arch-specific but valid on any same-arch node, so they're reusable too.
+
 ---
 
 ## The flow
