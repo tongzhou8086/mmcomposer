@@ -183,14 +183,18 @@ lambda x, g, r: x * sigmoid(g) + r # two extra inputs
 ```
 
 - `#extra inputs = arity - 1`; the matmul call supplies that many same-shape
-  tensors (proposed `aux=[c, ...]`). Each is bf16, row-major, exactly `[M,N]`.
+  tensors via `aux=[c, ...]`. Each is bf16, row-major, exactly `[M,N]`.
 - Lowers to `mmc_epi(float x, float c0, float c1, ...)`; the digest (hence the
   tuned variant) includes the arity.
-- **Implemented:** the tracer/lowering (`arity`, `to_cuda`, `to_torch` all n-ary).
-  **Pending:** kernel-side load of the extra tiles + `aux=` API + autotune
-  threading. The chosen load strategy is a **direct `ld.global` into registers**
-  (no SMEM; mirrors each thread's accumulator coords; the read is a one-shot
-  epilogue read, so the across-lane stride is cheap relative to the GEMM).
+- **Implemented (1 extra input, TMA-store/production route):** `(a@b)*c`,
+  `(a@b)+c`, `silu(x)*c`, etc. The extra tile is loaded **directly into registers**
+  via `int4 ld.global` at each thread's accumulator `(row,col)`, **issued before
+  the TMEM load** so its latency overlaps — per-chunk streaming, ~`LDW` extra
+  regs/thread, no SMEM. `mmc.matmul(a, b, epilogue=fn, aux=[c])` validates arity +
+  `[M,N]`/bf16/contiguous, tunes the fused variant, caches by `(shape, digest)`.
+  Verified on B200 (~1.6e-3 vs torch).
+- **Pending:** more than one extra input (`n>1`), and the int4-store epilogue route
+  (a different splice; TMA-store route is enough for now).
 
 ### Phase 3 — multiple stores & accumulator split *(design)*
 

@@ -157,12 +157,15 @@ design decision #7; with IEEE division the fused SiLU was 0.666 ms / 2× *slower
   ~1.09× the bare GEMM and 1.7× faster than torch at an FFN shape.
 - `examples/quickstart_epilogue.py` — runnable showcase.
 
-**Phase 2 — multiple inputs (DSL done; kernel pending):**
+**Phase 2 — multiple inputs (single extra input done; n>1 pending):**
 - n-ary epilogue: input 0 = accumulator, inputs 1.. = extra same-shape operands,
   e.g. `lambda x, c: x*c` ((a@b)*c), `lambda x, c: x+c` (residual), `lambda x, g, r:
-  x*sigmoid(g)+r`. **Done:** tracer/lowering (`arity`/`to_cuda`/`to_torch` n-ary).
-  **Pending:** kernel-side direct-to-register LDG of the extra tiles, `aux=` API,
-  autotune threading.
+  x*sigmoid(g)+r`.
+- **Done:** tracer/lowering n-ary; **and the 1-extra-input kernel path** on the
+  TMA-store/production route — `mmc.matmul(a, b, epilogue=fn, aux=[c])`, extra tile
+  loaded direct-to-register (LDG issued before the TMEM load), tuned + cached as a
+  variant. B200-verified `(a@b)*c`/`+c`/`silu(x)*c` ~1.6e-3 vs torch; 37 tests.
+- **Pending:** more than one extra input; int4-store epilogue route.
 
 **Phase 3 — multiple stores & accumulator split (design):**
 - **Multi-store:** tuple return → one output matrix per element; shape inferred per
