@@ -177,7 +177,7 @@ def _gpu_ctx():
     base = a.float() @ b.float()
 
     def build_epi(edl):
-        return mmc._build_epilogue(plain_cfg, epi.to_cuda(edl))
+        return mmc._build_epilogue(plain_cfg, epi.to_cuda(edl), epi.n_inputs(edl))
 
     try:
         yield mmc, a, b, base, build_epi
@@ -204,6 +204,39 @@ def test_builtin_fused_matches_torch(_gpu_ctx, name, edl, ref):
     want = ref(base)
     rel = ((c.float() - want).norm() / (want.norm() + 1e-12)).item()
     assert rel < 5e-2, f"{name}: rel_err {rel:.2e}"
+
+
+def test_extra_input_fused_matches_torch(_gpu_ctx):
+    """Phase 2: a single extra same-shape input, fused via direct-to-register LDG."""
+    import torch
+    mmc, a, b, base, build_epi = _gpu_ctx
+    M, N = base.shape
+    cx = torch.randn(M, N, dtype=torch.bfloat16, device="cuda")
+
+    def rel(out, ref):
+        return ((out.float() - ref).norm() / (ref.norm() + 1e-12)).item()
+
+    assert rel(build_epi(lambda x, c: x * c)(a, b, None, aux=[cx]),
+               base * cx.float()) < 5e-2                               # (a@b)*c
+    assert rel(build_epi(lambda x, c: x + c)(a, b, None, aux=[cx]),
+               base + cx.float()) < 5e-2                               # (a@b)+c   residual
+    assert rel(build_epi(lambda x, c: x * sigmoid(x) * c)(a, b, None, aux=[cx]),
+               (base * torch.sigmoid(base)) * cx.float()) < 5e-2       # silu(x)*c
+
+
+def test_aux_validation():
+    """matmul rejects an aux list that doesn't match the epilogue arity / shape."""
+    import torch
+    import mmcomposer.mmc as mmc
+    a = torch.zeros(256, 64, dtype=torch.bfloat16)
+    b = torch.zeros(64, 256, dtype=torch.bfloat16)
+    cx = torch.zeros(256, 256, dtype=torch.bfloat16)
+    with pytest.raises(ValueError):                       # needs 1 aux, got 0
+        mmc.matmul(a, b, epilogue=lambda x, c: x * c, aux=[])
+    with pytest.raises(ValueError):                       # 0-arg epilogue, got 1 aux
+        mmc.matmul(a, b, epilogue=lambda x: x, aux=[cx])
+    with pytest.raises(ValueError):                       # wrong aux shape
+        mmc.matmul(a, b, epilogue=lambda x, c: x * c, aux=[torch.zeros(256, 128, dtype=torch.bfloat16)])
 
 
 def test_epilogue_tuned_as_variant(_gpu_ctx):

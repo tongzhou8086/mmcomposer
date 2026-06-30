@@ -130,8 +130,10 @@ def _descriptors(config, M, N, K, a, b, c):
     return A, B, C
 
 
-def _prepare(config, M, N, K, a, b, c, cubin_path):
-    """Build the launch state (fn, grid, block, shared, args) for these tensors."""
+def _prepare(config, M, N, K, a, b, c, cubin_path, aux=()):
+    """Build the launch state (fn, grid, block, shared, args) for these tensors.
+    `aux` are extra epilogue-input tensors (phase 2); their pointers are appended
+    after M,N,K, matching the kernel's guarded `mmc_c0, ...` params."""
     rt, driver = _backends()
     _, num_sms = _ensure_cuda()
     _, fn = _load(cubin_path, config["symbol"])
@@ -143,6 +145,7 @@ def _prepare(config, M, N, K, a, b, c, cubin_path):
     args = [(ctypes.c_byte * 128).from_buffer_copy(d.tobytes()) for d in (A, B, C)]
     args += [ctypes.c_void_p(c.data_ptr()),
              ctypes.c_int(M), ctypes.c_int(N), ctypes.c_int(K)]
+    args += [ctypes.c_void_p(t.data_ptr()) for t in aux]
     return fn, grid, block, shared, args
 
 
@@ -168,9 +171,9 @@ def kernel(config, cubin_path):
     usual).  Pass ``sync=True`` to block until the kernel completes, or an explicit
     integer ``stream`` handle (e.g. ``torch.cuda.current_stream().cuda_stream``)."""
     import torch
-    state = {}   # (M,N,K, a_ptr, b_ptr, c_ptr) -> (fn, grid, block, shared, args)
+    state = {}   # (M,N,K, a_ptr, b_ptr, c_ptr, aux_ptrs) -> (fn, grid, block, shared, args)
 
-    def call(a, b, c=None, *, sync=False, stream=None):
+    def call(a, b, c=None, aux=(), *, sync=False, stream=None):
         M, Ka = a.shape
         Kb, N = b.shape
         assert Ka == Kb, f"inner dims disagree: {a.shape} @ {b.shape}"
@@ -182,10 +185,12 @@ def kernel(config, cubin_path):
             # Enqueue on torch's current stream so stream ordering keeps the
             # result safe for any following torch op on the same device.
             stream = torch.cuda.current_stream(a.device).cuda_stream
-        skey = (M, N, Ka, a.data_ptr(), b.data_ptr(), c.data_ptr())
+        aux = tuple(aux)
+        skey = (M, N, Ka, a.data_ptr(), b.data_ptr(), c.data_ptr(),
+                tuple(t.data_ptr() for t in aux))
         st = state.get(skey)
         if st is None:
-            st = _prepare(config, M, N, Ka, a, b, c, cubin_path)
+            st = _prepare(config, M, N, Ka, a, b, c, cubin_path, aux=aux)
             state[skey] = st
         rt, _ = _backends()
         fn, grid, block, shared, args = st

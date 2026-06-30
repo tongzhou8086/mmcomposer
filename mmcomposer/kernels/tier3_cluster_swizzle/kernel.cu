@@ -267,6 +267,9 @@ __device__ __forceinline__ void matmul_cluster_impl(
     const CUtensorMap* C_tmap_ptr,
     __nv_bfloat16* __restrict__ C_ptr,
     int M, int N, int K
+#if MMC_N_EXTRA >= 1
+    , const __nv_bfloat16* __restrict__ mmc_c0   // phase-2 extra epilogue input [M,N]
+#endif
 ) {
     // ── Per-cluster + per-CTA tile coords ───────────────────────────
     //
@@ -739,7 +742,15 @@ void matmul_cluster(
     const __grid_constant__ CUtensorMap A_tmap,
     const __grid_constant__ CUtensorMap B_tmap,
     const __grid_constant__ CUtensorMap C_tmap,
-    __nv_bfloat16* C_ptr, int M, int N, int K)
+    __nv_bfloat16* C_ptr, int M, int N, int K
+#if MMC_N_EXTRA >= 1
+    , const __nv_bfloat16* mmc_c0
+#endif
+)
 {
-    matmul_cluster_impl(&A_tmap, &B_tmap, &C_tmap, C_ptr, M, N, K);
+    matmul_cluster_impl(&A_tmap, &B_tmap, &C_tmap, C_ptr, M, N, K
+#if MMC_N_EXTRA >= 1
+        , mmc_c0
+#endif
+    );
 }

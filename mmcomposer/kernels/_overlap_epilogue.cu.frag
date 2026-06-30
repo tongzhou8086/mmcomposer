@@ -32,6 +32,23 @@
                     #pragma unroll
                     for (int chunk = 0; chunk < NUM_CHUNKS; chunk++) {
                         float t[LOADS_PER_WARP][8];
+#if MMC_N_EXTRA >= 1
+                        // Extra epilogue input (phase 2): load this chunk's tile of
+                        // mmc_c0[M,N] directly into registers, at the SAME (row,col)
+                        // each thread's accumulator covers.  Issued *before* the TMEM
+                        // load so the GMEM latency overlaps the load + wait below.
+                        float mmc_c0v[LOADS_PER_WARP][8];
+                        #pragma unroll
+                        for (int n = 0; n < LOADS_PER_WARP; n++) {
+                            const int local_n = col_warp * LOADS_PER_WARP + n;
+                            const long long gidx = (long long)(EPI_OUT_ROW + my_row) * N
+                                + (EPI_OUT_COL_BASE + chunk * STORE_N + local_n * 8);
+                            const int4 craw = *reinterpret_cast<const int4*>(mmc_c0 + gidx);
+                            const __nv_bfloat16* ch = reinterpret_cast<const __nv_bfloat16*>(&craw);
+                            #pragma unroll
+                            for (int k = 0; k < 8; k++) mmc_c0v[n][k] = __bfloat162float(ch[k]);
+                        }
+#endif
                         #pragma unroll
                         for (int n = 0; n < LOADS_PER_WARP; n++) {
                             const int local_n = col_warp * LOADS_PER_WARP + n;
@@ -73,7 +90,13 @@
                             __nv_bfloat162 pk[4];
                             #pragma unroll
                             for (int i = 0; i < 4; i++)
+#if MMC_N_EXTRA >= 1
+                                pk[i] = __floats2bfloat162_rn(
+                                    mmc_epi(t[n][2 * i],     mmc_c0v[n][2 * i]),
+                                    mmc_epi(t[n][2 * i + 1], mmc_c0v[n][2 * i + 1]));
+#else
                                 pk[i] = __floats2bfloat162_rn(mmc_epi(t[n][2 * i]), mmc_epi(t[n][2 * i + 1]));
+#endif
                             const int local_n = col_warp * LOADS_PER_WARP + n;
                             const int swizzled_n = local_n ^ (my_row & 7);
                             __nv_bfloat16* write_ptr =

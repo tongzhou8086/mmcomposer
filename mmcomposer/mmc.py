@@ -105,13 +105,14 @@ def _build(config):
     return runtime.kernel(config, cubin)
 
 
-def _build_epilogue(config, cuda_expr):
+def _build_epilogue(config, cuda_expr, n_extra=0):
     """Render -> compile -> bind for `config` with an elementwise epilogue spliced
     in.  Uses the same `autotune._render` path (and build tag) as the sweep, so the
-    winner's already-compiled fused cubin is reused (compile_one skips nvcc)."""
+    winner's already-compiled fused cubin is reused (compile_one skips nvcc).
+    `n_extra` = number of extra epilogue inputs (phase 2)."""
     tier = _tier_for(config)
     build_root = kcache.cache_root() / "build" / DEFAULT_ARCH
-    src = autotune._render(tier, config, build_root, epilogue=cuda_expr)
+    src = autotune._render(tier, config, build_root, epilogue=cuda_expr, n_extra=n_extra)
     cubin = compiler.compile_one(src)
     return runtime.kernel(config, cubin)
 
@@ -193,6 +194,7 @@ def get_epilogue_kernel(a, b, epilogue, *, tune_if_missing=True):
     config is the best one for the fused kernel, not the plain GEMM), and caches it."""
     M, N, K = _validate(a, b)
     cuda, tag = _trace(epilogue)             # trace + lower (memoized by object)
+    n_extra = epi.n_inputs(epilogue)
     key = kcache.shape_key(M, N, K, DEFAULT_DTYPE, DEFAULT_ARCH, epi=tag)
     if key in _EPI_KERNELS:
         return _EPI_KERNELS[key]
@@ -206,7 +208,7 @@ def get_epilogue_kernel(a, b, epilogue, *, tune_if_missing=True):
               f"(one-time per machine; cached to {kcache.cache_root()} and reused later)",
               file=sys.stderr, flush=True)
         t0 = time.monotonic()
-        summary = tune(M, N, K, epilogue=cuda, epi_tag=tag,
+        summary = tune(M, N, K, epilogue=cuda, epi_tag=tag, n_extra=n_extra,
                        ref_fn=epi.to_torch(epilogue), on_event=_autotune_progress())
         rec = kcache.best(key)
         if rec is None:
@@ -215,12 +217,12 @@ def get_epilogue_kernel(a, b, epilogue, *, tune_if_missing=True):
         print(f"[mmcomposer] auto-tune complete in {time.monotonic() - t0:.0f}s: "
               f"best {rec['tflops']:.0f} TFLOPS ({rec['vs_cublas']:.0%} of cuBLAS) -- cached.",
               file=sys.stderr, flush=True)
-    fn = _build_epilogue(rec["config"], cuda)
+    fn = _build_epilogue(rec["config"], cuda, n_extra)
     _EPI_KERNELS[key] = fn
     return fn
 
 
-def matmul(a, b, *, out=None, sync=False, tune_if_missing=True, epilogue=None):
+def matmul(a, b, *, out=None, sync=False, tune_if_missing=True, epilogue=None, aux=None):
     """``c = a @ b`` with the best-known MMComposer kernel for this shape
     (auto-tunes + caches on the first call for a new shape).
 
@@ -228,13 +230,24 @@ def matmul(a, b, *, out=None, sync=False, tune_if_missing=True, epilogue=None):
     returns immediately (the result is ordered before following torch ops).  Pass
     ``out=`` to reuse an output buffer, or ``sync=True`` to block until done.
 
-    Pass ``epilogue=`` (a one-in/one-out callable over the epilogue DSL, see
-    mmcomposer/epilogue.py) to fuse an elementwise op onto each output element,
-    e.g. ``mmc.matmul(a, b, epilogue=lambda x: x * sigmoid(x))`` for SiLU."""
+    Pass ``epilogue=`` (a callable over the epilogue DSL, see mmcomposer/epilogue.py)
+    to fuse an elementwise op onto each output element, e.g.
+    ``mmc.matmul(a, b, epilogue=lambda x: x * sigmoid(x))`` for SiLU.  A multi-arg
+    epilogue takes extra same-shape ``[M,N]`` inputs via ``aux=[c, ...]``, e.g.
+    ``mmc.matmul(a, b, epilogue=lambda x, c: x * c, aux=[c])`` for ``(a@b)*c``."""
     if epilogue is None:
         return get_tuned_kernel(a, b, tune_if_missing=tune_if_missing)(a, b, out, sync=sync)
+    import torch
+    aux = tuple(aux or ())
+    M, N, _ = _validate(a, b)
+    want = epi.n_inputs(epilogue)
+    if len(aux) != want:
+        raise ValueError(f"epilogue takes {want} extra input(s); got aux of length {len(aux)}")
+    for i, t in enumerate(aux):
+        if t.dtype != torch.bfloat16 or tuple(t.shape) != (M, N) or not t.is_contiguous():
+            raise ValueError(f"aux[{i}] must be a contiguous bf16 tensor of shape ({M}, {N})")
     return get_epilogue_kernel(a, b, epilogue,
-                               tune_if_missing=tune_if_missing)(a, b, out, sync=sync)
+                               tune_if_missing=tune_if_missing)(a, b, out, aux=aux, sync=sync)
 
 
 def matmul_swiglu_dual_b_ns6_s2(a, b_left, b_gate, *, c=None, d=None, sync=False):

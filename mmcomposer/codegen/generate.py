@@ -39,25 +39,31 @@ def generate_kernel(config: dict) -> str:
     mmcomposer/epilogue.py) applied to each output element before the bf16 store."""
     spec.validate(config)
     knobs = spec.int_knobs(config)
+    # MMC_N_EXTRA = number of extra epilogue inputs (phase 2); always defined so
+    # the `#if MMC_N_EXTRA >= 1` guards (extra kernel param + the extra-input load)
+    # resolve for every kernel, plain matmul (0) included.
+    knobs["MMC_N_EXTRA"] = int(config.get("MMC_N_EXTRA", 0))
     src = (fragments.KERNELS_DIR / config["skeleton"] / "kernel.cu").read_text()
     src = fragments.splice(src)                              # inject shared building blocks
     src = directives.resolve(src, knobs)                     # drop dead #if branches
     src = substitute.substitute_kernel_constexprs(src, **knobs)   # set live constants
-    src = _inject_epilogue(src, config.get("EPILOGUE_FN", "x"))
+    src = _inject_epilogue(src, config.get("EPILOGUE_FN", "x"), knobs["MMC_N_EXTRA"])
     if _RESIDUAL_DIRECTIVE.search(src):
         raise RuntimeError("codegen: unresolved #if directive remained after resolve()")
     return src
 
 
-# The epilogue fragments call mmc_epi(x) around every fp32->bf16 conversion;
-# define it here from the (lowered) EDL expression.  Identity ("x") inlines to a
-# no-op, so kernels with no epilogue are unchanged.
+# The epilogue fragments call mmc_epi(x[, c0, ...]) around every fp32->bf16
+# conversion; define it here from the (lowered) EDL expression.  Identity ("x")
+# inlines to a no-op, so kernels with no epilogue are unchanged.  Extra params
+# c0.. (phase 2) are the per-element extra inputs.
 _DEVICE_DECL = re.compile(r'(?m)^(__device__|extern\s+"C"|template\b|__global__)')
 
 
-def _inject_epilogue(src: str, expr: str) -> str:
+def _inject_epilogue(src: str, expr: str, n_extra: int = 0) -> str:
+    params = "float x" + "".join(f", float c{i}" for i in range(n_extra))
     decl = ("// ---- elementwise epilogue (EDL): per-element fp32 map before bf16 store ----\n"
-            f"__device__ __forceinline__ float mmc_epi(float x) {{ return {expr}; }}\n\n")
+            f"__device__ __forceinline__ float mmc_epi({params}) {{ return {expr}; }}\n\n")
     m = _DEVICE_DECL.search(src)
     if not m:
         raise RuntimeError("codegen: no device-scope anchor to inject mmc_epi before")
