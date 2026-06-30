@@ -164,6 +164,21 @@ def tune(M, N, K, *, tier_dirs, filters, dtype="bf16", arch=kcache.DEFAULT_ARCH,
     # the context and kills the whole sweep -- so filter by fit up front.
     combo_list = [(tier, k) for (tier, k) in combos.valid_combos(tier_dirs, filters)
                   if _fits(tier, k, M, N, K)]
+    # Drop combos whose dynamic SMEM exceeds the device's max opt-in: those fail
+    # at cuFuncSetAttribute / launch (CUDA_ERROR_INVALID_VALUE / LAUNCH_FAILED) and
+    # a launch failure poisons the context -> can kill the whole sweep.
+    _, num_sms = runtime._ensure_cuda()
+    rt, driver = runtime._backends()
+    max_smem = rt.cu(driver.cuDeviceGetAttribute(
+        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
+        runtime._device))
+
+    def _smem_ok(tier, k):
+        cfg = runtime.config_from_combo(tier, k)
+        _, _, shared = runtime.launch_dims(cfg, M, N, K, num_sms=num_sms)
+        return shared <= max_smem
+
+    combo_list = [(tier, k) for (tier, k) in combo_list if _smem_ok(tier, k)]
     n_valid = len(combo_list)
     emit("enumerate", n_valid=n_valid)
 
@@ -196,17 +211,22 @@ def tune(M, N, K, *, tier_dirs, filters, dtype="bf16", arch=kcache.DEFAULT_ARCH,
     for i, (tier, k, src) in enumerate(ok, 1):
         cfg = runtime.config_from_combo(tier, k)
         gemm = runtime.kernel(cfg, comp[src].cubin)
-        c = torch.zeros(M, N, dtype=torch.bfloat16, device="cuda")
         try:
+            # Everything that touches CUDA is inside the try: a bad launch can
+            # poison the context, after which even torch.zeros below fails -- so
+            # every subsequent combo skips cleanly and the winner is taken from the
+            # combos measured before the poison (rather than crashing the sweep).
+            c = torch.zeros(M, N, dtype=torch.bfloat16, device="cuda")
             gemm(a, b, c, aux=aux)             # one launch -> verify
             rel = bench.rel_error(c, ref)
-        except Exception:                      # noqa: BLE001  (bad launch -> skip combo)
+            if rel >= tol:
+                emit("benchmark", done=i, total=n_compiled)
+                continue
+            r = bench.benchmark(lambda: gemm(a, b, c, aux=aux, sync=False),
+                                flops=flops, **bench_kw)
+        except Exception:                      # noqa: BLE001
             emit("benchmark", done=i, total=n_compiled)
             continue
-        if rel >= tol:
-            emit("benchmark", done=i, total=n_compiled)
-            continue
-        r = bench.benchmark(lambda: gemm(a, b, c, aux=aux, sync=False), flops=flops, **bench_kw)
         kc.put(key, {"config": _record_config(tier, k),
                      "tflops": r.tflops,
                      "vs_cublas": (r.tflops / cub) if cub else None,
