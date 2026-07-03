@@ -27,6 +27,16 @@ def test_validate_returns_packed_shape():
     assert swiglu.validate(a, bl, bg) == (256, 512, 128)   # N = 2 * 256
 
 
+def test_validate_accepts_packed_b_column_views():
+    a = torch.zeros(256, 128, dtype=torch.bfloat16)
+    b = torch.zeros(128, 512, dtype=torch.bfloat16)
+    bl = b[:, :256]
+    bg = b[:, 256:]
+    assert not bl.is_contiguous()
+    assert bl.stride() == (512, 1)
+    assert swiglu.validate(a, bl, bg) == (256, 512, 128)
+
+
 def test_validate_rejects_bad_inputs():
     a = torch.zeros(256, 128, dtype=torch.bfloat16)
     bl = torch.zeros(128, 256, dtype=torch.bfloat16)
@@ -42,6 +52,8 @@ def test_validate_rejects_bad_inputs():
     with pytest.raises(ValueError):                          # N=2*192 not mult of 256
         swiglu.validate(a, torch.zeros(128, 192, dtype=torch.bfloat16),
                         torch.zeros(128, 192, dtype=torch.bfloat16))
+    with pytest.raises(ValueError):                         # non-unit column stride
+        swiglu.validate(a, torch.zeros(128, 512, dtype=torch.bfloat16)[:, ::2], bg)
 
 
 def _reference(a, b_left, b_gate, N):
@@ -80,6 +92,29 @@ def test_swiglu_matches_reference():
     # reuse buffers + same callable path
     c2, d2 = mmc.matmul_swiglu_dual_b_ns6_s2(a, b_left, b_gate, c=c, d=d)
     assert c2.data_ptr() == c.data_ptr() and d2.data_ptr() == d.data_ptr()
+
+
+def test_swiglu_matches_reference_for_packed_b_views():
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    M, H, K = 512, 1024, 256          # N = 2H = 2048
+    torch.manual_seed(1)
+    a = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")
+    b = torch.randn(K, 2 * H, dtype=torch.bfloat16, device="cuda")
+    b_left = b[:, :H]
+    b_gate = b[:, H:]
+    assert not b_left.is_contiguous()
+    assert b_left.stride() == (2 * H, 1)
+    N = 2 * H
+
+    c, d = mmc.matmul_swiglu_dual_b_ns6_s2(a, b_left, b_gate)
+    c_ref, d_ref = _reference(a, b_left, b_gate, N)
+
+    c_rel = ((c.float() - c_ref.float()).norm() / c_ref.float().norm()).item()
+    d_rel = ((d.float() - d_ref.float()).norm() / d_ref.float().norm()).item()
+    print(f"    packed-view C rel_err={c_rel:.3e}  D rel_err={d_rel:.3e}")
+    assert c_rel < 5e-2, f"C rel err too high: {c_rel}"
+    assert d_rel < 5e-2, f"D rel err too high: {d_rel}"
 
 
 if __name__ == "__main__":

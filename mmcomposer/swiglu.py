@@ -6,8 +6,8 @@ BM128/BN256/BK64, NS=6, 2-CTA cluster, 2-stage TMA store).  Two B halves in,
 two outputs out:
 
     A[M, K]            bf16, row-major
-    B_left[K, N/2]     bf16, row-major     (the "up"   projection weights)
-    B_gate[K, N/2]     bf16, row-major     (the "gate" projection weights)
+    B_left[K, N/2]     bf16, row-major or row-major column view
+    B_gate[K, N/2]     bf16, row-major or row-major column view
   ->
     C[M, N]            packed wide GEMM, per BN=256 tile as [left128 | gate128]
     D[M, N/2]          left * silu(gate)   (the SwiGLU activation)
@@ -45,6 +45,19 @@ _SRC = pathlib.Path(__file__).resolve().parent / "kernels" / "swiglu" / \
 
 
 # ---- validation (pure) ----------------------------------------------------
+def _check_dense_or_column_view(name, t, *, elem_bytes=ELEM_BYTES):
+    if t.stride(1) != 1:
+        raise ValueError(f"{name} must have unit column stride")
+    if t.stride(0) < t.shape[1]:
+        raise ValueError(f"{name} row stride {t.stride(0)} is too small for width {t.shape[1]}")
+    if t.stride(0) <= 0:
+        raise ValueError(f"{name} must have positive row stride")
+    if t.data_ptr() % 16:
+        raise ValueError(f"{name} data pointer must be 16-byte aligned for TMA")
+    if (t.stride(0) * elem_bytes) % 16:
+        raise ValueError(f"{name} row stride must be 16-byte aligned for TMA")
+
+
 def validate(a, b_left, b_gate):
     """Check dtype/layout/shape and return (M, N, K).  N is the *packed* width
     (= 2 * b_left.shape[1])."""
@@ -54,8 +67,8 @@ def validate(a, b_left, b_gate):
             raise TypeError(f"swiglu supports bf16 only ({name} is {t.dtype})")
         if t.dim() != 2:
             raise ValueError(f"{name} must be 2-D, got {t.dim()}-D")
-        if not t.is_contiguous():
-            raise ValueError(f"{name} must be row-major contiguous")
+    if not a.is_contiguous():
+        raise ValueError("a must be row-major contiguous")
     M, Ka = a.shape
     Kl, Hl = b_left.shape
     Kg, Hg = b_gate.shape
@@ -64,6 +77,8 @@ def validate(a, b_left, b_gate):
                          f"b_gate {tuple(b_gate.shape)}")
     if Hl != Hg:
         raise ValueError(f"b_left and b_gate must share N/2: {Hl} vs {Hg}")
+    _check_dense_or_column_view("b_left", b_left)
+    _check_dense_or_column_view("b_gate", b_gate)
     N = 2 * Hl
     errs = []
     if M % (CTA_GROUP * BM):
@@ -111,16 +126,18 @@ def _descriptors(a, b_left, b_gate, c, d, M, N, K):
     """A, B_left, B_gate, C, D TMA descriptors (np arrays)."""
     rt, _ = runtime._backends()
     H = N // 2
+    bl_stride = int(b_left.stride(0)) * ELEM_BYTES
+    bg_stride = int(b_gate.stride(0)) * ELEM_BYTES
     A = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=a.data_ptr(),
                              global_dim=[K, M], global_strides=[K * ELEM_BYTES],
                              box_dim=[BK, BM], element_strides=[1, 1],
                              swizzle=rt.TMA_SWIZZLE_128B)
     BL = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=b_left.data_ptr(),
-                              global_dim=[H, K], global_strides=[H * ELEM_BYTES],
+                              global_dim=[H, K], global_strides=[bl_stride],
                               box_dim=[STORE_N, BK], element_strides=[1, 1],
                               swizzle=rt.TMA_SWIZZLE_128B)
     BG = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=b_gate.data_ptr(),
-                              global_dim=[H, K], global_strides=[H * ELEM_BYTES],
+                              global_dim=[H, K], global_strides=[bg_stride],
                               box_dim=[STORE_N, BK], element_strides=[1, 1],
                               swizzle=rt.TMA_SWIZZLE_128B)
     C = rt.encode_tensor_map(dtype=rt.TMA_BFLOAT16, rank=2, gptr=c.data_ptr(),
@@ -170,7 +187,7 @@ def kernel():
             stream = torch.cuda.current_stream(a.device).cuda_stream
         cubin = _ensure_cubin(compiler.DEFAULT_ARCH)
         skey = (M, N, K, a.data_ptr(), b_left.data_ptr(), b_gate.data_ptr(),
-                c.data_ptr(), d.data_ptr())
+                b_left.stride(), b_gate.stride(), c.data_ptr(), d.data_ptr())
         st = state.get(skey)
         if st is None:
             st = _prepare(a, b_left, b_gate, c, d, M, N, K, cubin)

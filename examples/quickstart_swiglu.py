@@ -4,8 +4,9 @@
     python examples/quickstart_swiglu.py 8192             # square 8192
     python examples/quickstart_swiglu.py 32768 4608 768   # M N K
 
-A = [M, K]; the two projection weights B_left, B_gate = [K, N/2]; bf16, M and N
-multiples of 256, K a multiple of 64.  One fused launch returns:
+A = [M, K]; packed projection weight B = [K, N], split by column views into
+B_left, B_gate = [K, N/2]; bf16, M and N multiples of 256, K a multiple of 64.
+One fused launch returns:
 
     c = [M, N]      packed wide GEMM, [left | gate] per BN=256 tile
     d = [M, N/2]    left * silu(gate)   <- the SwiGLU activation
@@ -32,8 +33,9 @@ else:
 
 H = N // 2
 a = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")
-b_left = torch.randn(K, H, dtype=torch.bfloat16, device="cuda")   # "up" projection
-b_gate = torch.randn(K, H, dtype=torch.bfloat16, device="cuda")   # "gate" projection
+b = torch.randn(K, N, dtype=torch.bfloat16, device="cuda")
+b_left = b[:, :H]   # "up" projection, column view into packed B
+b_gate = b[:, H:]   # "gate" projection, column view into packed B
 
 # One fused launch -> packed projections (c) + SwiGLU activation (d).
 # Compiles once per machine, then async on torch's current stream.
