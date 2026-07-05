@@ -43,6 +43,8 @@ def generate_kernel(config: dict) -> str:
     # the `#if MMC_N_EXTRA >= 1` guards (extra kernel param + the extra-input load)
     # resolve for every kernel, plain matmul (0) included.
     knobs["MMC_N_EXTRA"] = int(config.get("MMC_N_EXTRA", 0))
+    # SEGMENTED_PANELS post-dates the schema; default off so old configs render.
+    knobs.setdefault("SEGMENTED_PANELS", 0)
     src = (fragments.KERNELS_DIR / config["skeleton"] / "kernel.cu").read_text()
     src = fragments.splice(src)                              # inject shared building blocks
     src = directives.resolve(src, knobs)                     # drop dead #if branches

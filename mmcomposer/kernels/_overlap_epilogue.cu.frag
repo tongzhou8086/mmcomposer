@@ -22,12 +22,25 @@
                 {
                     constexpr int LOADS_PER_CHUNK = STORE_N / 8;
                     constexpr int LOADS_PER_WARP = LOADS_PER_CHUNK / COL_GROUPS;
+#if SEGMENTED_PANELS
+                    // Segmented panels: this splice runs once per `pass` (one
+                    // 256-wide panel), inside the kernel's two-pass drain loop.
+                    // `pass` and `store_stage` are supplied by that loop; the
+                    // TMEM release keys off pass 1's last chunk.
+                    constexpr int NUM_CHUNKS = BN_PANEL / STORE_N;
+                    static_assert(STORE_N == 64, "pipelined TMA store assumes STORE_N=64");
+                    static_assert(NUM_CHUNKS * STORE_N == BN_PANEL,
+                                  "BN_PANEL must divide into STORE_N chunks");
+                    static_assert(LOADS_PER_WARP * COL_GROUPS == LOADS_PER_CHUNK,
+                                  "STORE_N/8 chunks must divide across column warp groups");
+#else
                     constexpr int NUM_CHUNKS = BN / STORE_N;
                     static_assert(STORE_N == 64, "pipelined TMA store assumes STORE_N=64");
                     static_assert(NUM_CHUNKS * STORE_N == BN, "BN must divide into STORE_N chunks");
                     static_assert(LOADS_PER_WARP * COL_GROUPS == LOADS_PER_CHUNK,
                                   "STORE_N/8 chunks must divide across column warp groups");
                     int store_stage = 0;
+#endif
 
                     #pragma unroll
                     for (int chunk = 0; chunk < NUM_CHUNKS; chunk++) {
@@ -50,8 +63,13 @@
                         #pragma unroll
                         for (int n = 0; n < LOADS_PER_WARP; n++) {
                             const int local_n = col_warp * LOADS_PER_WARP + n;
+#if SEGMENTED_PANELS
+                            const long long gidx = (long long)(EPI_OUT_ROW + my_row) * N
+                                + (EPI_OUT_COL_BASE + pass * BN_PANEL + chunk * STORE_N + local_n * 8);
+#else
                             const long long gidx = (long long)(EPI_OUT_ROW + my_row) * N
                                 + (EPI_OUT_COL_BASE + chunk * STORE_N + local_n * 8);
+#endif
                             const int4 craw = *reinterpret_cast<const int4*>(mmc_c0 + gidx);
                             const __nv_bfloat16* ch = reinterpret_cast<const __nv_bfloat16*>(&craw);
                             #pragma unroll
@@ -62,7 +80,22 @@
                         // The TMEM->reg load above doesn't touch the store buffer, so the
                         // free-store-slot wait below is deferred to just before the buffer write
                         // (and stays before the bar.sync so every warp observes the ew==0 wait).
-#if SINGLE_TMEM_ACCUM
+#if SEGMENTED_PANELS
+                        // Release the one shared accumulator only after the LAST
+                        // panel's last chunk (both [0,256) and [256,512) drained).
+                        if ((pass == 1) && (chunk == NUM_CHUNKS - 1))
+                            tcgen05_fence_before_thread_sync();
+
+                        if (ew == 0)
+                            tma_wait_group<TMA_STORE_STAGES - 1>();
+
+                        asm volatile("bar.sync 1, %0;" :: "n"(EPI_THREADS));
+
+                        if ((pass == 1) && (chunk == NUM_CHUNKS - 1)) {
+                            if (ew == 0 && elect_sync())
+                                signal_sync(buf);
+                        }
+#elif SINGLE_TMEM_ACCUM
                         if (chunk == NUM_CHUNKS - 1)
                             tcgen05_fence_before_thread_sync();
 
@@ -113,8 +146,13 @@
 
                         if (ew == 0 && elect_sync()) {
                             const uint32_t src = STORE_SMEM_BASE + store_stage * STORE_BUF_BYTES;
+#if SEGMENTED_PANELS
+                            tma_2d_store(C_tmap_ptr, src,
+                                         EPI_OUT_COL_BASE + pass * BN_PANEL + chunk * STORE_N, EPI_OUT_ROW);
+#else
                             tma_2d_store(C_tmap_ptr, src,
                                          EPI_OUT_COL_BASE + chunk * STORE_N, EPI_OUT_ROW);
+#endif
                             tma_commit_group();
                         }
 

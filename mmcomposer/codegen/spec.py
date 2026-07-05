@@ -19,6 +19,8 @@ REQUIRED_KNOBS = (
     "TWO_CTA", "EPILOGUE_L1_NO_ALLOC", "EPILOGUE_TMA_PIPELINED",
     "TMA_STORE_STAGES", "SINGLE_TMEM_ACCUM",
 )
+# Knobs added after the schema froze default to "off" for old config JSONs
+# (same pattern as MMC_N_EXTRA): SEGMENTED_PANELS -> 0 in generate_kernel/host.
 
 
 def int_knobs(config: dict) -> dict:

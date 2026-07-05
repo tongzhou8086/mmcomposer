@@ -28,6 +28,7 @@ EPILOGUE_SPLIT = 0
 EPILOGUE_L1_NO_ALLOC = 0
 EPILOGUE_TMA_PIPELINED = 0
 SINGLE_TMEM_ACCUM = 0
+SEGMENTED_PANELS = 0        # 1 = BN512 segmented panel schedule (SEG = NS)
 TWO_CTA      = 1            # 1 = 2-CTA cluster MMA; 0 = single-CTA (grid/SMEM degenerate)
 
 CTA_GROUP    = 2 if TWO_CTA else 1
@@ -46,8 +47,17 @@ if EPILOGUE_OVERLAP and EPILOGUE_TMA_PIPELINED:
 else:
     EPI_LD    = ((BN // 2 + 8) if (EPILOGUE_OVERLAP and EPILOGUE_SPLIT) else (BN + 8))
     EPI_BYTES = BM * EPI_LD * ELEM_BYTES
-SHARED_BYTES = ((NS * SLOT_BYTES + EPI_BYTES) if EPILOGUE_OVERLAP
-                else max(NS * SLOT_BYTES, EPI_BYTES)) + 1024
+if SEGMENTED_PANELS:
+    # Segmented panel schedule: SMEM = [ A ring | B ring | C_store ].
+    # A ring = SEG+1 slots; B ring budget-fills the 14-tile (225 KB) budget.
+    SEG_NA = NS + 1
+    SEG_NB = 14 - TMA_STORE_STAGES - SEG_NA
+    SEG_B_SLOT_BYTES = (BN // 2 // CTA_GROUP) * BK * ELEM_BYTES
+    SHARED_BYTES = SEG_NA * A_SLOT_BYTES + SEG_NB * SEG_B_SLOT_BYTES + EPI_BYTES + 1024
+elif EPILOGUE_OVERLAP:
+    SHARED_BYTES = NS * SLOT_BYTES + EPI_BYTES + 1024
+else:
+    SHARED_BYTES = max(NS * SLOT_BYTES, EPI_BYTES) + 1024
 HERE         = os.path.dirname(os.path.abspath(__file__))
 
 
