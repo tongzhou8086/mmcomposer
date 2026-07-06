@@ -276,9 +276,9 @@ __device__ __forceinline__ void matmul_cluster_impl(
 ) {
     // ── Per-cluster + per-CTA tile coords ───────────────────────────
     //
-    // Grid is (M / (CTA_GROUP*BM)) * (N / BN) flat CTA ids.  Each
+    // Grid is ceil(M / (CTA_GROUP*BM)) * ceil(N / BN) flat CTA ids.  Each
     // *pair* of CTAs forms one cluster; cta_rank picks which CTA in
-    // the pair owns which half.
+    // the pair owns which half.  Ragged edge tiles are clipped by TMA.
     //
     // bid (the cluster id derived from blockIdx.x / CTA_GROUP) is what
     // we'd normally call the grid coordinate; the cluster handles a
@@ -335,8 +335,9 @@ __device__ __forceinline__ void matmul_cluster_impl(
     constexpr int16_t cta_mask = (1 << CTA_GROUP) - 1;     // 0b11 cluster / 0b1 single
 
     // Loop-invariant chunked-walk geometry (GSM swizzle; see overlap path).
-    const int grid_n               = N / BN;
-    const int grid_m_clusters      = M / (CTA_GROUP * BM);
+    // ceil-div (see overlap path): edge tiles rely on TMA out-of-bounds clipping.
+    const int grid_n               = (N + BN - 1) / BN;
+    const int grid_m_clusters      = (M + CTA_GROUP * BM - 1) / (CTA_GROUP * BM);
     const int num_cluster_in_group = GROUP_SIZE_M * grid_n;
     const int num_clusters         = grid_m_clusters * grid_n;
     const int cluster_stride       = (int)gridDim.x / CTA_GROUP;

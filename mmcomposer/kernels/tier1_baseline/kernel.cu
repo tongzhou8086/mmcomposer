@@ -161,8 +161,9 @@ extern "C" __global__ void matmul_dbuf(
     // Same chunked walk as ch09 but at the single-CTA granularity
     // (no cluster division).  GSM=1 collapses to the natural
     // bid_m = blockIdx.x / grid_n, bid_n = blockIdx.x % grid_n.
-    const int grid_m = M / BM;
-    const int grid_n = N / BN;
+    // ceil-div: ragged edge tiles are launched and clipped by TMA out of bounds.
+    const int grid_m = (M + BM - 1) / BM;
+    const int grid_n = (N + BN - 1) / BN;
     const int num_block_in_group = GROUP_SIZE_M * grid_n;
     const int group_id           = blockIdx.x / num_block_in_group;
     const int first_block_m      = group_id * GROUP_SIZE_M;

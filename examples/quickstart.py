@@ -4,7 +4,7 @@
     python examples/quickstart.py 8192        # square 8192
     python examples/quickstart.py 4096 4096 768   # M N K
 
-A = [M, K], B = [K, N]; bf16, M and N multiples of 256, K a multiple of 64.
+A = [M, K], B = [K, N]; bf16, M arbitrary, N a multiple of 8, K a multiple of 64.
 """
 import sys
 import torch

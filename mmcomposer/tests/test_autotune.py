@@ -41,15 +41,17 @@ def test_record_config_has_identity_and_knobs():
 
 
 def test_fits_filters_tile_by_shape():
-    # BN must divide N: a BN=512 combo fits N=4608 (=512*9) but not N=2304 (=512*4.5).
+    # Only BK must divide K now: ragged M/N are launched as ceil-div edge tiles and
+    # clipped by TMA out of bounds, so BN need not divide N and (2*BM) need not
+    # divide M -- an oversized tile just wastes work (the sweep ranks it out).
     tier, k = _one_combo()                              # BN=256
     assert autotune._fits(tier, k, 32768, 2304, 768)    # 256 | 2304
     assert autotune._fits(tier, k, 32768, 4608, 768)
     k512 = {**k, "bn": 512}
     assert autotune._fits(tier, k512, 32768, 4608, 768)         # 512 | 4608
-    assert not autotune._fits(tier, k512, 32768, 2304, 768)     # 512 does NOT divide 2304
-    # 2-CTA cluster needs 2*BM | M, and BK | K
-    assert not autotune._fits(tier, {**k, "bm": 128}, 128, 2304, 768)   # 256 ∤ 128
+    assert autotune._fits(tier, k512, 32768, 2304, 768)         # 512 ∤ 2304 -> still fits (TMA clip)
+    assert autotune._fits(tier, {**k, "bm": 128}, 130, 2304, 768)   # ragged M -> fits
+    # BK must still divide K (the K-loop has no partial-tile path).
     assert not autotune._fits(tier, {**k, "bk": 64}, 32768, 2304, 800)  # 64 ∤ 800
 
 

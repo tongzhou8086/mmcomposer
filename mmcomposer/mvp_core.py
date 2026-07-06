@@ -201,22 +201,16 @@ def validate_config(bm, bn, bk, ns, gsm, nw, *, cluster: bool,
     cta_group = 2 if cluster else 1
     tma_store_stages = normalize_tma_store_stages(tma_pipelined, tma_store_stages)
 
-    # Shape-tiling: does this config's tile geometry tile (M, N, K) exactly?
-    # Pure divisibility, known statically — mirrors the sweep's skip rule.
+    # Shape-tiling: only BK must divide K (the K-loop has no partial-tile path).
+    # M and N need not divide the tile: the kernel launches ceil-div edge tiles
+    # and TMA clips the out-of-bounds box (zero-fill on load, masked on store), so
+    # a ragged M/N -- including M not a multiple of 2*BM under the 2-CTA cluster,
+    # where the trailing rows are simply padded away by the store mask -- is fine.
+    # (N's multiple-of-8 stride-alignment requirement is enforced at the API.)
     if shape is not None:
         M, N, K = shape
-        if M % bm:
-            out.append(f"**M = {M}** must be a multiple of BM = {bm}.")
-        if N % bn:
-            out.append(f"**N = {N}** must be a multiple of BN = {bn}.")
         if K % bk:
             out.append(f"**K = {K}** must be a multiple of BK = {bk}.")
-        if cluster and (M % (cta_group * bm)):
-            out.append(
-                f"**M = {M}**: the 2-CTA cluster tiles {cta_group}×BM = {cta_group * bm} "
-                f"rows per cluster, so M must be a multiple of {cta_group * bm} "
-                f"(M % {cta_group * bm} = {M % (cta_group * bm)}).  Turn off the 2-CTA cluster for this M."
-            )
 
     # Persistent is a launch-side knob; it needs a CTA tile loop to launch
     # with grid < num_tiles.  Both warp-spec paths now have one (the merged

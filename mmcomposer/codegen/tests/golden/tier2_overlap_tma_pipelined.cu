@@ -276,9 +276,9 @@ __device__ __forceinline__ void matmul_cluster_impl(
 ) {
     // ── Per-cluster + per-CTA tile coords ───────────────────────────
     //
-    // Grid is (M / (CTA_GROUP*BM)) * (N / BN) flat CTA ids.  Each
+    // Grid is ceil(M / (CTA_GROUP*BM)) * ceil(N / BN) flat CTA ids.  Each
     // *pair* of CTAs forms one cluster; cta_rank picks which CTA in
-    // the pair owns which half.
+    // the pair owns which half.  Ragged edge tiles are clipped by TMA.
     //
     // bid (the cluster id derived from blockIdx.x / CTA_GROUP) is what
     // we'd normally call the grid coordinate; the cluster handles a
@@ -349,8 +349,10 @@ __device__ __forceinline__ void matmul_cluster_impl(
         const int num_k = K / BK;
         constexpr int16_t cta_mask = (1 << CTA_GROUP) - 1;
 
-        const int grid_m_clusters = M / (CTA_GROUP * BM);
-        const int grid_n          = N / BN;
+        // ceil-div tile counts: a ragged M/N launches partial edge tiles whose
+        // TMA box is clipped out of bounds (zero-fill on load, masked on store).
+        const int grid_m_clusters = (M + CTA_GROUP * BM - 1) / (CTA_GROUP * BM);
+        const int grid_n          = (N + BN - 1) / BN;
         const int num_cluster_in_group = GROUP_SIZE_M * grid_n;
         const int num_clusters = grid_m_clusters * grid_n;
         const int cluster_pid = (int)blockIdx.x / CTA_GROUP;

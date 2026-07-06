@@ -91,9 +91,12 @@ def launch_dims(config, M, N, K, num_sms=None):
     if c.get("persistent") and num_sms:
         grid = (num_sms - num_sms % cta_group, 1, 1)
     elif c["cluster"]:
-        grid = ((M // (cta_group * c["bm"])) * (N // c["bn"]) * cta_group, 1, 1)
+        # ceil-div: edge tiles (M/N not a multiple of the tile) are still launched;
+        # the kernel maps their coords and TMA clips the out-of-bounds box.
+        m_rows = cta_group * c["bm"]
+        grid = (((M + m_rows - 1) // m_rows) * ((N + c["bn"] - 1) // c["bn"]) * cta_group, 1, 1)
     else:
-        grid = ((M // c["bm"]) * (N // c["bn"]), 1, 1)
+        grid = (((M + c["bm"] - 1) // c["bm"]) * ((N + c["bn"] - 1) // c["bn"]), 1, 1)
     return grid, block, shared
 
 

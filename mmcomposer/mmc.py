@@ -10,8 +10,8 @@ Thin glue over the leaves + the autotune orchestrator:
   matmul           = get_tuned_kernel(a, b)(a, b)
 
 v0 constraints (the kernels' limits): bf16 in/out, A (M,K) & B (K,N) row-major
-contiguous, C row-major; M and N multiples of 256, K a multiple of 64; B200
-(sm_100a).  Unsupported inputs raise a clear error.
+contiguous, C row-major; M arbitrary, N a multiple of 8 (TMA stride alignment),
+K a multiple of 64; B200 (sm_100a).  Unsupported inputs raise a clear error.
 """
 from __future__ import annotations
 
@@ -71,15 +71,19 @@ def _shape_dtype(a, b):
         raise ValueError(f"inner dims disagree: {tuple(a.shape)} @ {tuple(b.shape)}")
     if not a.is_contiguous() or not b.is_contiguous():
         raise ValueError("inputs must be row-major contiguous (A: M×K, B: K×N)")
+    # M is arbitrary (it is never a TMA stride -- only a row count, so edge tiles
+    # are handled by ceil-div grid + TMA out-of-bounds clipping).  N must stay a
+    # multiple of 8: the row-major B/C/aux row stride is N*2 bytes and TMA requires
+    # 16-byte-aligned strides.  K stays a multiple of BK=64 (no partial-K path).
     errs = []
-    if M % 256:
-        errs.append(f"M={M} must be a multiple of 256")
-    if N % 256:
-        errs.append(f"N={N} must be a multiple of 256")
+    if M < 1:
+        errs.append(f"M={M} must be positive")
+    if N % 8:
+        errs.append(f"N={N} must be a multiple of 8 (TMA 16-byte stride alignment)")
     if Ka % 64:
         errs.append(f"K={Ka} must be a multiple of 64")
     if errs:
-        raise ValueError("unsupported shape for v0 kernels: " + "; ".join(errs))
+        raise ValueError("unsupported shape: " + "; ".join(errs))
     return M, N, Ka
 
 

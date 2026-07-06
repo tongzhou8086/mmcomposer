@@ -40,9 +40,12 @@ def test_validation_rejects_bad_inputs():
     # inner dims disagree
     assert _raises(ValueError, torch.zeros(256, 32, dtype=torch.bfloat16),
                    torch.zeros(64, 256, dtype=torch.bfloat16))
-    # M not a multiple of 256
-    assert _raises(ValueError, torch.zeros(128, 64, dtype=torch.bfloat16),
-                   torch.zeros(64, 256, dtype=torch.bfloat16))
+    # M is arbitrary now (ragged M -> ceil-div grid + TMA out-of-bounds clip)
+    assert mmc._shape_dtype(torch.zeros(130, 64, dtype=torch.bfloat16),
+                            torch.zeros(64, 256, dtype=torch.bfloat16)) == (130, 256, 64)
+    # N not a multiple of 8 (TMA 16-byte stride alignment)
+    assert _raises(ValueError, torch.zeros(256, 64, dtype=torch.bfloat16),
+                   torch.zeros(64, 260, dtype=torch.bfloat16))
     # K not a multiple of 64
     assert _raises(ValueError, torch.zeros(256, 65, dtype=torch.bfloat16),
                    torch.zeros(65, 256, dtype=torch.bfloat16))

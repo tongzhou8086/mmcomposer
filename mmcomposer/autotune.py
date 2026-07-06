@@ -64,12 +64,13 @@ def with_filter_override(filters, key, spec):
 # Orchestrator
 # ---------------------------------------------------------------------------
 def _fits(tier, k, M, N, K) -> bool:
-    """Whether a (shape-agnostic) combo's tile actually divides this shape.  The
-    tile columns BN must divide N, the per-cluster rows (2*BM for a 2-CTA cluster,
-    else BM) must divide M, and BK must divide K -- otherwise the grid/tiling is
-    wrong and the launch fails (CUDA_ERROR_LAUNCH_FAILED)."""
-    cta = 2 if tier["cluster"] else 1
-    return (M % (cta * k["bm"]) == 0) and (N % k["bn"] == 0) and (K % k["bk"] == 0)
+    """Whether a (shape-agnostic) combo's tile is usable for this shape.  Only BK
+    must divide K (the K-loop has no partial-tile path).  BN need not divide N and
+    the per-cluster rows (2*BM for a 2-CTA cluster, else BM) need not divide M: the
+    kernel launches ceil-div edge tiles and TMA clips the out-of-bounds box, so a
+    ragged M/N is correct (an oversized tile just wastes some work, which the sweep
+    measures and ranks out)."""
+    return K % k["bk"] == 0
 
 
 def _render(tier, k, build_root, epilogue=None, n_extra=0) -> str:
