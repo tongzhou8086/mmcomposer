@@ -57,14 +57,11 @@ def test_validate_rejects_bad_inputs():
 
 
 def _reference(a, b_left, b_gate, N):
-    BN, half = swiglu.BN, swiglu.BN // 2
-    M = a.shape[0]
     left = torch.mm(a, b_left)
     gate = torch.mm(a, b_gate)
-    c_ref = torch.empty(M, N, dtype=torch.bfloat16, device=a.device)
-    cv = c_ref.view(M, N // BN, BN)
-    cv[:, :, :half] = left.view(M, N // BN, half)
-    cv[:, :, half:] = gate.view(M, N // BN, half)
+    # C is the standard combined projection [ left | gate ] = a @ [b_left | b_gate]
+    # (== x @ W1.t()), i.e. the preactivation a training backward pass expects.
+    c_ref = torch.cat([left, gate], dim=1)
     d_ref = (left.float() * (gate.float() * torch.sigmoid(gate.float()))).to(torch.bfloat16)
     return c_ref, d_ref
 

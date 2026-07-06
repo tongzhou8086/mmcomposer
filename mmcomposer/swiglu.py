@@ -9,7 +9,8 @@ two outputs out:
     B_left[K, N/2]     bf16, row-major or row-major column view
     B_gate[K, N/2]     bf16, row-major or row-major column view
   ->
-    C[M, N]            packed wide GEMM, per BN=256 tile as [left128 | gate128]
+    C[M, N]            wide GEMM = [ left(N/2) | gate(N/2) ] = x @ [B_left | B_gate]
+                       (the standard combined preactivation, e.g. to save for backward)
     D[M, N/2]          left * silu(gate)   (the SwiGLU activation)
 
 It compiles the cubin once per machine (cached under the artifact cache) and,
@@ -84,9 +85,10 @@ def validate(a, b_left, b_gate):
     # M is arbitrary: it is only a row count (never a TMA stride), so ragged M is
     # handled by a ceil-div grid + TMA out-of-bounds clipping (trailing rows / a
     # fully-out-of-bounds second cluster CTA are masked away on store).  N must
-    # stay a multiple of BN: the packed C layout writes each BN tile as
-    # [left | gate], so a partial N tile would push its gate half past N and lose
-    # it.  K stays a multiple of BK (the K-loop has no partial-tile path).
+    # stay a multiple of BN: C is written as [ all-left(H) | all-gate(H) ] through a
+    # single [M, 2H] descriptor that clips at 2H, so a partial (H % 128 != 0) left
+    # tile would spill its zero-padding into the gate half.  K stays a multiple of
+    # BK (the K-loop has no partial-tile path).
     if M < 1:
         errs.append(f"M={M} must be positive")
     if N % BN:

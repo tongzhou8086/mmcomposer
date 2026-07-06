@@ -279,7 +279,8 @@ __device__ __forceinline__ void matmul_cluster_impl(
     // *pair* of CTAs forms one cluster; cta_rank picks which CTA in
     // the pair owns which half.  Ragged M launches a partial trailing
     // cluster whose out-of-bounds rows are clipped by TMA on store;
-    // N stays a multiple of BN (the packed [left|gate] store layout).
+    // N stays a multiple of BN: C = [all-left | all-gate] via one [M,2H] descriptor
+    // that clips at 2H, so a partial left tile would spill into the gate half.
     //
     // bid (the cluster id derived from blockIdx.x / CTA_GROUP) is what
     // we'd normally call the grid coordinate; the cluster handles a
@@ -357,7 +358,7 @@ __device__ __forceinline__ void matmul_cluster_impl(
 
         // ceil-div over M: a ragged trailing cluster is launched and its
         // out-of-bounds rows are clipped by TMA on store.  grid_n stays exact
-        // (N must be a multiple of BN -- see the packed [left|gate] layout).
+        // (N must be a multiple of BN -- see the [all-left|all-gate] C layout).
         const int grid_m_clusters = (M + CTA_GROUP * BM - 1) / (CTA_GROUP * BM);
         const int grid_n          = N / BN;
         const int num_cluster_in_group = GROUP_SIZE_M * grid_n;
@@ -543,7 +544,12 @@ __device__ __forceinline__ void matmul_cluster_impl(
                                 C_store + store_stage * BM * STORE_N + my_row * STORE_N + swizzled_n * 8;
                             *reinterpret_cast<int4*>(write_ptr) = *reinterpret_cast<int4*>(pk);
                         }
-                        issue_tma_store(C_tmap_ptr, EPI_OUT_COL_BASE + chunk * STORE_N);
+                        // C is [M, 2H] laid out as [ all-left(H) | all-gate(H) ] so it
+                        // equals x @ [B_left | B_gate] (the standard combined projection,
+                        // the preact a training backward pass expects) -- NOT the old
+                        // per-tile [left|gate] interleave, which permuted columns for H>128.
+                        // left of column-tile cn -> C[:, cn*128 + chunk*STORE_N ...]
+                        issue_tma_store(C_tmap_ptr, EPI_OUT_COL_BASE / 2 + chunk * STORE_N);
 
                         wait_for_store_buffer();
                         #pragma unroll
@@ -560,8 +566,10 @@ __device__ __forceinline__ void matmul_cluster_impl(
                                 C_store + store_stage * BM * STORE_N + my_row * STORE_N + swizzled_n * 8;
                             *reinterpret_cast<int4*>(write_ptr) = *reinterpret_cast<int4*>(pk);
                         }
+                        // gate of column-tile cn -> C[:, H + cn*128 + chunk*STORE_N ...]
+                        // (H = N/2), i.e. the upper half of C, after all the left columns.
                         issue_tma_store(C_tmap_ptr,
-                                        EPI_OUT_COL_BASE + (chunk + HALF_CHUNKS) * STORE_N);
+                                        N / 2 + EPI_OUT_COL_BASE / 2 + chunk * STORE_N);
 
                         wait_for_store_buffer();
                         #pragma unroll
