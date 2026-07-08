@@ -22,7 +22,7 @@ def test_public_api_present_and_callable():
 
 def test_leaf_modules_exposed():
     for name in ("combos", "compiler", "runtime", "benchmark",
-                 "cache", "leaderboard", "autotune", "autotune_isolated"):
+                 "cache", "leaderboard", "autotune", "autotune_isolated", "hopper"):
         assert hasattr(mmc, name), name
 
 

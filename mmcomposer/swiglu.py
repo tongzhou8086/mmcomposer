@@ -46,6 +46,22 @@ _SRC = pathlib.Path(__file__).resolve().parent / "kernels" / "swiglu" / \
 
 
 # ---- validation (pure) ----------------------------------------------------
+def _is_blackwell_device(device=None) -> bool:
+    import torch
+
+    if not torch.cuda.is_available():
+        return False
+    major, _ = torch.cuda.get_device_capability(device)
+    return major == 10
+
+
+def _require_blackwell_device(device):
+    if not _is_blackwell_device(device):
+        raise NotImplementedError(
+            "matmul_swiglu_dual_b_ns6_s2 is currently a Blackwell sm_100a fixed "
+            "kernel; Hopper support has not been added yet.")
+
+
 def _check_dense_or_column_view(name, t, *, elem_bytes=ELEM_BYTES):
     if t.stride(1) != 1:
         raise ValueError(f"{name} must have unit column stride")
@@ -186,6 +202,7 @@ def kernel():
 
     def call(a, b_left, b_gate, c=None, d=None, *, sync=False, stream=None):
         M, N, K = validate(a, b_left, b_gate)
+        _require_blackwell_device(a.device)
         H = N // 2
         if c is None:
             c = torch.empty(M, N, dtype=torch.bfloat16, device=a.device)

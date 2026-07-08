@@ -74,8 +74,19 @@ def test_matmul_end_to_end_after_pretune():
     if not torch.cuda.is_available():
         print("    SKIP (no CUDA)")
         return
-    from mmcomposer import autotune
     M = N = K = 512
+    if torch.cuda.get_device_capability()[0] == 9:
+        torch.manual_seed(0)
+        a = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")
+        b = torch.randn(K, N, dtype=torch.bfloat16, device="cuda")
+        ref = a.float() @ b.float()
+        c = mmc.matmul(a, b, sync=True)
+        rel = ((c.float() - ref).norm() / ref.norm()).item()
+        print(f"    Hopper fixed matmul rel err = {rel:.3e}")
+        assert rel < 5e-2
+        return
+
+    from mmcomposer import autotune
     # pre-populate the (shared, temp) cache with a tiny sweep so matmul hits it
     ws = list(dict.fromkeys(t["dir"] for k, t in __import__("mmcomposer").mvp_core.TIER_MAP.items()
                             if t and k[0]))

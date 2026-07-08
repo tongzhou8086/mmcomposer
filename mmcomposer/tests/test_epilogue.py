@@ -155,6 +155,8 @@ def _gpu_ctx():
     import torch
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
+    if torch.cuda.get_device_capability()[0] == 9:
+        pytest.skip("Hopper epilogue fusion path is not implemented yet")
     from mmcomposer import autotune, mvp_core as mc, cache as kc
     import mmcomposer.mmc as mmc
 

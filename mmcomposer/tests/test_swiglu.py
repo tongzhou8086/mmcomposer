@@ -70,6 +70,8 @@ def _reference(a, b_left, b_gate, N):
 def test_swiglu_matches_reference():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
+    if torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("fixed Swiglu kernel is Blackwell sm_100a only")
     M, H, K = 512, 1024, 256          # N = 2H = 2048
     torch.manual_seed(0)
     a = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")
@@ -94,6 +96,8 @@ def test_swiglu_matches_reference():
 def test_swiglu_matches_reference_for_packed_b_views():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
+    if torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("fixed Swiglu kernel is Blackwell sm_100a only")
     M, H, K = 512, 1024, 256          # N = 2H = 2048
     torch.manual_seed(1)
     a = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")

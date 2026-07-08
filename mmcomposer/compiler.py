@@ -16,6 +16,7 @@ the two are unified when codegen/runtime are promoted (see DESIGN.md).
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -56,7 +57,7 @@ def compile_one(src_path: str, arch: str = DEFAULT_ARCH,
     cubin_path = cubin_path_for(src_path, arch)
     if not force and _up_to_date(src_path, cubin_path):
         return cubin_path
-    nvcc = os.environ.get("NVCC", "nvcc")
+    nvcc = os.environ.get("NVCC") or shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
     tmp = f"{cubin_path}.tmp.{os.getpid()}"
     cmd = [nvcc, f"-arch={arch}", "-O3", "--std=c++17", "--cubin",
            *(extra_opts or []), src_path, "-o", tmp]

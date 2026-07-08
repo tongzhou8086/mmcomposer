@@ -1,7 +1,7 @@
 """mmc -- the public Python API for MMComposer (see mmcomposer/DESIGN.md).
 
     import mmc
-    c = mmc.matmul(a, b)               # auto-tunes + caches on first sight of a shape
+    c = mmc.matmul(a, b)               # Hopper fixed WS or Blackwell auto-tuned kernel
     gemm = mmc.get_tuned_kernel(a, b)  # reusable callable for that shape
     mmc.tune(M, N, K)                  # explicit offline pre-tune
 
@@ -9,9 +9,11 @@ Thin glue over the leaves + the autotune orchestrator:
   get_tuned_kernel = cache.best -> (hit: build callable) | (miss: autotune.tune -> build)
   matmul           = get_tuned_kernel(a, b)(a, b)
 
-v0 constraints (the kernels' limits): bf16 in/out, A (M,K) & B (K,N) row-major
-contiguous, C row-major; M arbitrary, N a multiple of 8 (TMA stride alignment),
-K a multiple of 64; B200 (sm_100a).  Unsupported inputs raise a clear error.
+v0 constraints: bf16 in/out, A (M,K) and B (K,N) row-major contiguous, C row-major.
+On Hopper (sm_90a), plain GEMM uses the fixed WS BM128/BN256/BK64/WG2/NS4/GM8
+kernel.  On Blackwell (sm_100a), plain GEMM uses the existing autotuned
+generated-kernel path with arbitrary M, N a multiple of 8 for TMA stride
+alignment, and K a multiple of 64.  Unsupported inputs raise a clear error.
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ from . import cache as kcache
 from . import autotune
 from . import autotune_isolated
 from . import epilogue as epi
+from . import hopper as _hopper
 from . import swiglu as _swiglu
 
 DEFAULT_DTYPE = "bf16"
@@ -40,6 +43,7 @@ _EPI_KERNELS: dict = {}        # (shape_key, epilogue_digest) -> callable
 # not re-traced every call (a fresh inline lambda each call still re-traces --
 # define the epilogue once and reuse it in hot loops).
 _TRACE_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_HOPPER_FIXED_WS = None        # fixed Hopper WS kernel callable (lazy, shape-agnostic)
 _SWIGLU_DUAL_B_NS6_S2 = None   # the fixed swiglu kernel callable (lazy, shape-agnostic)
 
 
@@ -252,8 +256,17 @@ def matmul(a, b, *, out=None, sync=False, tune_if_missing=True, epilogue=None,
     Pass ``autotune_isolated=True`` to use process-isolated autotuning on a cold
     cache miss."""
     if epilogue is None:
+        if getattr(a, "is_cuda", False) and _hopper.is_hopper_device(a.device):
+            global _HOPPER_FIXED_WS
+            if _HOPPER_FIXED_WS is None:
+                _HOPPER_FIXED_WS = _hopper.kernel()
+            return _HOPPER_FIXED_WS(a, b, out, sync=sync)
         return get_tuned_kernel(a, b, tune_if_missing=tune_if_missing,
                                 autotune_isolated=autotune_isolated)(a, b, out, sync=sync)
+    if getattr(a, "is_cuda", False) and _hopper.is_hopper_device(a.device):
+        raise NotImplementedError(
+            "Hopper mmc.matmul currently supports plain GEMM only; epilogue fusion "
+            "still uses the Blackwell codegen path and has not been ported to sm_90.")
     import torch
     aux = tuple(aux or ())
     M, N, _ = _validate(a, b)
