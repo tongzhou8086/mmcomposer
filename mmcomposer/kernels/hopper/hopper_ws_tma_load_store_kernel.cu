@@ -249,7 +249,7 @@ __device__ __forceinline__ void hopper_ws_tma_load_store_impl(
     __syncthreads();
 
     const int num_k_tiles = K / BK;
-    const int num_pid_m = M / BM;
+    const int num_pid_m = (M + BM - 1) / BM;
     const int num_pid_n = N / BN;
     const int total_tiles = num_pid_m * num_pid_n;
 

@@ -69,8 +69,8 @@ def validate(a, b):
     if not a.is_contiguous() or not b.is_contiguous():
         raise ValueError("inputs must be row-major contiguous (A: MxK, B: KxN)")
     errs = []
-    if M % BM:
-        errs.append(f"M={M} must be a multiple of {BM}")
+    if M < 1:
+        errs.append(f"M={M} must be positive")
     if N % BN:
         errs.append(f"N={N} must be a multiple of {BN}")
     if Ka % BK:
@@ -131,7 +131,7 @@ def _ensure_cubin() -> str:
 
 
 def launch_dims(M: int, N: int, K: int, num_sms: int):
-    total_tiles = (M // BM) * (N // BN)
+    total_tiles = ((M + BM - 1) // BM) * (N // BN)
     grid = (min(num_sms, total_tiles), 1, 1)
     block = (THREADS, 1, 1)
     return grid, block, SHARED_BYTES

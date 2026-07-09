@@ -69,6 +69,26 @@ def test_get_tuned_kernel_raises_when_cold_and_no_tune():
     assert raised
 
 
+def test_hopper_matmul_accepts_ragged_m():
+    import torch
+    if not torch.cuda.is_available():
+        print("    SKIP (no CUDA)")
+        return
+    if torch.cuda.get_device_capability()[0] != 9:
+        print("    SKIP (not Hopper)")
+        return
+    M, N, K = 513, 512, 512
+    torch.manual_seed(1)
+    a = torch.randn(M, K, dtype=torch.bfloat16, device="cuda")
+    b = torch.randn(K, N, dtype=torch.bfloat16, device="cuda")
+    ref = a.float() @ b.float()
+    c = mmc.matmul(a, b, sync=True)
+    assert tuple(c.shape) == (M, N)
+    rel = ((c.float() - ref).norm() / ref.norm()).item()
+    print(f"    Hopper ragged-M matmul rel err = {rel:.3e}")
+    assert rel < 5e-2
+
+
 def test_matmul_end_to_end_after_pretune():
     import torch
     if not torch.cuda.is_available():
