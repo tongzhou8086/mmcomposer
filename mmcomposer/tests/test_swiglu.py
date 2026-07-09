@@ -64,15 +64,25 @@ def _small_cuda_swiglu_inputs(seed=0):
     return a, b[:, :H], b[:, H:]
 
 
-def test_general_api_hopper_paths_are_explicitly_staged():
+def test_general_api_hopper_no_preact_matches_reference():
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
     if torch.cuda.get_device_capability()[0] != 9:
         pytest.skip("not Hopper")
     a, b_left, b_gate = _small_cuda_swiglu_inputs(seed=10)
 
-    with pytest.raises(NotImplementedError, match="store_preact=False"):
-        mmc.matmul_swiglu_dual_b(a, b_left, b_gate)
+    d = mmc.matmul_swiglu_dual_b(a, b_left, b_gate, sync=True)
+    left = a @ b_left
+    gate = a @ b_gate
+    ref = (left.float() * (gate.float() * torch.sigmoid(gate.float()))).to(torch.bfloat16)
+    rel = ((d.float() - ref.float()).norm() / ref.float().norm()).item()
+    print(f"    Hopper no-preact SwiGLU rel_err={rel:.3e}")
+    assert tuple(d.shape) == tuple(ref.shape)
+    assert rel < 5e-2
+
+    d2 = mmc.matmul_swiglu_dual_b(a, b_left, b_gate, out=d, sync=True)
+    assert d2.data_ptr() == d.data_ptr()
+
     with pytest.raises(NotImplementedError, match="store_preact=True"):
         mmc.matmul_swiglu_dual_b(a, b_left, b_gate, store_preact=True)
 

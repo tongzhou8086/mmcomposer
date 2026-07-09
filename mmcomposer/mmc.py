@@ -31,6 +31,7 @@ from . import autotune
 from . import autotune_isolated
 from . import epilogue as epi
 from . import hopper as _hopper
+from . import hopper_swiglu as _hopper_swiglu
 from . import swiglu as _swiglu
 
 DEFAULT_DTYPE = "bf16"
@@ -45,6 +46,7 @@ _EPI_KERNELS: dict = {}        # (shape_key, epilogue_digest) -> callable
 _TRACE_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 _HOPPER_FIXED_WS = None        # fixed Hopper WS kernel callable (lazy, shape-agnostic)
 _SWIGLU_DUAL_B_NS6_S2 = None   # the fixed swiglu kernel callable (lazy, shape-agnostic)
+_HOPPER_SWIGLU_DUAL_B = None       # fixed Hopper no-preact SwiGLU callable
 
 
 def _trace(epilogue):
@@ -318,8 +320,7 @@ def matmul_swiglu_dual_b(a, b_left, b_gate, *, store_preact=False, preact=None,
 
     Current backend coverage:
       * Blackwell: ``store_preact=True`` dispatches to the fixed ns6/s2 kernel.
-      * Hopper: the first kernel will target ``store_preact=False``; until that
-        kernel lands this path raises ``NotImplementedError``.
+      * Hopper: ``store_preact=False`` dispatches to the fixed WS no-preact kernel.
     """
     M, N, _ = _validate_swiglu_dual_b_cuda(a, b_left, b_gate)
     H = N // 2
@@ -341,11 +342,12 @@ def matmul_swiglu_dual_b(a, b_left, b_gate, *, store_preact=False, preact=None,
     if _hopper.is_hopper_device(a.device):
         if store_preact:
             raise NotImplementedError(
-                "Hopper matmul_swiglu_dual_b will first support store_preact=False; "
+                "Hopper matmul_swiglu_dual_b currently supports store_preact=False only; "
                 "store_preact=True needs a separate preact-storing kernel.")
-        raise NotImplementedError(
-            "Hopper matmul_swiglu_dual_b(store_preact=False) interface is in place, "
-            "but the Hopper SwiGLU kernel has not been added yet.")
+        global _HOPPER_SWIGLU_DUAL_B
+        if _HOPPER_SWIGLU_DUAL_B is None:
+            _HOPPER_SWIGLU_DUAL_B = _hopper_swiglu.kernel()
+        return _HOPPER_SWIGLU_DUAL_B(a, b_left, b_gate, d=out, sync=sync)
 
     raise NotImplementedError(
         "matmul_swiglu_dual_b currently supports CUDA Hopper/Blackwell devices only")

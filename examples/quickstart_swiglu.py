@@ -40,28 +40,50 @@ b = torch.randn(K, N, dtype=torch.bfloat16, device="cuda")
 b_left = b[:, :H]   # "up" projection, column view into packed B
 b_gate = b[:, H:]   # "gate" projection, column view into packed B
 
-# One fused launch -> combined projection (c) + SwiGLU activation (d).
-# Compiles once per machine, then async on torch's current stream.
-c, d = mmc.matmul_swiglu_dual_b(a, b_left, b_gate, store_preact=True)
+# One fused launch.  Hopper currently supports inference-style no-preact output;
+# Blackwell currently supports the training-style path that also stores preact.
+cap_major = torch.cuda.get_device_capability()[0]
+store_preact = cap_major == 10
+if cap_major not in (9, 10):
+    raise RuntimeError(
+        f"expected Hopper or Blackwell CUDA device, got capability {torch.cuda.get_device_capability()}")
+
+if store_preact:
+    c, d = mmc.matmul_swiglu_dual_b(a, b_left, b_gate, store_preact=True)
+else:
+    c = None
+    d = mmc.matmul_swiglu_dual_b(a, b_left, b_gate)
 
 # Correctness vs torch (bf16 tolerances).
-# C is the combined preactivation x @ [B_left | B_gate] -- exactly what you'd save
-# for a backward pass -- so check BOTH outputs, not just D:
-c_ref = torch.cat([a @ b_left, a @ b_gate], dim=1)      # == x @ W1.t()
-d_ref = (a @ b_left) * F.silu(a @ b_gate)
-ok_c = torch.allclose(c, c_ref, rtol=2e-2, atol=1e-1)
+left_ref = a @ b_left
+gate_ref = a @ b_gate
+d_ref = left_ref * F.silu(gate_ref)
 ok_d = torch.allclose(d, d_ref, rtol=2e-2, atol=1e-1)
-ragged = f"  (M ragged: M % 256 = {M % 256})" if M % 256 else ""
-print(f"shape M={M} N={N} K={K}   C allclose = {ok_c}   D allclose = {ok_d}{ragged}")
+if c is not None:
+    c_ref = torch.cat([left_ref, gate_ref], dim=1)      # == x @ W1.t()
+    ok_c = torch.allclose(c, c_ref, rtol=2e-2, atol=1e-1)
+    c_status = str(ok_c)
+else:
+    ok_c = True
+    c_status = "skipped"
+ragged = f"  (M ragged: M % 128 = {M % 128})" if M % 128 else ""
+mode = "store_preact" if store_preact else "no_preact"
+print(f"shape M={M} N={N} K={K}   mode={mode}   C allclose = {c_status}   "
+      f"D allclose = {ok_d}{ragged}")
 assert ok_c and ok_d
 
 # GPU kernel time (triton do_bench: warmup 1000 ms, rep 1000 ms, median):
 # the fused kernel vs torch doing the same SwiGLU eagerly (two GEMMs + gate).
 flops = 2.0 * M * N * K
-g = do_bench(lambda: mmc.matmul_swiglu_dual_b(a, b_left, b_gate,
-                                                     store_preact=True, preact=c, out=d,
-                                                     sync=False),
-             warmup=1000, rep=1000, return_mode="median")
+if store_preact:
+    g = do_bench(lambda: mmc.matmul_swiglu_dual_b(a, b_left, b_gate,
+                                                 store_preact=True, preact=c, out=d,
+                                                 sync=False),
+                 warmup=1000, rep=1000, return_mode="median")
+else:
+    g = do_bench(lambda: mmc.matmul_swiglu_dual_b(a, b_left, b_gate, out=d,
+                                                 sync=False),
+                 warmup=1000, rep=1000, return_mode="median")
 t = do_bench(lambda: (a @ b_left) * F.silu(a @ b_gate),
              warmup=1000, rep=1000, return_mode="median")
 print(f"mmc fused    {g:8.3f} ms   {flops / (g * 1e-3) / 1e12:7.0f} TFLOPS")
