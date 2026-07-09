@@ -418,7 +418,6 @@ __device__ __forceinline__ void hopper_swiglu_dual_b_impl(
             tma_commit_group();                                                     \
         }                                                                           \
         store_stage ^= 1;                                                           \
-        math_barrier();                                                             \
     } while (0)
 
         #pragma unroll
