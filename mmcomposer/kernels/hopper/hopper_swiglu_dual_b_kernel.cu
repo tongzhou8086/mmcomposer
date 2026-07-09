@@ -389,8 +389,8 @@ __device__ __forceinline__ void hopper_swiglu_dual_b_impl(
         }
 
         WAIT_MMA(0);
-        SIGNAL_SLOT_FREE((num_k_tiles - 1) % NS);
         math_barrier();
+        SIGNAL_SLOT_FREE((num_k_tiles - 1) % NS);
 
         constexpr int CHUNKS = OUT_CHUNKS;
         constexpr int J_PER_CHUNK = STORE_N / 8;
