@@ -1,8 +1,9 @@
 """Fixed Hopper dual-B SwiGLU kernels used by ``mmc.matmul_swiglu_dual_b``.
 
 Both Hopper paths use the same fixed WS pipeline: BM128 / internal BN256 / BK64 /
-WG2 / NS4 / GM8 / 2 TMA-store stages.  The internal BN256 accumulator is
-interpreted as ``[left 128 | gate 128]``.
+WG2 / NS4 / 2 TMA-store stages.  The default grouping is GM8; experimental
+non-default GM values dispatch to a runtime-GM no-preact entry point.  The
+internal BN256 accumulator is interpreted as ``[left 128 | gate 128]``.
 
 ``kernel()`` computes and stores only ``D = left * silu(gate)``.
 ``kernel_store_preact()`` stores both packed preactivation ``C = [left | gate]``
@@ -20,9 +21,13 @@ from . import runtime
 from . import swiglu as _swiglu
 
 ARCH = "sm_90a"
-SYMBOL_NO_PREACT = "matmul_hopper_swiglu_dual_b_bm128_bn256_bk64_wg2_ns4_gm8"
-SYMBOL_STORE_PREACT = (
+DEFAULT_GM = 8
+SYMBOL_NO_PREACT_GM8 = "matmul_hopper_swiglu_dual_b_bm128_bn256_bk64_wg2_ns4_gm8"
+SYMBOL_STORE_PREACT_GM8 = (
     "matmul_hopper_swiglu_dual_b_store_preact_bm128_bn256_bk64_wg2_ns4_gm8"
+)
+SYMBOL_NO_PREACT_RUNTIME_GM = (
+    "matmul_hopper_swiglu_dual_b_bm128_bn256_bk64_wg2_ns4_runtime_gm"
 )
 
 BM, BN, BK = 128, 256, 64
@@ -44,6 +49,21 @@ _PACKAGED_CUBIN = _KERNEL_DIR / "hopper_swiglu_dual_b_kernel_sm_90a.cubin"
 _PACKAGED_CUBIN_MIN_DRIVER = 12080
 
 _CUBIN: str | None = None
+
+
+def _normalize_gm(gm: int) -> int:
+    gm = int(gm)
+    if gm < 1:
+        raise ValueError(f"experimental Hopper SwiGLU gm must be positive, got {gm}")
+    return gm
+
+
+def _uses_runtime_gm(gm: int) -> bool:
+    return gm != DEFAULT_GM
+
+
+def _symbol_no_preact(gm: int) -> str:
+    return SYMBOL_NO_PREACT_RUNTIME_GM if _uses_runtime_gm(gm) else SYMBOL_NO_PREACT_GM8
 
 
 def validate(a, b_left, b_gate):
@@ -152,10 +172,12 @@ def _c_descriptor(c, M, H):
                                 swizzle=rt.TMA_SWIZZLE_128B)
 
 
-def _prepare_no_preact(a, b_left, b_gate, d, M, H, K, cubin_path, device_index):
+def _prepare_no_preact(a, b_left, b_gate, d, M, H, K, cubin_path, device_index,
+                         gm: int = DEFAULT_GM):
+    gm = _normalize_gm(gm)
     rt, driver = runtime._backends()
     num_sms = _hopper._ensure_device_context(device_index)
-    _, fn = _hopper._load_for_device(cubin_path, SYMBOL_NO_PREACT, device_index)
+    _, fn = _hopper._load_for_device(cubin_path, _symbol_no_preact(gm), device_index)
     grid, block, shared = launch_dims(M, H, K, num_sms)
     rt.cu(driver.cuFuncSetAttribute(
         fn, driver.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
@@ -163,13 +185,15 @@ def _prepare_no_preact(a, b_left, b_gate, d, M, H, K, cubin_path, device_index):
     maps = (*_common_descriptors(a, b_left, b_gate, M, H, K), _d_descriptor(d, M, H))
     args = [(ctypes.c_byte * 128).from_buffer_copy(m.tobytes()) for m in maps]
     args += [ctypes.c_int(M), ctypes.c_int(K), ctypes.c_int(H)]
+    if _uses_runtime_gm(gm):
+        args.append(ctypes.c_int(gm))
     return fn, grid, block, shared, args
 
 
 def _prepare_store_preact(a, b_left, b_gate, c, d, M, H, K, cubin_path, device_index):
     rt, driver = runtime._backends()
     num_sms = _hopper._ensure_device_context(device_index)
-    _, fn = _hopper._load_for_device(cubin_path, SYMBOL_STORE_PREACT, device_index)
+    _, fn = _hopper._load_for_device(cubin_path, SYMBOL_STORE_PREACT_GM8, device_index)
     grid, block, shared = launch_dims(M, H, K, num_sms)
     rt.cu(driver.cuFuncSetAttribute(
         fn, driver.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
@@ -204,10 +228,11 @@ def _check_c(c, M, H, device):
         raise ValueError("preact must be row-major contiguous")
 
 
-def kernel():
+def kernel(gm: int = DEFAULT_GM):
     """Return a callable ``k(a, b_left, b_gate, d=None) -> d`` for Hopper SwiGLU."""
     import torch
 
+    gm = _normalize_gm(gm)
     state: dict = {}
 
     def call(a, b_left, b_gate, d=None, *, sync=False, stream=None):
@@ -222,11 +247,11 @@ def kernel():
         if stream is None:
             stream = torch.cuda.current_stream(a.device).cuda_stream
         cubin = _ensure_cubin()
-        skey = (device_index, M, H, K, a.data_ptr(), b_left.data_ptr(), b_gate.data_ptr(),
+        skey = (gm, device_index, M, H, K, a.data_ptr(), b_left.data_ptr(), b_gate.data_ptr(),
                 b_left.stride(), b_gate.stride(), d.data_ptr())
         st = state.get(skey)
         if st is None:
-            st = _prepare_no_preact(a, b_left, b_gate, d, M, H, K, cubin, device_index)
+            st = _prepare_no_preact(a, b_left, b_gate, d, M, H, K, cubin, device_index, gm)
             state[skey] = st
         else:
             _hopper._ensure_device_context(device_index)

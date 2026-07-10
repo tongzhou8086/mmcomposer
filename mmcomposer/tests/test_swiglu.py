@@ -98,6 +98,11 @@ def test_general_api_hopper_swiglu_matches_reference():
     d2 = mmc.matmul_swiglu_dual_b(a, b_left, b_gate, out=d, sync=True)
     assert d2.data_ptr() == d.data_ptr()
 
+    d_gm17 = mmc.matmul_swiglu_dual_b(a, b_left, b_gate, gm=17, sync=True)
+    d_rel = ((d_gm17.float() - d_ref.float()).norm() / d_ref.float().norm()).item()
+    print(f"    Hopper runtime-gm17 SwiGLU D rel_err={d_rel:.3e}")
+    assert d_rel < 5e-2
+
     c, d3 = mmc.matmul_swiglu_dual_b(a, b_left, b_gate, store_preact=True, sync=True)
     c_rel = ((c.float() - c_ref.float()).norm() / c_ref.float().norm()).item()
     d_rel = ((d3.float() - d_ref.float()).norm() / d_ref.float().norm()).item()
@@ -110,6 +115,9 @@ def test_general_api_hopper_swiglu_matches_reference():
     c2, d4 = mmc.matmul_swiglu_dual_b(a, b_left, b_gate, store_preact=True,
                                       preact=c, out=d3, sync=True)
     assert c2.data_ptr() == c.data_ptr() and d4.data_ptr() == d3.data_ptr()
+
+    with pytest.raises(ValueError, match="inference"):
+        mmc.matmul_swiglu_dual_b(a, b_left, b_gate, store_preact=True, gm=17, sync=True)
 
 
 def test_general_api_rejects_preact_without_store_preact():

@@ -46,7 +46,7 @@ _EPI_KERNELS: dict = {}        # (shape_key, epilogue_digest) -> callable
 _TRACE_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 _HOPPER_FIXED_WS = None        # fixed Hopper WS kernel callable (lazy, shape-agnostic)
 _SWIGLU_DUAL_B_NS6_S2 = None   # the fixed swiglu kernel callable (lazy, shape-agnostic)
-_HOPPER_SWIGLU_DUAL_B = None       # fixed Hopper no-preact SwiGLU callable
+_HOPPER_SWIGLU_DUAL_B: dict[int, object] = {}  # Hopper no-preact SwiGLU by GM
 _HOPPER_SWIGLU_DUAL_B_STORE_PREACT = None  # fixed Hopper preact-storing callable
 
 
@@ -144,19 +144,24 @@ def _launch_matmul(a, b, out):
     return get_tuned_kernel(a, b)(a, b, out, sync=False)
 
 
-def _launch_swiglu_d(a, b_left, b_gate, out):
+def _launch_swiglu_d(a, b_left, b_gate, out, gm=8):
     """SwiGLU dual-B returning only D into `out` (allocated if None); return D.
     Hopper only -- Blackwell has no no-preact kernel yet."""
+    gm = _hopper_swiglu._normalize_gm(gm)
     if _swiglu._is_blackwell_device(a.device):
+        if gm != _hopper_swiglu.DEFAULT_GM:
+            raise ValueError("gm is an experimental Hopper-only SwiGLU knob")
         raise NotImplementedError(
             "Blackwell matmul_swiglu_dual_b currently uses the fixed ns6/s2 "
             "kernel, which always stores preact; store_preact=False needs a "
             "separate no-preact kernel.")
     if _hopper.is_hopper_device(a.device):
         global _HOPPER_SWIGLU_DUAL_B
-        if _HOPPER_SWIGLU_DUAL_B is None:
-            _HOPPER_SWIGLU_DUAL_B = _hopper_swiglu.kernel()
-        return _HOPPER_SWIGLU_DUAL_B(a, b_left, b_gate, d=out, sync=False)
+        fn = _HOPPER_SWIGLU_DUAL_B.get(gm)
+        if fn is None:
+            fn = _hopper_swiglu.kernel(gm=gm)
+            _HOPPER_SWIGLU_DUAL_B[gm] = fn
+        return fn(a, b_left, b_gate, d=out, sync=False)
     raise NotImplementedError(
         "matmul_swiglu_dual_b currently supports CUDA Hopper/Blackwell devices only")
 
@@ -405,7 +410,7 @@ def _check_swiglu_output(name, t, shape, device):
 
 
 def matmul_swiglu_dual_b(a, b_left, b_gate, *, store_preact=False, preact=None,
-                         out=None, sync=False):
+                         out=None, sync=False, gm=8):
     """Fused ``left * silu(gate)`` from two B halves.
 
     ``A[M,K]``, ``B_left[K,H]`` and ``B_gate[K,H]`` produce the SwiGLU output
@@ -417,14 +422,30 @@ def matmul_swiglu_dual_b(a, b_left, b_gate, *, store_preact=False, preact=None,
     Current backend coverage:
       * Blackwell: ``store_preact=True`` dispatches to the fixed ns6/s2 kernel.
       * Hopper: both ``store_preact=False`` and ``store_preact=True`` dispatch to
-        fixed WS kernels.
+        fixed WS kernels.  ``gm`` is an experimental Hopper-only grouping knob
+        for the inference/no-preact path; the default ``gm=8`` preserves the
+        original public kernel.
 
     Runs through the ``mmc::swiglu_dual_b[_preact]`` torch custom ops when
-    available (torch >= 2.4), so it is traceable by ``torch.compile``.  The
-    ``store_preact=True`` form with no user buffers is differentiable
-    (``register_autograd``) -- the training path; passing ``preact=``/``out=``
-    buffers uses the in-place op variant (no autograd)."""
+    available (torch >= 2.4), so the default path is traceable by
+    ``torch.compile``.  The ``store_preact=True`` form with no user buffers is
+    differentiable (``register_autograd``) -- the training path; passing
+    ``preact=``/``out=`` buffers uses the in-place op variant (no autograd).
+    Non-default ``gm`` values are eager-only for now."""
     import torch
+    gm = _hopper_swiglu._normalize_gm(gm)
+    if store_preact and gm != _hopper_swiglu.DEFAULT_GM:
+        raise ValueError(
+            "gm is currently supported only for Hopper SwiGLU inference "
+            "(store_preact=False)"
+        )
+    if not store_preact and preact is not None:
+        raise ValueError("preact may only be provided when store_preact=True")
+    if gm != _hopper_swiglu.DEFAULT_GM and _is_compiling():
+        raise NotImplementedError(
+            "non-default gm for Hopper SwiGLU is an eager-only experimental knob"
+        )
+
     # ``_swiglu.validate`` probes ``.data_ptr()`` (TMA 16-byte alignment), which
     # is not available on FakeTensors while Dynamo traces -- so skip the eager
     # validation under compile and derive shapes from ``.shape`` only; the op
@@ -438,18 +459,16 @@ def matmul_swiglu_dual_b(a, b_left, b_gate, *, store_preact=False, preact=None,
         _check_swiglu_output("out", out, (M, H), a.device)
         if store_preact:
             _check_swiglu_output("preact", preact, (M, N), a.device)
-        elif preact is not None:
-            raise ValueError("preact may only be provided when store_preact=True")
 
     if not store_preact:
-        if torch_ops.ENABLED:
+        if gm == _hopper_swiglu.DEFAULT_GM and torch_ops.ENABLED:
             if out is None:
                 d = torch.ops.mmc.swiglu_dual_b(a, b_left, b_gate)
             else:
                 torch.ops.mmc.swiglu_dual_b_out(a, b_left, b_gate, out)
                 d = out
         else:
-            d = _launch_swiglu_d(a, b_left, b_gate, out)
+            d = _launch_swiglu_d(a, b_left, b_gate, out, gm=gm)
         if sync and not _is_compiling():
             torch.cuda.current_stream(a.device).synchronize()
         return d
