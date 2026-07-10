@@ -18,7 +18,6 @@ alignment, and K a multiple of 64.  Unsupported inputs raise a clear error.
 from __future__ import annotations
 
 import hashlib
-import pathlib
 import sys
 import time
 import weakref
@@ -33,6 +32,7 @@ from . import epilogue as epi
 from . import hopper as _hopper
 from . import hopper_swiglu as _hopper_swiglu
 from . import swiglu as _swiglu
+from . import torch_ops
 
 DEFAULT_DTYPE = "bf16"
 DEFAULT_ARCH = kcache.DEFAULT_ARCH
@@ -127,6 +127,76 @@ def _build_epilogue(config, cuda_expr, n_extra=0):
     src = autotune._render(tier, config, build_root, epilogue=cuda_expr, n_extra=n_extra)
     cubin = compiler.compile_one(src)
     return runtime.kernel(config, cubin)
+
+
+# ---- launch helpers (shared by the public wrappers and the custom ops) ----
+# These do device dispatch + kernel-callable caching and launch *asynchronously*
+# on torch's current stream (host sync, if any, is the caller's job).  They are
+# what the ``mmc::*`` custom ops call, so the op body reuses the exact same path
+# as the eager fallback.  Inputs are assumed already validated by the wrapper.
+def _launch_matmul(a, b, out):
+    """Plain GEMM into `out` (allocated if None); return the output tensor."""
+    if getattr(a, "is_cuda", False) and _hopper.is_hopper_device(a.device):
+        global _HOPPER_FIXED_WS
+        if _HOPPER_FIXED_WS is None:
+            _HOPPER_FIXED_WS = _hopper.kernel()
+        return _HOPPER_FIXED_WS(a, b, out, sync=False)
+    return get_tuned_kernel(a, b)(a, b, out, sync=False)
+
+
+def _launch_swiglu_d(a, b_left, b_gate, out):
+    """SwiGLU dual-B returning only D into `out` (allocated if None); return D.
+    Hopper only -- Blackwell has no no-preact kernel yet."""
+    if _swiglu._is_blackwell_device(a.device):
+        raise NotImplementedError(
+            "Blackwell matmul_swiglu_dual_b currently uses the fixed ns6/s2 "
+            "kernel, which always stores preact; store_preact=False needs a "
+            "separate no-preact kernel.")
+    if _hopper.is_hopper_device(a.device):
+        global _HOPPER_SWIGLU_DUAL_B
+        if _HOPPER_SWIGLU_DUAL_B is None:
+            _HOPPER_SWIGLU_DUAL_B = _hopper_swiglu.kernel()
+        return _HOPPER_SWIGLU_DUAL_B(a, b_left, b_gate, d=out, sync=False)
+    raise NotImplementedError(
+        "matmul_swiglu_dual_b currently supports CUDA Hopper/Blackwell devices only")
+
+
+def _launch_swiglu_cd(a, b_left, b_gate, preact, out):
+    """SwiGLU dual-B returning (C preact, D), each allocated if None; return
+    ``(c, d)``.  Blackwell ns6/s2, or the Hopper preact-storing kernel."""
+    if _swiglu._is_blackwell_device(a.device):
+        global _SWIGLU_DUAL_B_NS6_S2
+        if _SWIGLU_DUAL_B_NS6_S2 is None:
+            _SWIGLU_DUAL_B_NS6_S2 = _swiglu.kernel()
+        return _SWIGLU_DUAL_B_NS6_S2(a, b_left, b_gate, c=preact, d=out, sync=False)
+    if _hopper.is_hopper_device(a.device):
+        global _HOPPER_SWIGLU_DUAL_B_STORE_PREACT
+        if _HOPPER_SWIGLU_DUAL_B_STORE_PREACT is None:
+            _HOPPER_SWIGLU_DUAL_B_STORE_PREACT = _hopper_swiglu.kernel_store_preact()
+        return _HOPPER_SWIGLU_DUAL_B_STORE_PREACT(
+            a, b_left, b_gate, c=preact, d=out, sync=False)
+    raise NotImplementedError(
+        "matmul_swiglu_dual_b currently supports CUDA Hopper/Blackwell devices only")
+
+
+def _is_compiling() -> bool:
+    """True while Dynamo is tracing (so we skip host syncs inside a graph)."""
+    import torch
+    fn = getattr(getattr(torch, "compiler", None), "is_compiling", None)
+    try:
+        return bool(fn()) if fn else False
+    except Exception:
+        return False
+
+
+def _check_matmul_out(out, M, N, device):
+    import torch
+    if out.dtype != torch.bfloat16 or tuple(out.shape) != (M, N):
+        raise ValueError(f"out must be a bf16 tensor of shape ({M}, {N})")
+    if not out.is_cuda or out.device != device:
+        raise ValueError(f"out must be a CUDA tensor on {device}")
+    if not out.is_contiguous():
+        raise ValueError("out must be row-major contiguous")
 
 
 # ---- one-time auto-tune progress (printed only on a cold shape) -----------
@@ -257,15 +327,40 @@ def matmul(a, b, *, out=None, sync=False, tune_if_missing=True, epilogue=None,
     epilogue takes extra same-shape ``[M,N]`` inputs via ``aux=[c, ...]``, e.g.
     ``mmc.matmul(a, b, epilogue=lambda x, c: x * c, aux=[c])`` for ``(a@b)*c``.
     Pass ``autotune_isolated=True`` to use process-isolated autotuning on a cold
-    cache miss."""
+    cache miss.
+
+    The plain (``epilogue=None``) path runs through the ``mmc::matmul`` torch
+    custom op when available (torch >= 2.4), so it is traceable by
+    ``torch.compile`` and differentiable; ``autotune_isolated`` there falls back
+    to the default in-process tuner.  The ``epilogue=`` path stays eager (an
+    epilogue is a Python callable and cannot be a custom-op argument)."""
+    import torch
     if epilogue is None:
-        if getattr(a, "is_cuda", False) and _hopper.is_hopper_device(a.device):
-            global _HOPPER_FIXED_WS
-            if _HOPPER_FIXED_WS is None:
-                _HOPPER_FIXED_WS = _hopper.kernel()
-            return _HOPPER_FIXED_WS(a, b, out, sync=sync)
-        return get_tuned_kernel(a, b, tune_if_missing=tune_if_missing,
-                                autotune_isolated=autotune_isolated)(a, b, out, sync=sync)
+        M, N, K = _validate(a, b)
+        if not tune_if_missing and not _hopper.is_hopper_device(a.device):
+            key = kcache.shape_key(M, N, K, DEFAULT_DTYPE, DEFAULT_ARCH)
+            if key not in _KERNELS and kcache.best(key) is None:
+                raise RuntimeError(
+                    f"no tuned config for {key}; run mmc.tune({M}, {N}, {K}) first "
+                    f"or call with tune_if_missing=True")
+        if autotune_isolated and not _is_compiling() \
+                and not _hopper.is_hopper_device(a.device):
+            # Warm the isolated-tuned kernel into the in-process cache so the op
+            # body's get_tuned_kernel() reuses it instead of tuning in-process.
+            get_tuned_kernel(a, b, tune_if_missing=tune_if_missing,
+                             autotune_isolated=True)
+        if torch_ops.ENABLED:
+            if out is None:
+                c = torch.ops.mmc.matmul(a, b)
+            else:
+                _check_matmul_out(out, M, N, a.device)
+                torch.ops.mmc.matmul_out(a, b, out)
+                c = out
+        else:
+            c = _launch_matmul(a, b, out)
+        if sync and not _is_compiling():
+            torch.cuda.current_stream(a.device).synchronize()
+        return c
     if getattr(a, "is_cuda", False) and _hopper.is_hopper_device(a.device):
         raise NotImplementedError(
             "Hopper mmc.matmul currently supports plain GEMM only; epilogue fusion "
@@ -323,37 +418,59 @@ def matmul_swiglu_dual_b(a, b_left, b_gate, *, store_preact=False, preact=None,
       * Blackwell: ``store_preact=True`` dispatches to the fixed ns6/s2 kernel.
       * Hopper: both ``store_preact=False`` and ``store_preact=True`` dispatch to
         fixed WS kernels.
-    """
-    M, N, _ = _validate_swiglu_dual_b_cuda(a, b_left, b_gate)
-    H = N // 2
-    _check_swiglu_output("out", out, (M, H), a.device)
-    if store_preact:
-        _check_swiglu_output("preact", preact, (M, N), a.device)
-    elif preact is not None:
-        raise ValueError("preact may only be provided when store_preact=True")
 
-    if _swiglu._is_blackwell_device(a.device):
-        if not store_preact:
-            raise NotImplementedError(
-                "Blackwell matmul_swiglu_dual_b currently uses the fixed ns6/s2 "
-                "kernel, which always stores preact; store_preact=False needs a "
-                "separate no-preact kernel.")
-        return matmul_swiglu_dual_b_ns6_s2(
-            a, b_left, b_gate, c=preact, d=out, sync=sync)
-
-    if _hopper.is_hopper_device(a.device):
-        global _HOPPER_SWIGLU_DUAL_B, _HOPPER_SWIGLU_DUAL_B_STORE_PREACT
+    Runs through the ``mmc::swiglu_dual_b[_preact]`` torch custom ops when
+    available (torch >= 2.4), so it is traceable by ``torch.compile``.  The
+    ``store_preact=True`` form with no user buffers is differentiable
+    (``register_autograd``) -- the training path; passing ``preact=``/``out=``
+    buffers uses the in-place op variant (no autograd)."""
+    import torch
+    # ``_swiglu.validate`` probes ``.data_ptr()`` (TMA 16-byte alignment), which
+    # is not available on FakeTensors while Dynamo traces -- so skip the eager
+    # validation under compile and derive shapes from ``.shape`` only; the op
+    # body re-validates on real tensors at execution.
+    if _is_compiling():
+        H = b_left.shape[1]
+        M, N = a.shape[0], 2 * H
+    else:
+        M, N, _ = _validate_swiglu_dual_b_cuda(a, b_left, b_gate)
+        H = N // 2
+        _check_swiglu_output("out", out, (M, H), a.device)
         if store_preact:
-            if _HOPPER_SWIGLU_DUAL_B_STORE_PREACT is None:
-                _HOPPER_SWIGLU_DUAL_B_STORE_PREACT = _hopper_swiglu.kernel_store_preact()
-            return _HOPPER_SWIGLU_DUAL_B_STORE_PREACT(
-                a, b_left, b_gate, c=preact, d=out, sync=sync)
-        if _HOPPER_SWIGLU_DUAL_B is None:
-            _HOPPER_SWIGLU_DUAL_B = _hopper_swiglu.kernel()
-        return _HOPPER_SWIGLU_DUAL_B(a, b_left, b_gate, d=out, sync=sync)
+            _check_swiglu_output("preact", preact, (M, N), a.device)
+        elif preact is not None:
+            raise ValueError("preact may only be provided when store_preact=True")
 
-    raise NotImplementedError(
-        "matmul_swiglu_dual_b currently supports CUDA Hopper/Blackwell devices only")
+    if not store_preact:
+        if torch_ops.ENABLED:
+            if out is None:
+                d = torch.ops.mmc.swiglu_dual_b(a, b_left, b_gate)
+            else:
+                torch.ops.mmc.swiglu_dual_b_out(a, b_left, b_gate, out)
+                d = out
+        else:
+            d = _launch_swiglu_d(a, b_left, b_gate, out)
+        if sync and not _is_compiling():
+            torch.cuda.current_stream(a.device).synchronize()
+        return d
+
+    # store_preact=True -> (C preact, D)
+    if torch_ops.ENABLED:
+        if preact is None and out is None:
+            c, d = torch.ops.mmc.swiglu_dual_b_preact(a, b_left, b_gate)
+        else:
+            # Buffer(s) supplied: allocate the missing one and fill both in place.
+            if preact is None:
+                preact = torch.empty(M, N, dtype=torch.bfloat16, device=a.device)
+            if out is None:
+                out = torch.empty(M, H, dtype=torch.bfloat16, device=a.device)
+            torch.ops.mmc.swiglu_dual_b_preact_out(a, b_left, b_gate, preact, out)
+            c, d = preact, out
+    else:
+        c, d = _launch_swiglu_cd(a, b_left, b_gate, preact, out)
+    if sync and not _is_compiling():
+        torch.cuda.current_stream(a.device).synchronize()
+    return c, d
 
 
 def matmul_swiglu_dual_b_ns6_s2(a, b_left, b_gate, *, c=None, d=None, sync=False):
