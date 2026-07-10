@@ -104,6 +104,13 @@ def test_matmul_end_to_end_after_pretune():
         rel = ((c.float() - ref).norm() / ref.norm()).item()
         print(f"    Hopper fixed matmul rel err = {rel:.3e}")
         assert rel < 5e-2
+
+        out = torch.empty_like(c)
+        c_gm17 = mmc.matmul(a, b, out=out, gm=17, sync=True)
+        assert c_gm17.data_ptr() == out.data_ptr()
+        rel = ((c_gm17.float() - ref).norm() / ref.norm()).item()
+        print(f"    Hopper runtime-gm17 matmul rel err = {rel:.3e}")
+        assert rel < 5e-2
         return
 
     from mmcomposer import autotune

@@ -187,12 +187,49 @@ void wgmma_ss_call(float* acc, uint64_t desc_a, uint64_t desc_b) {
 
 // -- Warp-specialized Hopper kernel: producer TMA load + math WGMMA -----------
 
+template<int GROUP_M>
+__device__ __forceinline__ void hopper_ws_tile_coords_static(
+    int tile_id, int num_pid_m, int num_pid_n, int& pid_m, int& pid_n
+) {
+    if constexpr (GROUP_M <= 1) {
+        pid_m = tile_id / num_pid_n;
+        pid_n = tile_id - pid_m * num_pid_n;
+    } else {
+        const int tiles_per_group = GROUP_M * num_pid_n;
+        const int group_id = tile_id / tiles_per_group;
+        const int first_m = group_id * GROUP_M;
+        const int rem_m = num_pid_m - first_m;
+        const int group_m = rem_m < GROUP_M ? rem_m : GROUP_M;
+        const int idx = tile_id - group_id * tiles_per_group;
+        pid_m = first_m + (idx % group_m);
+        pid_n = idx / group_m;
+    }
+}
+
+__device__ __forceinline__ void hopper_ws_tile_coords_runtime(
+    int tile_id, int num_pid_m, int num_pid_n, int group_m_arg, int& pid_m, int& pid_n
+) {
+    if (group_m_arg <= 1) {
+        pid_m = tile_id / num_pid_n;
+        pid_n = tile_id - pid_m * num_pid_n;
+    } else {
+        const int tiles_per_group = group_m_arg * num_pid_n;
+        const int group_id = tile_id / tiles_per_group;
+        const int first_m = group_id * group_m_arg;
+        const int rem_m = num_pid_m - first_m;
+        const int group_m = rem_m < group_m_arg ? rem_m : group_m_arg;
+        const int idx = tile_id - group_id * tiles_per_group;
+        pid_m = first_m + (idx % group_m);
+        pid_n = idx / group_m;
+    }
+}
+
 template<int BM, int BN, int BK, int NUM_WG, int NUM_STAGES, int GROUP_M>
 __device__ __forceinline__ void hopper_ws_tma_load_store_impl(
     const CUtensorMap* A_tmap,
     const CUtensorMap* B_tmap,
     const CUtensorMap* C_tmap,
-    int M, int K, int N
+    int M, int K, int N, int runtime_group_m = GROUP_M
 ) {
     static_assert(BM == 128 && BN == 256 && BK == 64, "first cut is fixed to BM128 BN256 BK64");
     static_assert(NUM_WG == 2 && NUM_STAGES == 4, "first cut is fixed to WG2 NS4");
@@ -258,17 +295,10 @@ __device__ __forceinline__ void hopper_ws_tma_load_store_impl(
             uint32_t slot_free_phase[NS] = {};
             for (int tile_id = (int)blockIdx.x; tile_id < total_tiles; tile_id += (int)gridDim.x) {
                 int pid_m, pid_n;
-                if constexpr (GROUP_M <= 1) {
-                    pid_m = tile_id / num_pid_n;
-                    pid_n = tile_id - pid_m * num_pid_n;
+                if constexpr (GROUP_M > 0) {
+                    hopper_ws_tile_coords_static<GROUP_M>(tile_id, num_pid_m, num_pid_n, pid_m, pid_n);
                 } else {
-                    const int tiles_per_group = GROUP_M * num_pid_n;
-                    const int group_id = tile_id / tiles_per_group;
-                    const int first_m = group_id * GROUP_M;
-                    const int group_m = min(num_pid_m - first_m, GROUP_M);
-                    const int idx = tile_id - group_id * tiles_per_group;
-                    pid_m = first_m + (idx % group_m);
-                    pid_n = idx / group_m;
+                    hopper_ws_tile_coords_runtime(tile_id, num_pid_m, num_pid_n, runtime_group_m, pid_m, pid_n);
                 }
                 const int block_row = pid_m * BM;
                 const int block_col = pid_n * BN;
@@ -340,17 +370,10 @@ __device__ __forceinline__ void hopper_ws_tma_load_store_impl(
 
     for (int tile_id = (int)blockIdx.x; tile_id < total_tiles; tile_id += (int)gridDim.x) {
         int pid_m, pid_n;
-        if constexpr (GROUP_M <= 1) {
-            pid_m = tile_id / num_pid_n;
-            pid_n = tile_id - pid_m * num_pid_n;
+        if constexpr (GROUP_M > 0) {
+            hopper_ws_tile_coords_static<GROUP_M>(tile_id, num_pid_m, num_pid_n, pid_m, pid_n);
         } else {
-            const int tiles_per_group = GROUP_M * num_pid_n;
-            const int group_id = tile_id / tiles_per_group;
-            const int first_m = group_id * GROUP_M;
-            const int group_m = min(num_pid_m - first_m, GROUP_M);
-            const int idx = tile_id - group_id * tiles_per_group;
-            pid_m = first_m + (idx % group_m);
-            pid_n = idx / group_m;
+            hopper_ws_tile_coords_runtime(tile_id, num_pid_m, num_pid_n, runtime_group_m, pid_m, pid_n);
         }
 
         const int block_row = pid_m * BM;
@@ -452,5 +475,16 @@ void matmul_hopper_ws_tma_load_store_bm128_bn256_bk64_wg2_ns4_gm##GM_(          
 
 MAKE_LAUNCHER(4)
 MAKE_LAUNCHER(8)
+
+extern "C" __global__ __launch_bounds__(9 * 32, LB_MIN_BLOCKS)
+void matmul_hopper_ws_tma_load_store_bm128_bn256_bk64_wg2_ns4_runtime_gm(
+    const __grid_constant__ CUtensorMap A_tmap,
+    const __grid_constant__ CUtensorMap B_tmap,
+    const __grid_constant__ CUtensorMap C_tmap,
+    int M, int K, int N, int group_m)
+{
+    hopper_ws_tma_load_store_impl<128, 256, 64, 2, 4, 0>(
+        &A_tmap, &B_tmap, &C_tmap, M, K, N, group_m);
+}
 
 #undef MAKE_LAUNCHER

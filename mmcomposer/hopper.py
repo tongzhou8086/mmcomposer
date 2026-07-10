@@ -3,11 +3,13 @@
 This wraps the study kernel ``hopper_ws_tma_load_store_kernel.cu`` with the
 fixed configuration we want to expose first:
 
-    BM128 / BN256 / BK64 / WG2 / NS4 / GM8 / 2 TMA-store stages
+    BM128 / BN256 / BK64 / WG2 / NS4 / 2 TMA-store stages
 
-The wrapper is intentionally narrow: plain bf16 GEMM only, no autotuning, and no
-epilogue fusion yet.  It compiles once into the MMComposer artifact cache and
-then launches asynchronously on PyTorch's current stream.
+The default grouping is GM8 and binds the original static-GM symbol.  Experimental
+non-default GM values bind a runtime-GM entry point.  The wrapper is intentionally
+narrow: plain bf16 GEMM only, no autotuning, and no epilogue fusion yet.  It
+compiles once into the MMComposer artifact cache and then launches asynchronously
+on PyTorch's current stream.
 """
 from __future__ import annotations
 
@@ -19,7 +21,9 @@ from . import compiler
 from . import runtime
 
 ARCH = "sm_90a"
-SYMBOL = "matmul_hopper_ws_tma_load_store_bm128_bn256_bk64_wg2_ns4_gm8"
+DEFAULT_GM = 8
+SYMBOL_GM8 = "matmul_hopper_ws_tma_load_store_bm128_bn256_bk64_wg2_ns4_gm8"
+SYMBOL_RUNTIME_GM = "matmul_hopper_ws_tma_load_store_bm128_bn256_bk64_wg2_ns4_runtime_gm"
 
 BM, BN, BK = 128, 256, 64
 NWG, NS = 2, 4
@@ -38,6 +42,21 @@ _CUBIN: str | None = None
 _MODULE_CACHE: dict[tuple[int, str, str], tuple[object, object]] = {}
 _DEVICE_CONTEXTS: dict[int, tuple[object, object]] = {}
 _SM_COUNTS: dict[int, int] = {}
+
+
+def _normalize_gm(gm: int) -> int:
+    gm = int(gm)
+    if gm < 1:
+        raise ValueError(f"experimental Hopper matmul gm must be positive, got {gm}")
+    return gm
+
+
+def _uses_runtime_gm(gm: int) -> bool:
+    return gm != DEFAULT_GM
+
+
+def _symbol(gm: int) -> str:
+    return SYMBOL_RUNTIME_GM if _uses_runtime_gm(gm) else SYMBOL_GM8
 
 
 def is_hopper_device(device=None) -> bool:
@@ -154,10 +173,11 @@ def _descriptors(a, b, c, M, N, K):
     return A, B, C
 
 
-def _prepare(a, b, c, M, N, K, cubin_path, device_index):
+def _prepare(a, b, c, M, N, K, cubin_path, device_index, gm: int = DEFAULT_GM):
+    gm = _normalize_gm(gm)
     rt, driver = runtime._backends()
     num_sms = _ensure_device_context(device_index)
-    _, fn = _load_for_device(cubin_path, SYMBOL, device_index)
+    _, fn = _load_for_device(cubin_path, _symbol(gm), device_index)
     grid, block, shared = launch_dims(M, N, K, num_sms)
     rt.cu(driver.cuFuncSetAttribute(
         fn, driver.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
@@ -165,13 +185,16 @@ def _prepare(a, b, c, M, N, K, cubin_path, device_index):
     maps = _descriptors(a, b, c, M, N, K)
     args = [(ctypes.c_byte * 128).from_buffer_copy(m.tobytes()) for m in maps]
     args += [ctypes.c_int(M), ctypes.c_int(K), ctypes.c_int(N)]
+    if _uses_runtime_gm(gm):
+        args.append(ctypes.c_int(gm))
     return fn, grid, block, shared, args
 
 
-def kernel():
-    """Return a callable ``k(a, b, c=None) -> c`` for fixed Hopper WS GEMM."""
+def kernel(gm: int = DEFAULT_GM):
+    """Return a callable ``k(a, b, c=None) -> c`` for Hopper WS GEMM."""
     import torch
 
+    gm = _normalize_gm(gm)
     state: dict = {}
 
     def call(a, b, c=None, *, sync=False, stream=None):
@@ -191,10 +214,10 @@ def kernel():
         if stream is None:
             stream = torch.cuda.current_stream(a.device).cuda_stream
         cubin = _ensure_cubin()
-        skey = (device_index, M, N, K, a.data_ptr(), b.data_ptr(), c.data_ptr())
+        skey = (gm, device_index, M, N, K, a.data_ptr(), b.data_ptr(), c.data_ptr())
         st = state.get(skey)
         if st is None:
-            st = _prepare(a, b, c, M, N, K, cubin, device_index)
+            st = _prepare(a, b, c, M, N, K, cubin, device_index, gm)
             state[skey] = st
         else:
             _ensure_device_context(device_index)

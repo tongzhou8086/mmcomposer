@@ -44,7 +44,7 @@ _EPI_KERNELS: dict = {}        # (shape_key, epilogue_digest) -> callable
 # not re-traced every call (a fresh inline lambda each call still re-traces --
 # define the epilogue once and reuse it in hot loops).
 _TRACE_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
-_HOPPER_FIXED_WS = None        # fixed Hopper WS kernel callable (lazy, shape-agnostic)
+_HOPPER_FIXED_WS: dict[int, object] = {}  # Hopper WS matmul by GM
 _SWIGLU_DUAL_B_NS6_S2 = None   # the fixed swiglu kernel callable (lazy, shape-agnostic)
 _HOPPER_SWIGLU_DUAL_B: dict[int, object] = {}  # Hopper no-preact SwiGLU by GM
 _HOPPER_SWIGLU_DUAL_B_STORE_PREACT = None  # fixed Hopper preact-storing callable
@@ -134,13 +134,18 @@ def _build_epilogue(config, cuda_expr, n_extra=0):
 # on torch's current stream (host sync, if any, is the caller's job).  They are
 # what the ``mmc::*`` custom ops call, so the op body reuses the exact same path
 # as the eager fallback.  Inputs are assumed already validated by the wrapper.
-def _launch_matmul(a, b, out):
+def _launch_matmul(a, b, out, gm=8):
     """Plain GEMM into `out` (allocated if None); return the output tensor."""
+    gm = _hopper._normalize_gm(gm)
     if getattr(a, "is_cuda", False) and _hopper.is_hopper_device(a.device):
         global _HOPPER_FIXED_WS
-        if _HOPPER_FIXED_WS is None:
-            _HOPPER_FIXED_WS = _hopper.kernel()
-        return _HOPPER_FIXED_WS(a, b, out, sync=False)
+        fn = _HOPPER_FIXED_WS.get(gm)
+        if fn is None:
+            fn = _hopper.kernel(gm=gm)
+            _HOPPER_FIXED_WS[gm] = fn
+        return fn(a, b, out, sync=False)
+    if gm != _hopper.DEFAULT_GM:
+        raise ValueError("gm is an experimental Hopper-only matmul knob")
     return get_tuned_kernel(a, b)(a, b, out, sync=False)
 
 
@@ -318,7 +323,7 @@ def get_epilogue_kernel(a, b, epilogue, *, tune_if_missing=True,
 
 
 def matmul(a, b, *, out=None, sync=False, tune_if_missing=True, epilogue=None,
-           aux=None, autotune_isolated=False):
+           aux=None, autotune_isolated=False, gm=8):
     """``c = a @ b`` with the best-known MMComposer kernel for this shape
     (auto-tunes + caches on the first call for a new shape).
 
@@ -335,26 +340,36 @@ def matmul(a, b, *, out=None, sync=False, tune_if_missing=True, epilogue=None,
     cache miss.
 
     The plain (``epilogue=None``) path runs through the ``mmc::matmul`` torch
-    custom op when available (torch >= 2.4), so it is traceable by
+    custom op when available (torch >= 2.4), so the default path is traceable by
     ``torch.compile`` and differentiable; ``autotune_isolated`` there falls back
-    to the default in-process tuner.  The ``epilogue=`` path stays eager (an
-    epilogue is a Python callable and cannot be a custom-op argument)."""
+    to the default in-process tuner.  ``gm`` is an experimental Hopper-only
+    grouping knob for plain GEMM; the default ``gm=8`` preserves the original
+    custom-op path, while non-default GM values are eager-only for now.  The
+    ``epilogue=`` path stays eager (an epilogue is a Python callable and cannot
+    be a custom-op argument)."""
     import torch
+    gm = _hopper._normalize_gm(gm)
     if epilogue is None:
         M, N, K = _validate(a, b)
-        if not tune_if_missing and not _hopper.is_hopper_device(a.device):
+        is_hopper = _hopper.is_hopper_device(a.device)
+        if gm != _hopper.DEFAULT_GM and not is_hopper:
+            raise ValueError("gm is an experimental Hopper-only matmul knob")
+        if gm != _hopper.DEFAULT_GM and _is_compiling():
+            raise NotImplementedError(
+                "non-default gm for Hopper matmul is an eager-only experimental knob"
+            )
+        if not tune_if_missing and not is_hopper:
             key = kcache.shape_key(M, N, K, DEFAULT_DTYPE, DEFAULT_ARCH)
             if key not in _KERNELS and kcache.best(key) is None:
                 raise RuntimeError(
                     f"no tuned config for {key}; run mmc.tune({M}, {N}, {K}) first "
                     f"or call with tune_if_missing=True")
-        if autotune_isolated and not _is_compiling() \
-                and not _hopper.is_hopper_device(a.device):
+        if autotune_isolated and not _is_compiling() and not is_hopper:
             # Warm the isolated-tuned kernel into the in-process cache so the op
             # body's get_tuned_kernel() reuses it instead of tuning in-process.
             get_tuned_kernel(a, b, tune_if_missing=tune_if_missing,
                              autotune_isolated=True)
-        if torch_ops.ENABLED:
+        if gm == _hopper.DEFAULT_GM and torch_ops.ENABLED:
             if out is None:
                 c = torch.ops.mmc.matmul(a, b)
             else:
@@ -362,10 +377,12 @@ def matmul(a, b, *, out=None, sync=False, tune_if_missing=True, epilogue=None,
                 torch.ops.mmc.matmul_out(a, b, out)
                 c = out
         else:
-            c = _launch_matmul(a, b, out)
+            c = _launch_matmul(a, b, out, gm=gm)
         if sync and not _is_compiling():
             torch.cuda.current_stream(a.device).synchronize()
         return c
+    if gm != _hopper.DEFAULT_GM:
+        raise ValueError("gm is supported only for plain Hopper matmul")
     if getattr(a, "is_cuda", False) and _hopper.is_hopper_device(a.device):
         raise NotImplementedError(
             "Hopper mmc.matmul currently supports plain GEMM only; epilogue fusion "
